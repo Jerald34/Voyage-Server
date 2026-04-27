@@ -7,6 +7,7 @@ import { errorHandler, notFoundHandler } from "./http/errors";
 import { adminRoutes } from "./modules/admin/adminRoutes";
 import { agencyRoutes } from "./modules/agencies/agencyRoutes";
 import { authRoutes } from "./modules/auth/authRoutes";
+import { imageRoutes } from "./modules/images/imageRoutes";
 
 export function createApp() {
   const app = express();
@@ -28,6 +29,7 @@ export function createApp() {
   app.use("/auth", authRoutes);
   app.use("/agencies", agencyRoutes);
   app.use("/admin", adminRoutes);
+  app.use("/images", imageRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
