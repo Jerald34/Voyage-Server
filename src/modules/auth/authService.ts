@@ -45,6 +45,18 @@ export type VerificationTokenRecord = {
   createdAt: Date;
 };
 
+export type ProviderAccountRecord = {
+  id: string;
+  userId: string;
+  provider: "GOOGLE" | "APPLE";
+  providerAccountId: string;
+  providerEmail: string | null;
+  providerEmailVerified: boolean;
+  user: AuthUserRecord;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type AuthRepository = {
   findUserByEmailNormalized(emailNormalized: string): Promise<AuthUserRecord | null>;
   findUserById(id: string): Promise<AuthUserRecord | null>;
@@ -56,6 +68,14 @@ export type AuthRepository = {
   createVerificationToken(data: { userId: string; tokenHash: string; expiresAt: Date }): Promise<VerificationTokenRecord>;
   findVerificationTokenByHash(tokenHash: string): Promise<VerificationTokenRecord | null>;
   markVerificationTokenUsed(id: string, usedAt: Date): Promise<VerificationTokenRecord>;
+  findProviderAccount(provider: "GOOGLE" | "APPLE", providerAccountId: string): Promise<ProviderAccountRecord | null>;
+  createProviderAccount(data: {
+    userId: string;
+    provider: "GOOGLE" | "APPLE";
+    providerAccountId: string;
+    providerEmail: string | null;
+    providerEmailVerified: boolean;
+  }): Promise<ProviderAccountRecord>;
 };
 
 export type EmailSender = {
@@ -202,6 +222,55 @@ export function createAuthService(options: AuthServiceOptions) {
       const emailNormalized = normalizeEmail(email);
       const existingUser = await options.repository.findUserByEmailNormalized(emailNormalized);
       return { email: emailNormalized, available: !existingUser };
+    },
+
+    async signInWithVerifiedOAuth(input: {
+      provider: "GOOGLE" | "APPLE";
+      providerAccountId: string;
+      email: string;
+      emailVerified: boolean;
+      displayName: string;
+    }) {
+      const existingProviderAccount = await options.repository.findProviderAccount(
+        input.provider,
+        input.providerAccountId
+      );
+
+      if (existingProviderAccount) {
+        assertActiveUser(existingProviderAccount.user);
+        const { sessionToken, session } = await createSession(existingProviderAccount.user.id);
+        return { user: existingProviderAccount.user, session, sessionToken };
+      }
+
+      const emailNormalized = normalizeEmail(input.email);
+      let user = await options.repository.findUserByEmailNormalized(emailNormalized);
+      const verifiedAt = input.emailVerified ? now() : null;
+
+      if (!user) {
+        user = await options.repository.createUser({
+          email: input.email.trim(),
+          emailNormalized,
+          passwordHash: null,
+          displayName: input.displayName.trim() || emailNormalized,
+          emailVerifiedAt: verifiedAt
+        });
+      } else {
+        assertActiveUser(user);
+        if (verifiedAt && !user.emailVerifiedAt) {
+          user = await options.repository.updateUser(user.id, { emailVerifiedAt: verifiedAt });
+        }
+      }
+
+      await options.repository.createProviderAccount({
+        userId: user.id,
+        provider: input.provider,
+        providerAccountId: input.providerAccountId,
+        providerEmail: input.email,
+        providerEmailVerified: input.emailVerified
+      });
+
+      const { sessionToken, session } = await createSession(user.id);
+      return { user, session, sessionToken };
     }
   };
 }
@@ -260,6 +329,31 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
         where: { id },
         data: { usedAt }
       });
+    },
+    async findProviderAccount(provider, providerAccountId) {
+      return client.authProviderAccount.findUnique({
+        where: {
+          provider_providerAccountId: {
+            provider,
+            providerAccountId
+          }
+        },
+        include: {
+          user: {
+            include: includeMemberships()
+          }
+        }
+      }) as Promise<ProviderAccountRecord | null>;
+    },
+    async createProviderAccount(data) {
+      return client.authProviderAccount.create({
+        data,
+        include: {
+          user: {
+            include: includeMemberships()
+          }
+        }
+      }) as Promise<ProviderAccountRecord>;
     }
   };
 }

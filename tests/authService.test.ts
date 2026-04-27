@@ -10,20 +10,24 @@ import { hashToken } from "../src/services/tokens";
 type UserRecord = Awaited<ReturnType<AuthRepository["createUser"]>>;
 type VerificationRecord = Awaited<ReturnType<AuthRepository["createVerificationToken"]>>;
 type SessionRecord = Awaited<ReturnType<AuthRepository["createSession"]>>;
+type ProviderAccountRecord = NonNullable<Awaited<ReturnType<AuthRepository["findProviderAccount"]>>>;
 
 function createMemoryAuthRepository(): AuthRepository & {
   users: UserRecord[];
   verificationTokens: VerificationRecord[];
   sessions: SessionRecord[];
+  providerAccounts: ProviderAccountRecord[];
 } {
   const users: UserRecord[] = [];
   const verificationTokens: VerificationRecord[] = [];
   const sessions: SessionRecord[] = [];
+  const providerAccounts: ProviderAccountRecord[] = [];
 
   return {
     users,
     verificationTokens,
     sessions,
+    providerAccounts,
     async findUserByEmailNormalized(emailNormalized) {
       return users.find((user) => user.emailNormalized === emailNormalized) ?? null;
     },
@@ -94,6 +98,24 @@ function createMemoryAuthRepository(): AuthRepository & {
       }
       token.usedAt = usedAt;
       return token;
+    },
+    async findProviderAccount(provider, providerAccountId) {
+      return (
+        providerAccounts.find(
+          (account) => account.provider === provider && account.providerAccountId === providerAccountId
+        ) ?? null
+      );
+    },
+    async createProviderAccount(data) {
+      const account = {
+        id: `provider-${providerAccounts.length + 1}`,
+        createdAt: new Date("2026-04-27T00:00:00.000Z"),
+        updatedAt: new Date("2026-04-27T00:00:00.000Z"),
+        user: users.find((user) => user.id === data.userId)!,
+        ...data
+      };
+      providerAccounts.push(account);
+      return account;
     }
   };
 }
@@ -201,5 +223,88 @@ describe("auth service", () => {
       code: "INVALID_OR_EXPIRED_TOKEN",
       statusCode: 400
     });
+  });
+
+  it("creates a verified user from Google sign-in", async () => {
+    const { service, repository } = createService();
+
+    const result = await service.signInWithVerifiedOAuth({
+      provider: "GOOGLE",
+      providerAccountId: "google-1",
+      email: "Google@Example.com",
+      emailVerified: true,
+      displayName: "Google User"
+    });
+
+    expect(result.user.emailNormalized).toBe("google@example.com");
+    expect(result.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
+    expect(repository.providerAccounts).toHaveLength(1);
+    expect(repository.providerAccounts[0]).toMatchObject({
+      provider: "GOOGLE",
+      providerAccountId: "google-1",
+      providerEmail: "Google@Example.com",
+      providerEmailVerified: true,
+      userId: result.user.id
+    });
+  });
+
+  it("creates a verified user from Apple ID sign-in", async () => {
+    const { service } = createService();
+
+    const result = await service.signInWithVerifiedOAuth({
+      provider: "APPLE",
+      providerAccountId: "apple-1",
+      email: "relay@privaterelay.appleid.com",
+      emailVerified: true,
+      displayName: "Apple User"
+    });
+
+    expect(result.user.emailNormalized).toBe("relay@privaterelay.appleid.com");
+    expect(result.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
+  });
+
+  it("links a provider account to an existing normalized email", async () => {
+    const { service, repository } = createService();
+    const existingUser = await repository.createUser({
+      email: "owner@example.com",
+      emailNormalized: "owner@example.com",
+      passwordHash: null,
+      displayName: "Existing Owner"
+    });
+
+    const result = await service.signInWithVerifiedOAuth({
+      provider: "GOOGLE",
+      providerAccountId: "google-owner",
+      email: " Owner@Example.com ",
+      emailVerified: true,
+      displayName: "Owner From Google"
+    });
+
+    expect(result.user.id).toBe(existingUser.id);
+    expect(result.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
+    expect(repository.providerAccounts[0].userId).toBe(existingUser.id);
+  });
+
+  it("uses an existing provider account on repeat sign-in", async () => {
+    const { service, repository } = createService();
+
+    const first = await service.signInWithVerifiedOAuth({
+      provider: "APPLE",
+      providerAccountId: "apple-repeat",
+      email: "repeat@example.com",
+      emailVerified: true,
+      displayName: "Repeat User"
+    });
+    const second = await service.signInWithVerifiedOAuth({
+      provider: "APPLE",
+      providerAccountId: "apple-repeat",
+      email: "changed@example.com",
+      emailVerified: true,
+      displayName: "Changed User"
+    });
+
+    expect(second.user.id).toBe(first.user.id);
+    expect(repository.users).toHaveLength(1);
+    expect(repository.providerAccounts).toHaveLength(1);
   });
 });

@@ -1,9 +1,11 @@
 import { Router } from "express";
+import { randomUUID } from "node:crypto";
 import { getUserCapabilities } from "../../services/capabilities";
 import { clearSessionCookie, setSessionCookie } from "../../http/cookies";
 import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
 import { env } from "../../config/env";
+import { verifyAppleIdToken, verifyGoogleIdToken } from "../../services/oauth";
 import {
   confirmVerificationSchema,
   emailCheckSchema,
@@ -93,18 +95,61 @@ authRoutes.post("/email/verification/confirm", async (request, response, next) =
   }
 });
 
-authRoutes.get("/google/start", (_request, _response, next) => {
-  next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured yet."));
+authRoutes.get("/google/start", (_request, response, next) => {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_REDIRECT_URI) {
+    return next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured."));
+  }
+
+  const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
+  url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
+  url.searchParams.set("redirect_uri", env.GOOGLE_REDIRECT_URI);
+  url.searchParams.set("response_type", "id_token");
+  url.searchParams.set("scope", "openid email profile");
+  url.searchParams.set("nonce", randomUUID());
+  response.redirect(url.toString());
 });
 
-authRoutes.get("/google/callback", (_request, _response, next) => {
-  next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured yet."));
+authRoutes.get("/google/callback", async (request, response, next) => {
+  try {
+    const idToken = typeof request.query.id_token === "string" ? request.query.id_token : "";
+    if (!idToken) {
+      throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Google id_token is required.");
+    }
+    const claims = await verifyGoogleIdToken(idToken);
+    const result = await authService.signInWithVerifiedOAuth(claims);
+    setSessionCookie(response, result.sessionToken);
+    response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.get("/apple/start", (_request, _response, next) => {
-  next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Apple sign-in is not configured yet."));
+authRoutes.get("/apple/start", (_request, response, next) => {
+  if (!env.APPLE_CLIENT_ID || !env.APPLE_REDIRECT_URI) {
+    return next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Apple sign-in is not configured."));
+  }
+
+  const url = new URL("https://appleid.apple.com/auth/authorize");
+  url.searchParams.set("client_id", env.APPLE_CLIENT_ID);
+  url.searchParams.set("redirect_uri", env.APPLE_REDIRECT_URI);
+  url.searchParams.set("response_type", "id_token");
+  url.searchParams.set("scope", "email name");
+  url.searchParams.set("response_mode", "form_post");
+  url.searchParams.set("nonce", randomUUID());
+  response.redirect(url.toString());
 });
 
-authRoutes.post("/apple/callback", (_request, _response, next) => {
-  next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Apple sign-in is not configured yet."));
+authRoutes.post("/apple/callback", async (request, response, next) => {
+  try {
+    const idToken = typeof request.body?.id_token === "string" ? request.body.id_token : "";
+    if (!idToken) {
+      throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Apple id_token is required.");
+    }
+    const claims = await verifyAppleIdToken(idToken);
+    const result = await authService.signInWithVerifiedOAuth(claims);
+    setSessionCookie(response, result.sessionToken);
+    response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
+  } catch (error) {
+    next(error);
+  }
 });
