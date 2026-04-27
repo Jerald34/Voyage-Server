@@ -4,6 +4,8 @@ import express from "express";
 import { env } from "./config/env";
 import { attachAuthUser } from "./http/authMiddleware";
 import { errorHandler, notFoundHandler } from "./http/errors";
+import { adminRoutes } from "./modules/admin/adminRoutes";
+import { agencyRoutes } from "./modules/agencies/agencyRoutes";
 import { authRoutes } from "./modules/auth/authRoutes";
 
 export function createApp() {
@@ -24,6 +26,8 @@ export function createApp() {
   });
 
   app.use("/auth", authRoutes);
+  app.use("/agencies", agencyRoutes);
+  app.use("/admin", adminRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
