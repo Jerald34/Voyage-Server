@@ -4,6 +4,7 @@ import express from "express";
 import { env } from "./config/env";
 import { attachAuthUser } from "./http/authMiddleware";
 import { errorHandler, notFoundHandler } from "./http/errors";
+import { authRoutes } from "./modules/auth/authRoutes";
 
 export function createApp() {
   const app = express();
@@ -21,6 +22,8 @@ export function createApp() {
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
   });
+
+  app.use("/auth", authRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
