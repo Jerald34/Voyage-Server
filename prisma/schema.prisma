@@ -226,6 +226,7 @@ model Agency {
   clientTrips            ClientTrip[]
   itineraries            Itinerary[]
   agentThreads           AgentThread[]
+  agentRuns              AgentRun[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -314,6 +315,7 @@ model ClientTrip {
   updatedAt               DateTime         @updatedAt
 
   @@index([agencyId])
+  @@unique([id, agencyId])
   @@index([createdByUserId])
   @@index([assignedOrganizerUserId])
   @@index([status])
@@ -324,7 +326,7 @@ model Itinerary {
   agencyId        String          @db.Uuid
   agency          Agency          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   tripId          String          @db.Uuid
-  trip            ClientTrip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  trip            ClientTrip      @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
   createdByUserId String          @db.Uuid
   createdByUser   User            @relation("ItineraryCreator", fields: [createdByUserId], references: [id])
   title           String
@@ -376,6 +378,7 @@ model ItineraryItem {
   updatedAt         DateTime       @updatedAt
 
   @@index([itineraryDayId])
+  @@unique([itineraryDayId, sortOrder])
   @@index([placeSnapshotId])
   @@index([sortOrder])
 }
@@ -406,7 +409,7 @@ model AgentThread {
   agencyId        String            @db.Uuid
   agency          Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   tripId          String?           @db.Uuid
-  trip            ClientTrip?       @relation(fields: [tripId], references: [id], onDelete: SetNull)
+  trip            ClientTrip?       @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: NoAction)
   createdByUserId String            @db.Uuid
   createdByUser   User              @relation("AgentThreadCreator", fields: [createdByUserId], references: [id])
   title           String
@@ -421,6 +424,7 @@ model AgentThread {
   updatedAt       DateTime          @updatedAt
 
   @@index([agencyId])
+  @@unique([id, agencyId])
   @@index([tripId])
   @@index([createdByUserId])
   @@index([status])
@@ -432,6 +436,7 @@ model AgentMessage {
   thread       AgentThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
   runId        String?          @db.Uuid
   run          AgentRun?        @relation(fields: [runId], references: [id], onDelete: SetNull)
+  triggeredRuns AgentRun[]      @relation("AgentRunTriggerMessage")
   authorUserId String?          @db.Uuid
   authorUser   User?            @relation("AgentMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
   role         AgentMessageRole
@@ -448,9 +453,11 @@ model AgentMessage {
 model AgentRun {
   id               String           @id @default(uuid()) @db.Uuid
   threadId         String           @db.Uuid
-  thread           AgentThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  thread           AgentThread      @relation(fields: [threadId, agencyId], references: [id, agencyId], onDelete: Cascade)
   agencyId         String           @db.Uuid
+  agency           Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   triggerMessageId String?          @db.Uuid
+  triggerMessage   AgentMessage?    @relation("AgentRunTriggerMessage", fields: [triggerMessageId], references: [id], onDelete: SetNull)
   status           AgentRunStatus   @default(QUEUED)
   modelProvider    String
   modelName        String
@@ -508,6 +515,7 @@ model AgentTask {
   updatedAt DateTime        @updatedAt
 
   @@index([runId])
+  @@unique([runId, sortOrder])
   @@index([threadId])
   @@index([status])
 }
