@@ -15,8 +15,11 @@ export type WebSearchProvider = {
 type GoogleSearchProviderOptions = {
   apiKey?: string;
   searchEngineId?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 };
+
+const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
 function webSearchUnavailable(message = "Google Search provider is unavailable.") {
   return new ApiError(503, "WEB_SEARCH_PROVIDER_UNAVAILABLE", message);
@@ -29,6 +32,7 @@ function clampResultCount(num: number | undefined) {
 export function createGoogleSearchProvider(options: GoogleSearchProviderOptions = {}): WebSearchProvider {
   const apiKey = (options.apiKey ?? env.GOOGLE_SEARCH_API_KEY).trim();
   const searchEngineId = (options.searchEngineId ?? env.GOOGLE_SEARCH_ENGINE_ID).trim();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
 
   if (!apiKey || !searchEngineId) {
@@ -47,8 +51,11 @@ export function createGoogleSearchProvider(options: GoogleSearchProviderOptions 
         url.searchParams.set("hl", input.hl);
       }
 
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
       try {
-        const response = await fetchImpl(url);
+        const response = await fetchImpl(url, { signal: controller.signal });
 
         if (!response.ok) {
           throw webSearchUnavailable();
@@ -70,6 +77,8 @@ export function createGoogleSearchProvider(options: GoogleSearchProviderOptions 
         }
 
         throw webSearchUnavailable();
+      } finally {
+        clearTimeout(timeout);
       }
     }
   };

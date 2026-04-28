@@ -62,6 +62,19 @@ describe("Google Maps provider", () => {
     });
   });
 
+  it("maps malformed search payloads to MAPS_PROVIDER_UNAVAILABLE", async () => {
+    const provider = createGoogleMapsProvider({
+      apiKey: "maps-key",
+      fetchImpl: async () => new Response(JSON.stringify({ places: {} }), { status: 200 })
+    });
+
+    await expect(provider.searchPlaces({ query: "Cebu" })).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE",
+      message: "Google Maps provider is unavailable."
+    } satisfies Partial<ApiError>);
+  });
+
   it("gets place details with the place details endpoint", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl: typeof fetch = async (url, init) => {
@@ -145,5 +158,42 @@ describe("Google Maps provider", () => {
       destination: { location: { latLng: { latitude: 10.3157, longitude: 123.8854 } } },
       travelMode: "DRIVE"
     });
+  });
+
+  it("maps malformed route payloads to MAPS_PROVIDER_UNAVAILABLE", async () => {
+    const provider = createGoogleMapsProvider({
+      apiKey: "maps-key",
+      fetchImpl: async () => new Response(JSON.stringify({ routes: {} }), { status: 200 })
+    });
+
+    await expect(
+      provider.estimateRoute({
+        origin: { latitude: 10.2927, longitude: 123.9053 },
+        destination: { latitude: 10.3157, longitude: 123.8854 }
+      })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE",
+      message: "Google Maps provider is unavailable."
+    } satisfies Partial<ApiError>);
+  });
+
+  it("passes an abort signal and maps aborted fetches to MAPS_PROVIDER_UNAVAILABLE", async () => {
+    let signal: AbortSignal | undefined;
+    const provider = createGoogleMapsProvider({
+      apiKey: "maps-key",
+      timeoutMs: 50,
+      fetchImpl: async (_url, init) => {
+        signal = init?.signal ?? undefined;
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      }
+    });
+
+    await expect(provider.searchPlaces({ query: "Cebu" })).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE",
+      message: "Google Maps provider is unavailable."
+    } satisfies Partial<ApiError>);
+    expect(signal).toBeInstanceOf(AbortSignal);
   });
 });

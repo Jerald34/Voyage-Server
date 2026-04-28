@@ -41,6 +41,7 @@ export type MapsProvider = {
 
 type GoogleMapsProviderOptions = {
   apiKey?: string;
+  timeoutMs?: number;
   fetchImpl?: typeof fetch;
 };
 
@@ -56,6 +57,8 @@ type GooglePlace = {
   internationalPhoneNumber?: unknown;
   websiteUri?: unknown;
 };
+
+const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
 function mapsUnavailable(message = "Google Maps provider is unavailable.") {
   return new ApiError(503, "MAPS_PROVIDER_UNAVAILABLE", message);
@@ -77,6 +80,10 @@ function parseString(value: unknown) {
   return typeof value === "string" ? value : undefined;
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
 function parseLocation(location: GooglePlace["location"]): GeoPoint | undefined {
   const latitude = parseNumber(location?.latitude);
   const longitude = parseNumber(location?.longitude);
@@ -88,12 +95,19 @@ function parseLocation(location: GooglePlace["location"]): GeoPoint | undefined 
   return { latitude, longitude };
 }
 
-function parsePlace(place: GooglePlace): PlaceSearchResult {
+function parsePlace(place: unknown): PlaceSearchResult {
+  if (!isRecord(place)) {
+    throw mapsUnavailable();
+  }
+
+  const displayName = isRecord(place.displayName) ? place.displayName : undefined;
+  const location = isRecord(place.location) ? place.location : undefined;
+
   return {
     id: parseString(place.id) ?? "",
-    name: parseString(place.displayName?.text) ?? "",
+    name: parseString(displayName?.text) ?? "",
     address: parseString(place.formattedAddress),
-    location: parseLocation(place.location),
+    location: parseLocation(location),
     rating: parseNumber(place.rating),
     userRatingCount: parseNumber(place.userRatingCount),
     types: Array.isArray(place.types) ? place.types.filter((type): type is string => typeof type === "string") : []
@@ -109,9 +123,50 @@ function parseDurationSeconds(duration: unknown) {
   return match ? Number(match[1]) : undefined;
 }
 
-async function readJsonResponse<T>(request: Promise<Response>): Promise<T> {
+function parseResponseArray(body: unknown, key: string): unknown[] {
+  if (!isRecord(body)) {
+    throw mapsUnavailable();
+  }
+
+  const value = body[key];
+
+  if (value === undefined) {
+    return [];
+  }
+
+  if (!Array.isArray(value)) {
+    throw mapsUnavailable();
+  }
+
+  return value;
+}
+
+function parseRoute(route: unknown): RouteEstimateResult {
+  if (!isRecord(route)) {
+    throw mapsUnavailable();
+  }
+
+  const polyline = isRecord(route.polyline) ? route.polyline : undefined;
+
+  return {
+    distanceMeters: parseNumber(route.distanceMeters),
+    durationSeconds: parseDurationSeconds(route.duration),
+    staticDurationSeconds: parseDurationSeconds(route.staticDuration),
+    polyline: parseString(polyline?.encodedPolyline)
+  };
+}
+
+async function readJsonResponse<T>(
+  fetchImpl: typeof fetch,
+  url: Parameters<typeof fetch>[0],
+  init: RequestInit,
+  timeoutMs: number
+): Promise<T> {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
   try {
-    const response = await request;
+    const response = await fetchImpl(url, { ...init, signal: controller.signal });
 
     if (!response.ok) {
       throw mapsUnavailable();
@@ -124,11 +179,14 @@ async function readJsonResponse<T>(request: Promise<Response>): Promise<T> {
     }
 
     throw mapsUnavailable();
+  } finally {
+    clearTimeout(timeout);
   }
 }
 
 export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}): MapsProvider {
   const apiKey = (options.apiKey ?? env.GOOGLE_MAPS_API_KEY).trim();
+  const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
 
   if (!apiKey) {
@@ -149,36 +207,43 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         body.maxResultCount = input.maxResultCount;
       }
 
-      const response = await readJsonResponse<{ places?: GooglePlace[] }>(
-        fetchImpl("https://places.googleapis.com/v1/places:searchText", {
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        "https://places.googleapis.com/v1/places:searchText",
+        {
           method: "POST",
           headers: providerHeaders(
             apiKey,
             "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types"
           ),
           body: JSON.stringify(body)
-        })
+        },
+        timeoutMs
       );
 
-      return (response.places ?? []).map(parsePlace);
+      return parseResponseArray(response, "places").map(parsePlace);
     },
 
     async getPlaceDetails(placeId) {
-      const response = await readJsonResponse<GooglePlace>(
-        fetchImpl(`https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`, {
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+        {
           method: "GET",
           headers: providerHeaders(
             apiKey,
             "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri"
           )
-        })
+        },
+        timeoutMs
       );
       const place = parsePlace(response);
+      const details = isRecord(response) ? response : {};
 
       return {
         ...place,
-        phoneNumber: parseString(response.nationalPhoneNumber) ?? parseString(response.internationalPhoneNumber),
-        websiteUri: parseString(response.websiteUri)
+        phoneNumber: parseString(details.nationalPhoneNumber) ?? parseString(details.internationalPhoneNumber),
+        websiteUri: parseString(details.websiteUri)
       };
     },
 
@@ -193,31 +258,22 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         body.routingPreference = input.routingPreference;
       }
 
-      const response = await readJsonResponse<{
-        routes?: Array<{
-          distanceMeters?: unknown;
-          duration?: unknown;
-          staticDuration?: unknown;
-          polyline?: { encodedPolyline?: unknown };
-        }>;
-      }>(
-        fetchImpl("https://routes.googleapis.com/directions/v2:computeRoutes", {
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        "https://routes.googleapis.com/directions/v2:computeRoutes",
+        {
           method: "POST",
           headers: providerHeaders(
             apiKey,
             "routes.distanceMeters,routes.duration,routes.staticDuration,routes.polyline.encodedPolyline"
           ),
           body: JSON.stringify(body)
-        })
+        },
+        timeoutMs
       );
-      const route = response.routes?.[0] ?? {};
+      const route = parseResponseArray(response, "routes")[0] ?? {};
 
-      return {
-        distanceMeters: parseNumber(route.distanceMeters),
-        durationSeconds: parseDurationSeconds(route.duration),
-        staticDurationSeconds: parseDurationSeconds(route.staticDuration),
-        polyline: parseString(route.polyline?.encodedPolyline)
-      };
+      return parseRoute(route);
     }
   };
 }

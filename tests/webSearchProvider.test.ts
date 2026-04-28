@@ -21,9 +21,9 @@ describe("Google Search provider", () => {
   });
 
   it("calls Custom Search with capped result count and maps results", async () => {
-    const urls: string[] = [];
-    const fetchImpl: typeof fetch = async (url) => {
-      urls.push(String(url));
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
       return new Response(
         JSON.stringify({
           items: [
@@ -53,13 +53,14 @@ describe("Google Search provider", () => {
         provider: "google_custom_search"
       }
     ]);
-    const requestUrl = new URL(urls[0]);
+    const requestUrl = new URL(calls[0].url);
     expect(requestUrl.origin + requestUrl.pathname).toBe("https://www.googleapis.com/customsearch/v1");
     expect(requestUrl.searchParams.get("key")).toBe("search-key");
     expect(requestUrl.searchParams.get("cx")).toBe("engine-id");
     expect(requestUrl.searchParams.get("q")).toBe("Cebu itinerary");
     expect(requestUrl.searchParams.get("num")).toBe("10");
     expect(requestUrl.searchParams.get("hl")).toBe("en");
+    expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
   });
 
   it("maps failed fetches and non-ok responses to WEB_SEARCH_PROVIDER_UNAVAILABLE", async () => {
@@ -86,5 +87,25 @@ describe("Google Search provider", () => {
       code: "WEB_SEARCH_PROVIDER_UNAVAILABLE",
       message: "Google Search provider is unavailable."
     } satisfies Partial<ApiError>);
+  });
+
+  it("passes an abort signal and maps aborted fetches to WEB_SEARCH_PROVIDER_UNAVAILABLE", async () => {
+    let signal: AbortSignal | undefined;
+    const provider = createGoogleSearchProvider({
+      apiKey: "search-key",
+      searchEngineId: "engine-id",
+      timeoutMs: 50,
+      fetchImpl: async (_url, init) => {
+        signal = init?.signal ?? undefined;
+        throw Object.assign(new Error("aborted"), { name: "AbortError" });
+      }
+    });
+
+    await expect(provider.search({ query: "Cebu" })).rejects.toMatchObject({
+      statusCode: 503,
+      code: "WEB_SEARCH_PROVIDER_UNAVAILABLE",
+      message: "Google Search provider is unavailable."
+    } satisfies Partial<ApiError>);
+    expect(signal).toBeInstanceOf(AbortSignal);
   });
 });
