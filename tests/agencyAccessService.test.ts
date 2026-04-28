@@ -32,12 +32,16 @@ function createAgencyAccess(overrides: Partial<AgencyAccess> = {}): AgencyAccess
 
 function createMemoryAgencyAccessRepository(): AgencyAccessRepository & {
   accessByAgencyId: Map<string, AgencyAccess>;
+  calls: Array<{ userId: string; agencyId: string }>;
 } {
   const accessByAgencyId = new Map<string, AgencyAccess>();
+  const calls: Array<{ userId: string; agencyId: string }> = [];
 
   return {
     accessByAgencyId,
+    calls,
     async findAgencyAccess(userId, agencyId) {
+      calls.push({ userId, agencyId });
       const access = accessByAgencyId.get(agencyId) ?? null;
       if (!access) {
         return null;
@@ -69,6 +73,7 @@ describe("agency access service", () => {
       statusCode: 403,
       message: "This account is disabled."
     });
+    expect(repository.calls).toEqual([]);
   });
 
   it("requires the agency to exist", async () => {
@@ -115,6 +120,17 @@ describe("agency access service", () => {
     );
 
     await expect(service.requireVerifiedAgencyMember(createUser(), "agency-1")).rejects.toMatchObject({
+      code: "AGENCY_ACCESS_REQUIRED",
+      statusCode: 403,
+      message: "You do not have access to this agency workspace."
+    });
+  });
+
+  it("requires the user to belong to the agency", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess());
+
+    await expect(service.requireVerifiedAgencyMember(createUser({ id: "other-user" }), "agency-1")).rejects.toMatchObject({
       code: "AGENCY_ACCESS_REQUIRED",
       statusCode: 403,
       message: "You do not have access to this agency workspace."
