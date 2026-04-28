@@ -56,7 +56,7 @@ Add these backend modules:
 - `src/services/maps`
   - Provides a Google Maps-backed provider behind a stable internal interface.
 - `src/services/webSearch`
-  - Provides web search behind a stable internal interface.
+  - Provides Google Custom Search JSON API behind a stable internal interface.
 
 The code should follow the existing server pattern: route file, schema file, service file, repository interface, Prisma implementation, and service-level unit tests with fake dependencies.
 
@@ -430,8 +430,8 @@ Use cached `PlaceSnapshot` records before making repeat details calls.
 
 Add environment variables:
 
-- `WEB_SEARCH_PROVIDER`
-- `WEB_SEARCH_API_KEY`
+- `GOOGLE_SEARCH_API_KEY`
+- `GOOGLE_SEARCH_ENGINE_ID`
 - `WEB_SEARCH_MAX_CALLS_PER_RUN`
 
 Internal provider interface:
@@ -447,7 +447,7 @@ type WebSearchProvider = {
 };
 ```
 
-The implementation must support a config-selected provider name and a disabled provider mode. Automated tests use a fake provider. Local development can run with web search disabled, but production should configure a real provider before exposing the `web_search` tool to agency staff. The service boundary must already exist so the agent orchestration does not depend on one vendor.
+Use Google Custom Search JSON API / Programmable Search Engine for the first real provider. The provider calls `GET https://www.googleapis.com/customsearch/v1` with `key`, `cx`, `q`, and `num`. `GOOGLE_SEARCH_ENGINE_ID` stores the Programmable Search Engine ID (`cx`). Automated tests use a fake provider. Local development can run with Google search disabled by leaving either Google search value empty; production should configure both values before exposing the `web_search` tool to agency staff.
 
 ## API Design
 

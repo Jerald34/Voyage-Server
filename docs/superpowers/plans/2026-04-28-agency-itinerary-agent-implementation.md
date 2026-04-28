@@ -2,11 +2,11 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build the agency-first itinerary agent backend with durable threads, structured itinerary drafts, live SSE run events, LM Studio model integration, Google Maps tooling, and web search tooling.
+**Goal:** Build the agency-first itinerary agent backend with durable threads, structured itinerary drafts, live SSE run events, LM Studio model integration, Google Maps tooling, and Google Search tooling.
 
 **Architecture:** Add itinerary and agent modules that follow the existing Express/Zod/service/repository pattern. Persist all itinerary state, messages, runs, tasks, tool calls, sources, and streamable events in PostgreSQL through Prisma. Keep provider integrations behind injectable interfaces so tests use fakes and no automated test calls LM Studio, Google Maps, or live web search.
 
-**Tech Stack:** TypeScript, Express 5, Prisma 7, PostgreSQL, Zod, Vitest, Supertest, LM Studio OpenAI-compatible API, Google Maps HTTP APIs, Server-Sent Events.
+**Tech Stack:** TypeScript, Express 5, Prisma 7, PostgreSQL, Zod, Vitest, Supertest, LM Studio OpenAI-compatible API, Google Maps HTTP APIs, Google Custom Search JSON API, Server-Sent Events.
 
 ---
 
@@ -60,7 +60,7 @@ Create or modify these files:
 - Create `tests/mapsProvider.test.ts`
   - Test caching and Google provider parsing with fake fetch.
 - Create `src/services/webSearch.ts`
-  - Web search provider interface, disabled provider, and fake-friendly provider selection.
+  - Google Search provider interface, disabled behavior, and fake-friendly provider selection.
 - Create `tests/webSearchProvider.test.ts`
   - Test disabled provider behavior and fake provider contract.
 - Modify `tests/routes.test.ts`
@@ -453,8 +453,8 @@ In `src/config/env.ts`, add to `envSchema`:
   LM_STUDIO_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
   GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(20),
-  WEB_SEARCH_PROVIDER: z.enum(["disabled", "configured"]).default("disabled"),
-  WEB_SEARCH_API_KEY: z.string().default(""),
+  GOOGLE_SEARCH_API_KEY: z.string().default(""),
+  GOOGLE_SEARCH_ENGINE_ID: z.string().default(""),
   WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5)
 ```
 
@@ -466,8 +466,8 @@ LM_STUDIO_MODEL=local-model
 LM_STUDIO_TIMEOUT_MS=120000
 GOOGLE_MAPS_API_KEY=
 GOOGLE_MAPS_MAX_CALLS_PER_RUN=20
-WEB_SEARCH_PROVIDER=disabled
-WEB_SEARCH_API_KEY=
+GOOGLE_SEARCH_API_KEY=
+GOOGLE_SEARCH_ENGINE_ID=
 WEB_SEARCH_MAX_CALLS_PER_RUN=5
 ```
 
@@ -1189,7 +1189,7 @@ Write tests using injected fake `fetch` functions:
 - model provider posts to `${baseUrl}/chat/completions`.
 - model provider maps failed fetches to `LOCAL_MODEL_UNAVAILABLE`.
 - Google Maps provider refuses calls when API key is empty with `MAPS_PROVIDER_UNAVAILABLE`.
-- disabled web search provider returns `WEB_SEARCH_PROVIDER_UNAVAILABLE`.
+- Google Search provider returns `WEB_SEARCH_PROVIDER_UNAVAILABLE` when either API key or search engine ID is empty.
 
 Run:
 
@@ -1270,7 +1270,7 @@ Create `src/services/maps.ts` with `MapsProvider`, `createGoogleMapsProvider`, a
 - Place Details endpoint: `https://places.googleapis.com/v1/places/{placeId}`
 - Routes endpoint: `https://routes.googleapis.com/directions/v2:computeRoutes`
 
-- [ ] **Step 4: Implement web search provider**
+- [ ] **Step 4: Implement Google Search provider**
 
 Create `src/services/webSearch.ts` with:
 
@@ -1279,10 +1279,37 @@ export type WebSearchProvider = {
   search(input: { query: string; region?: string; language?: string; maxResults: number }): Promise<WebSearchResult[]>;
 };
 
-export function createDisabledWebSearchProvider(): WebSearchProvider {
+export function createGoogleSearchProvider(options: {
+  apiKey?: string;
+  searchEngineId?: string;
+  fetchImpl?: typeof fetch;
+} = {}): WebSearchProvider {
   return {
-    async search() {
-      throw new ApiError(503, "WEB_SEARCH_PROVIDER_UNAVAILABLE", "Web search provider is not configured.");
+    async search(input) {
+      const apiKey = options.apiKey ?? env.GOOGLE_SEARCH_API_KEY;
+      const searchEngineId = options.searchEngineId ?? env.GOOGLE_SEARCH_ENGINE_ID;
+      if (!apiKey || !searchEngineId) {
+        throw new ApiError(503, "WEB_SEARCH_PROVIDER_UNAVAILABLE", "Google Search provider is not configured.");
+      }
+      const url = new URL("https://www.googleapis.com/customsearch/v1");
+      url.searchParams.set("key", apiKey);
+      url.searchParams.set("cx", searchEngineId);
+      url.searchParams.set("q", input.query);
+      url.searchParams.set("num", String(Math.min(input.maxResults, 10)));
+      if (input.language) {
+        url.searchParams.set("hl", input.language);
+      }
+      const response = await (options.fetchImpl ?? fetch)(url);
+      if (!response.ok) {
+        throw new ApiError(503, "WEB_SEARCH_PROVIDER_UNAVAILABLE", "Google Search provider is unavailable.");
+      }
+      const data = await response.json() as { items?: Array<{ title?: string; link?: string; snippet?: string }> };
+      return (data.items ?? []).map((item) => ({
+        title: item.title ?? "Untitled result",
+        url: item.link ?? "",
+        snippet: item.snippet ?? "",
+        provider: "google_custom_search"
+      }));
     }
   };
 }
@@ -1638,4 +1665,4 @@ Spec coverage:
 Implementation boundary:
 
 - This plan does not build client sharing, normal-user itinerary editing, billing UI, WebSockets, or live-provider tests.
-- This plan keeps web search provider selection generic and supports disabled mode for local development.
+- This plan uses Google Custom Search JSON API for web search and supports disabled mode by leaving Google search credentials empty during local development.
