@@ -11,7 +11,11 @@ export function publishAgentRunEvent(runId: string, event: AgentEvent) {
   }
 
   for (const listener of listeners) {
-    listener(event);
+    try {
+      listener(event);
+    } catch {
+      // Listener failures should not prevent persistence or other subscribers.
+    }
   }
 }
 

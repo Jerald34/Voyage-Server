@@ -105,6 +105,13 @@ export type AgentThreadRecord = {
   updatedAt: Date;
 };
 
+const OPEN_RUN_STATUSES: AgentRunStatus[] = ["QUEUED", "RUNNING"];
+const TERMINAL_RUN_STATUSES: AgentRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
+
+function isTerminalRunStatus(status: AgentRunStatus) {
+  return TERMINAL_RUN_STATUSES.includes(status);
+}
+
 export interface AgentRepository {
   createThread(data: {
     agencyId: string;
@@ -144,8 +151,14 @@ export interface AgentRepository {
     type: AgentEvent["type"];
     payload: Record<string, unknown>;
   }): Promise<AgentRunEventRecord>;
-  completeRun(id: string, completedAt: Date): Promise<AgentRunRecord | null>;
-  failRun(
+  completeRunIfOpen(
+    id: string,
+    data: {
+      assistantContent: string;
+      completedAt: Date;
+    }
+  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord } | null>;
+  failRunIfOpen(
     id: string,
     data: {
       failedAt: Date;
@@ -171,6 +184,12 @@ export function createAgentService(options: {
       throw new ApiError(404, "RUN_NOT_FOUND", "Agent run not found.");
     }
     return run;
+  }
+
+  function assertRunOpen(run: AgentRunRecord) {
+    if (isTerminalRunStatus(run.status)) {
+      throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
+    }
   }
 
   return {
@@ -228,41 +247,39 @@ export function createAgentService(options: {
 
     async completeRun(runId: string, assistantContent: string) {
       const run = await getRun(runId);
+      assertRunOpen(run);
       const completedAt = now();
-      const completedRun = await options.repository.completeRun(runId, completedAt);
-      if (!completedRun) {
-        throw new ApiError(404, "RUN_NOT_FOUND", "Agent run not found.");
+      const completed = await options.repository.completeRunIfOpen(runId, {
+        assistantContent,
+        completedAt
+      });
+      if (!completed) {
+        throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
       }
 
-      const message = await options.repository.createMessage({
-        threadId: run.threadId,
-        runId: run.id,
-        role: "ASSISTANT",
-        content: assistantContent
-      });
-
-      await this.recordRunEvent(completedRun, {
+      await this.recordRunEvent(completed.run, {
         type: "message.completed",
-        payload: { messageId: message.id, content: assistantContent }
+        payload: { messageId: completed.message.id, content: assistantContent }
       });
-      await this.recordRunEvent(completedRun, {
+      await this.recordRunEvent(completed.run, {
         type: "run.completed",
-        payload: { runId: completedRun.id }
+        payload: { runId: completed.run.id }
       });
 
-      return { run: completedRun, message };
+      return completed;
     },
 
     async failRun(runId: string, code: string, message: string) {
       const run = await getRun(runId);
+      assertRunOpen(run);
       const failedAt = now();
-      const failedRun = await options.repository.failRun(runId, {
+      const failedRun = await options.repository.failRunIfOpen(runId, {
         failedAt,
         errorCode: code,
         errorMessage: message
       });
       if (!failedRun) {
-        throw new ApiError(404, "RUN_NOT_FOUND", "Agent run not found.");
+        throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
       }
 
       await this.recordRunEvent(failedRun, {
@@ -384,26 +401,57 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       }) as Promise<AgentRunEventRecord>;
     },
 
-    async completeRun(id, completedAt) {
-      return client.agentRun.update({
-        where: { id },
-        data: {
-          status: "COMPLETED",
-          completedAt
+    async completeRunIfOpen(id, data) {
+      return client.$transaction(async (tx) => {
+        const update = await tx.agentRun.updateMany({
+          where: {
+            id,
+            status: { in: OPEN_RUN_STATUSES }
+          },
+          data: {
+            status: "COMPLETED",
+            completedAt: data.completedAt
+          }
+        });
+        if (update.count === 0) {
+          return null;
         }
-      }) as Promise<AgentRunRecord | null>;
+
+        const run = (await tx.agentRun.findUnique({ where: { id } })) as AgentRunRecord | null;
+        if (!run) {
+          return null;
+        }
+
+        const message = (await tx.agentMessage.create({
+          data: {
+            threadId: run.threadId,
+            runId: run.id,
+            role: "ASSISTANT",
+            content: data.assistantContent
+          }
+        })) as AgentMessageRecord;
+
+        return { run, message };
+      });
     },
 
-    async failRun(id, data) {
-      return client.agentRun.update({
-        where: { id },
+    async failRunIfOpen(id, data) {
+      const update = await client.agentRun.updateMany({
+        where: {
+          id,
+          status: { in: OPEN_RUN_STATUSES }
+        },
         data: {
           status: "FAILED",
           failedAt: data.failedAt,
           errorCode: data.errorCode,
           errorMessage: data.errorMessage
         }
-      }) as Promise<AgentRunRecord | null>;
+      });
+      if (update.count === 0) {
+        return null;
+      }
+      return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
     }
   };
 }

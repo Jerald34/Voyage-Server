@@ -1,12 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/http/errors";
-import { subscribeToAgentRun } from "../src/modules/agent/agentEvents";
+import { formatSseEvent, subscribeToAgentRun } from "../src/modules/agent/agentEvents";
 import {
   createAgentService,
   type AgentMessageRecord,
   type AgentRepository,
   type AgentRunEventRecord,
   type AgentRunRecord,
+  type AgentRunStatus,
   type AgentThreadRecord
 } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
@@ -22,6 +23,8 @@ function createMemoryRepository(): AgentRepository & {
   const messages: AgentMessageRecord[] = [];
   const runs: AgentRunRecord[] = [];
   const events: AgentRunEventRecord[] = [];
+  const isTerminalRunStatus = (status: AgentRunStatus) =>
+    status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
 
   const hydrateThread = (thread: AgentThreadRecord): AgentThreadRecord => ({
     ...thread,
@@ -127,19 +130,31 @@ function createMemoryRepository(): AgentRepository & {
       events.push(event);
       return event;
     },
-    async completeRun(id, completedAt) {
+    async completeRunIfOpen(id, data) {
       const run = runs.find((candidate) => candidate.id === id);
       if (!run) {
         return null;
       }
+      if (isTerminalRunStatus(run.status)) {
+        return null;
+      }
       run.status = "COMPLETED";
-      run.completedAt = completedAt;
-      run.updatedAt = completedAt;
-      return run;
+      run.completedAt = data.completedAt;
+      run.updatedAt = data.completedAt;
+      const message = await this.createMessage({
+        threadId: run.threadId,
+        runId: run.id,
+        role: "ASSISTANT",
+        content: data.assistantContent
+      });
+      return { run, message };
     },
-    async failRun(id, data) {
+    async failRunIfOpen(id, data) {
       const run = runs.find((candidate) => candidate.id === id);
       if (!run) {
+        return null;
+      }
+      if (isTerminalRunStatus(run.status)) {
         return null;
       }
       run.status = "FAILED";
@@ -261,6 +276,43 @@ describe("agent service", () => {
     expect(repository.events.map((event) => event.type)).toEqual(["message.completed", "run.completed"]);
   });
 
+  it("rejects duplicate completion without duplicating assistant messages or events", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    await service.completeRun(run.id, "Here is the itinerary.");
+    await expect(service.completeRun(run.id, "Duplicate itinerary.")).rejects.toMatchObject({
+      code: "AGENT_RUN_ALREADY_FINISHED",
+      statusCode: 409,
+      message: "Agent run is already finished."
+    } satisfies Partial<ApiError>);
+
+    expect(repository.messages.filter((message) => message.role === "ASSISTANT")).toHaveLength(1);
+    expect(repository.events.map((event) => event.type)).toEqual(["message.completed", "run.completed"]);
+  });
+
+  it("rejects failing a completed run without adding failure events", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    await service.completeRun(run.id, "Here is the itinerary.");
+    await expect(service.failRun(run.id, "MODEL_ERROR", "Model request failed.")).rejects.toMatchObject({
+      code: "AGENT_RUN_ALREADY_FINISHED",
+      statusCode: 409
+    } satisfies Partial<ApiError>);
+
+    expect(repository.runs[0]).toMatchObject({
+      status: "COMPLETED",
+      errorCode: null,
+      errorMessage: null
+    });
+    expect(repository.events.map((event) => event.type)).toEqual(["message.completed", "run.completed"]);
+  });
+
   it("marks a run failed with code and message", async () => {
     const repository = createMemoryRepository();
     const now = new Date("2026-04-28T01:02:03.000Z");
@@ -288,6 +340,66 @@ describe("agent service", () => {
         }
       }
     ]);
+  });
+
+  it("rejects completing a failed run without adding assistant messages", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    await service.failRun(run.id, "MODEL_ERROR", "Model request failed.");
+    await expect(service.completeRun(run.id, "Late itinerary.")).rejects.toMatchObject({
+      code: "AGENT_RUN_ALREADY_FINISHED",
+      statusCode: 409
+    } satisfies Partial<ApiError>);
+
+    expect(repository.runs[0]).toMatchObject({
+      status: "FAILED",
+      completedAt: null
+    });
+    expect(repository.messages.filter((message) => message.role === "ASSISTANT")).toHaveLength(0);
+    expect(repository.events.map((event) => event.type)).toEqual(["run.failed"]);
+  });
+
+  it("publishes run events to remaining listeners when one listener throws", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+    const received: AgentEvent[] = [];
+    const unsubscribeThrowing = subscribeToAgentRun(run.id, () => {
+      throw new Error("subscriber failed");
+    });
+    const unsubscribeReceiving = subscribeToAgentRun(run.id, (event) => received.push(event));
+
+    await expect(
+      service.recordRunEvent(run, {
+        type: "task.updated",
+        payload: { label: "Research hotels", status: "RUNNING" }
+      })
+    ).resolves.toMatchObject({
+      type: "task.updated"
+    });
+    unsubscribeThrowing();
+    unsubscribeReceiving();
+
+    expect(repository.events).toHaveLength(1);
+    expect(received).toEqual([
+      {
+        type: "task.updated",
+        payload: { label: "Research hotels", status: "RUNNING" }
+      }
+    ]);
+  });
+
+  it("formats agent events for server-sent events", () => {
+    expect(
+      formatSseEvent({
+        type: "run.completed",
+        payload: { runId: "run-1" }
+      })
+    ).toBe('event: run.completed\ndata: {"type":"run.completed","payload":{"runId":"run-1"}}\n\n');
   });
 
   it("throws THREAD_NOT_FOUND for missing thread loads", async () => {
