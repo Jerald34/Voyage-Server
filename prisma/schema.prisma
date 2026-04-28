@@ -1,0 +1,220 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum AuthProvider {
+  GOOGLE
+  APPLE
+}
+
+enum AgencyStatus {
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum MembershipStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ImagePurpose {
+  PROFILE_AVATAR
+  AGENCY_LOGO
+  TRIP_ITINERARY_IMAGE
+  CLIENT_ITINERARY_IMAGE
+}
+
+enum ImageStatus {
+  PENDING_UPLOAD
+  READY
+  DELETED
+  REPLACED
+}
+
+enum AdminAuditAction {
+  AGENCY_APPROVED
+  AGENCY_REJECTED
+  AGENCY_SUSPENDED
+  AGENCY_UNSUSPENDED
+  USER_PROMOTED_TO_ADMIN
+  USER_DISABLED
+}
+
+model User {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  email              String
+  emailNormalized    String                   @unique
+  passwordHash       String?
+  displayName        String
+  role               UserRole                 @default(USER)
+  status             UserStatus               @default(ACTIVE)
+  emailVerifiedAt    DateTime?
+  avatarImageId      String?                  @unique @db.Uuid
+  avatarImage        ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
+  sessions           Session[]
+  providerAccounts   AuthProviderAccount[]
+  verificationTokens EmailVerificationToken[]
+  memberships        AgencyMembership[]
+  ownedAgencies      Agency[]                 @relation("AgencyOwner")
+  verifiedAgencies   Agency[]                 @relation("AgencyVerifiedBy")
+  rejectedAgencies   Agency[]                 @relation("AgencyRejectedBy")
+  suspendedAgencies  Agency[]                 @relation("AgencySuspendedBy")
+  imageAssets        ImageAsset[]             @relation("UserImageAssets")
+  adminAuditEvents   AdminAuditEvent[]        @relation("AdminAuditActor")
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@index([emailNormalized])
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthProviderAccount {
+  id                    String       @id @default(uuid()) @db.Uuid
+  userId                String       @db.Uuid
+  user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider              AuthProvider
+  providerAccountId     String
+  providerEmail         String?
+  providerEmailVerified Boolean      @default(false)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Agency {
+  id                     String             @id @default(uuid()) @db.Uuid
+  name                   String
+  slug                   String             @unique
+  status                 AgencyStatus       @default(PENDING_REVIEW)
+  ownerUserId            String             @db.Uuid
+  ownerUser              User               @relation("AgencyOwner", fields: [ownerUserId], references: [id])
+  logoImageId            String?            @unique @db.Uuid
+  logoImage              ImageAsset?         @relation("AgencyLogo", fields: [logoImageId], references: [id], onDelete: SetNull)
+  submittedAt            DateTime           @default(now())
+  verifiedAt             DateTime?
+  verifiedByAdminUserId  String?            @db.Uuid
+  verifiedByAdminUser    User?              @relation("AgencyVerifiedBy", fields: [verifiedByAdminUserId], references: [id])
+  rejectedAt             DateTime?
+  rejectedByAdminUserId  String?            @db.Uuid
+  rejectedByAdminUser    User?              @relation("AgencyRejectedBy", fields: [rejectedByAdminUserId], references: [id])
+  rejectionReason        String?
+  suspendedAt            DateTime?
+  suspendedByAdminUserId String?            @db.Uuid
+  suspendedByAdminUser   User?              @relation("AgencySuspendedBy", fields: [suspendedByAdminUserId], references: [id])
+  suspensionReason       String?
+  memberships            AgencyMembership[]
+  imageAssets            ImageAsset[]        @relation("AgencyImageAssets")
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  @@index([ownerUserId])
+  @@index([status])
+}
+
+model AgencyMembership {
+  id        String           @id @default(uuid()) @db.Uuid
+  agencyId  String           @db.Uuid
+  agency    Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      MembershipRole
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([agencyId, userId])
+  @@index([userId])
+}
+
+model ImageAsset {
+  id              String        @id @default(uuid()) @db.Uuid
+  ownerUserId     String?       @db.Uuid
+  ownerUser       User?         @relation("UserImageAssets", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  avatarForUser   User?         @relation("UserAvatar")
+  agencyId        String?       @db.Uuid
+  agency          Agency?       @relation("AgencyImageAssets", fields: [agencyId], references: [id], onDelete: SetNull)
+  logoForAgency   Agency?       @relation("AgencyLogo")
+  tripId          String?       @db.Uuid
+  purpose         ImagePurpose
+  bucket          String
+  objectKey       String        @unique
+  mimeType        String
+  sizeBytes       Int
+  width           Int?
+  height          Int?
+  checksum        String?
+  status          ImageStatus   @default(PENDING_UPLOAD)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([ownerUserId])
+  @@index([agencyId])
+  @@index([tripId])
+  @@index([purpose])
+  @@index([status])
+}
+
+model AdminAuditEvent {
+  id          String           @id @default(uuid()) @db.Uuid
+  adminUserId String           @db.Uuid
+  adminUser   User             @relation("AdminAuditActor", fields: [adminUserId], references: [id])
+  action      AdminAuditAction
+  targetType  String
+  targetId    String
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  @@index([adminUserId])
+  @@index([targetType, targetId])
+  @@index([action])
+}
