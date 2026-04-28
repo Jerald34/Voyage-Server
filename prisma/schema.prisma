@@ -435,7 +435,7 @@ model AgentMessage {
   threadId     String           @db.Uuid
   thread       AgentThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
   runId        String?          @db.Uuid
-  run          AgentRun?        @relation(fields: [runId], references: [id], onDelete: SetNull)
+  run          AgentRun?        @relation(fields: [runId, threadId], references: [id, threadId], onDelete: NoAction)
   triggeredRuns AgentRun[]      @relation("AgentRunTriggerMessage")
   authorUserId String?          @db.Uuid
   authorUser   User?            @relation("AgentMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
@@ -448,6 +448,7 @@ model AgentMessage {
   @@index([runId])
   @@index([authorUserId])
   @@index([role])
+  @@unique([id, threadId])
 }
 
 model AgentRun {
@@ -457,7 +458,7 @@ model AgentRun {
   agencyId         String           @db.Uuid
   agency           Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   triggerMessageId String?          @db.Uuid
-  triggerMessage   AgentMessage?    @relation("AgentRunTriggerMessage", fields: [triggerMessageId], references: [id], onDelete: SetNull)
+  triggerMessage   AgentMessage?    @relation("AgentRunTriggerMessage", fields: [triggerMessageId, threadId], references: [id, threadId], onDelete: NoAction)
   status           AgentRunStatus   @default(QUEUED)
   modelProvider    String
   modelName        String
@@ -478,12 +479,13 @@ model AgentRun {
   @@index([agencyId])
   @@index([triggerMessageId])
   @@index([status])
+  @@unique([id, threadId])
 }
 
 model AgentToolCall {
   id            String              @id @default(uuid()) @db.Uuid
   runId         String              @db.Uuid
-  run           AgentRun            @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run           AgentRun            @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
   threadId      String              @db.Uuid
   thread        AgentThread         @relation(fields: [threadId], references: [id], onDelete: Cascade)
   toolName      String
@@ -505,7 +507,7 @@ model AgentToolCall {
 model AgentTask {
   id        String          @id @default(uuid()) @db.Uuid
   runId     String          @db.Uuid
-  run       AgentRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run       AgentRun        @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
   threadId  String          @db.Uuid
   thread    AgentThread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
   label     String
@@ -523,7 +525,7 @@ model AgentTask {
 model AgentSource {
   id          String          @id @default(uuid()) @db.Uuid
   runId       String          @db.Uuid
-  run         AgentRun        @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run         AgentRun        @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
   threadId    String          @db.Uuid
   thread      AgentThread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
   sourceType  AgentSourceType
@@ -543,7 +545,7 @@ model AgentSource {
 model AgentRunEvent {
   id        String      @id @default(uuid()) @db.Uuid
   runId     String      @db.Uuid
-  run       AgentRun    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  run       AgentRun    @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
   threadId  String      @db.Uuid
   thread    AgentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   type      String
