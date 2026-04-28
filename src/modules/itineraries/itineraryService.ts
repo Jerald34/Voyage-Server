@@ -113,6 +113,14 @@ export function createItineraryService(options: { repository: ItineraryRepositor
 
     async replaceDraft(agencyId: string, itineraryId: string, input: ReplaceItineraryInput) {
       const parsed = replaceItinerarySchema.parse(input);
+      const existing = await options.repository.findItineraryByAgency(itineraryId, agencyId);
+      if (!existing) {
+        throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
+      }
+      if (existing.status !== "DRAFT") {
+        throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
+      }
+
       const itinerary = await options.repository.replaceItineraryDraft(itineraryId, agencyId, parsed);
       if (!itinerary) {
         throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
@@ -206,11 +214,14 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
       return client.$transaction(async (tx) => {
         const existing = await tx.itinerary.findFirst({
           where: { id, agencyId },
-          select: { id: true }
+          select: { id: true, status: true }
         });
 
         if (!existing) {
           return null;
+        }
+        if (existing.status !== "DRAFT") {
+          throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
         }
 
         await tx.itineraryDay.deleteMany({

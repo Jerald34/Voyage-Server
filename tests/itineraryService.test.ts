@@ -4,6 +4,7 @@ import {
   type ItineraryRepository,
   type StructuredItineraryInput
 } from "../src/modules/itineraries/itineraryService";
+import { ApiError } from "../src/http/errors";
 
 type TripRecord = Awaited<ReturnType<ItineraryRepository["createTripWithItinerary"]>>["trip"];
 type ItineraryRecord = Awaited<ReturnType<ItineraryRepository["createTripWithItinerary"]>>["itinerary"];
@@ -85,6 +86,9 @@ function createMemoryRepository(): ItineraryRepository & {
       const itinerary = itineraries.find((candidate) => candidate.id === id && candidate.agencyId === agencyId);
       if (!itinerary) {
         return null;
+      }
+      if (itinerary.status !== "DRAFT") {
+        throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
       }
 
       const now = new Date("2026-04-28T00:00:00.000Z");
@@ -236,6 +240,89 @@ describe("itinerary service", () => {
         }
       ]
     });
+  });
+
+  it("preserves null trip and day dates without coercing them to epoch", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+
+    const result = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput({
+      trip: {
+        title: "Cebu Honeymoon",
+        startDate: null,
+        endDate: null
+      },
+      itinerary: {
+        title: "4-Day Cebu Honeymoon",
+        days: [
+          {
+            dayNumber: 1,
+            date: null,
+            title: "Arrival",
+            items: []
+          }
+        ]
+      }
+    }));
+
+    expect(result.trip.startDate).toBeNull();
+    expect(result.trip.endDate).toBeNull();
+    expect(result.itinerary.days[0]?.date).toBeNull();
+  });
+
+  it("rejects non-JSON routeFromPrevious values", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+
+    await expect(
+      service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput({
+        itinerary: {
+          title: "4-Day Cebu Honeymoon",
+          days: [
+            {
+              dayNumber: 1,
+              title: "Arrival",
+              items: [
+                {
+                  type: "TRANSFER",
+                  title: "Airport transfer",
+                  routeFromPrevious: new Date("2026-04-28T00:00:00.000Z")
+                }
+              ]
+            }
+          ]
+        }
+      }))
+    ).rejects.toMatchObject({
+      name: "ZodError"
+    });
+  });
+
+  it("rejects replacing non-draft itineraries", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
+    created.itinerary.status = "NEEDS_REVIEW";
+
+    await expect(
+      service.replaceDraft("agency-1", created.itinerary.id, {
+        title: "Updated Cebu Plan",
+        days: [
+          {
+            dayNumber: 1,
+            title: "Slower arrival",
+            items: []
+          }
+        ]
+      })
+    ).rejects.toMatchObject({
+      code: "ITINERARY_NOT_DRAFT",
+      statusCode: 409,
+      message: "Only draft itineraries can be replaced."
+    });
+
+    expect(repository.itineraries[0]?.title).toBe("4-Day Cebu Honeymoon");
+    expect(repository.itineraries[0]?.version).toBe(1);
   });
 
   it("rejects invalid structured input", async () => {
