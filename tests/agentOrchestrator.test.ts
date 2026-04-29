@@ -37,7 +37,52 @@ function createRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
 
 function createFakeAgentService(run = createRun()) {
   const events: AgentEvent[] = [];
+  const toolCalls: Array<{
+    id: string;
+    runId: string;
+    threadId: string;
+    toolName: string;
+    status: "RUNNING" | "COMPLETED" | "FAILED";
+    input: unknown;
+    outputSummary: string | null;
+    errorCode: string | null;
+    errorMessage: string | null;
+    startedAt: Date | null;
+    completedAt: Date | null;
+  }> = [];
+  const tasks: Array<{
+    id: string;
+    runId: string;
+    threadId: string;
+    label: string;
+    status: "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
+    sortOrder: number;
+    createdAt: Date;
+    updatedAt: Date;
+  }> = [];
+  const sources: Array<{
+    id: string;
+    runId: string;
+    threadId: string;
+    sourceType: "WEB" | "MAP_PLACE" | "MAP_ROUTE";
+    title: string;
+    url: string | null;
+    snippet: string | null;
+    provider: string;
+    retrievedAt: Date;
+    metadata: unknown;
+    createdAt: Date;
+  }> = [];
   const service: AgentOrchestratorAgentService = {
+    async startRun(runId, startedAt) {
+      if (run.status === "COMPLETED" || run.status === "FAILED" || run.status === "CANCELLED") {
+        throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
+      }
+      run.status = "RUNNING";
+      run.startedAt = startedAt;
+      run.updatedAt = startedAt;
+      return { ...run, id: runId };
+    },
     async recordRunEvent(_run, event) {
       events.push(event);
       return {
@@ -48,6 +93,93 @@ function createFakeAgentService(run = createRun()) {
         payload: event.payload,
         createdAt: new Date("2026-04-28T00:00:00.000Z")
       };
+    },
+    async recordToolCallStarted(_run, input, startedAt) {
+      const toolCall = {
+        id: `tool-call-${toolCalls.length + 1}`,
+        runId: run.id,
+        threadId: run.threadId,
+        toolName: input.toolName,
+        status: "RUNNING" as const,
+        input: input.input,
+        outputSummary: null,
+        errorCode: null,
+        errorMessage: null,
+        startedAt,
+        completedAt: null
+      };
+      toolCalls.push(toolCall);
+      return toolCall;
+    },
+    async completeToolCall(toolCallId, outputSummary, completedAt) {
+      const toolCall = toolCalls.find((candidate) => candidate.id === toolCallId);
+      if (!toolCall) {
+        throw new Error("missing tool call");
+      }
+      toolCall.status = "COMPLETED";
+      toolCall.outputSummary = outputSummary;
+      toolCall.completedAt = completedAt;
+      return toolCall;
+    },
+    async failToolCall(toolCallId, code, message, completedAt) {
+      const toolCall = toolCalls.find((candidate) => candidate.id === toolCallId);
+      if (!toolCall) {
+        throw new Error("missing tool call");
+      }
+      toolCall.status = "FAILED";
+      toolCall.errorCode = code;
+      toolCall.errorMessage = message;
+      toolCall.completedAt = completedAt;
+      return toolCall;
+    },
+    async recordTask(_run, input) {
+      const task = {
+        id: `task-${tasks.length + 1}`,
+        runId: run.id,
+        threadId: run.threadId,
+        label: input.label,
+        status: input.status,
+        sortOrder: input.sortOrder ?? tasks.length + 1,
+        createdAt: new Date("2026-04-28T00:00:00.000Z"),
+        updatedAt: new Date("2026-04-28T00:00:00.000Z")
+      };
+      tasks.push(task);
+      await service.recordRunEvent(run, {
+        type: "task.updated",
+        payload: input
+      });
+      return task;
+    },
+    async recordSources(_run, input) {
+      const created = input.map((source, index) => {
+        const record = {
+          id: `source-${sources.length + index + 1}`,
+          runId: run.id,
+          threadId: run.threadId,
+          sourceType: source.sourceType,
+          title: source.title,
+          url: source.url ?? null,
+          snippet: source.snippet ?? null,
+          provider: source.provider,
+          retrievedAt: source.retrievedAt,
+          metadata: source.metadata,
+          createdAt: new Date("2026-04-28T00:00:00.000Z")
+        };
+        sources.push(record);
+        return record;
+      });
+      for (const source of created) {
+        await service.recordRunEvent(run, {
+          type: "source.added",
+          payload: {
+            sourceType: source.sourceType,
+            title: source.title,
+            url: source.url,
+            snippet: source.snippet
+          }
+        });
+      }
+      return created;
     },
     async completeRun(runId, assistantContent) {
       run.status = "COMPLETED";
@@ -87,7 +219,7 @@ function createFakeAgentService(run = createRun()) {
     }
   };
 
-  return { service, events, run };
+  return { service, events, run, toolCalls, tasks, sources };
 }
 
 function createModelProvider(content: string): ModelProvider {
@@ -132,8 +264,28 @@ describe("agent orchestrator", () => {
     });
   });
 
-  it("executes create_itinerary from JSON model output and emits tool events", async () => {
+  it("marks the run running before emitting run.started", async () => {
     const { service, events, run } = createFakeAgentService();
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: createModelProvider("Here is a draft itinerary."),
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run).toMatchObject({
+      status: "COMPLETED",
+    });
+    expect(run.startedAt).toBeInstanceOf(Date);
+    expect(events[0]).toEqual({
+      type: "run.started",
+      payload: { runId: "run-1" }
+    });
+  });
+
+  it("executes create_itinerary from JSON model output and emits tool events", async () => {
+    const { service, events, run, toolCalls } = createFakeAgentService();
     const createdInputs: unknown[] = [];
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
@@ -178,6 +330,12 @@ describe("agent orchestrator", () => {
       "message.completed",
       "run.completed"
     ]);
+    expect(toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: "create_itinerary",
+        status: "COMPLETED"
+      })
+    ]);
     expect(events[2]).toMatchObject({
       type: "tool.completed",
       payload: { name: "create_itinerary", output: { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } } }
@@ -185,7 +343,7 @@ describe("agent orchestrator", () => {
   });
 
   it("record_agent_task emits task.updated", async () => {
-    const { service, events } = createFakeAgentService();
+    const { service, events, tasks } = createFakeAgentService();
     const registry = createAgentToolRegistry([
       createRecordAgentTaskTool({
         agentService: service
@@ -204,12 +362,67 @@ describe("agent orchestrator", () => {
         payload: { label: "Research hotels", status: "RUNNING", sortOrder: 2 }
       }
     ]);
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        label: "Research hotels",
+        status: "RUNNING",
+        sortOrder: 2
+      })
+    ]);
+  });
+
+  it("persists sources for web search", async () => {
+    const { service, sources, events } = createFakeAgentService();
+    const registry = createAgentToolRegistry([
+      createWebSearchTool({
+        agentService: service,
+        webSearch: {
+          async search() {
+            return [
+              {
+                title: "Cebu trip ideas",
+                url: "https://example.com/cebu",
+                snippet: "A short result",
+                provider: "google_custom_search" as const
+              }
+            ];
+          }
+        }
+      })
+    ]);
+
+    const output = await registry.execute("web_search", createRunInput(), {
+      query: "Cebu travel",
+      maxResults: 3
+    });
+
+    expect(output).toHaveLength(1);
+    expect(sources).toEqual([
+      expect.objectContaining({
+        sourceType: "WEB",
+        title: "Cebu trip ideas",
+        url: "https://example.com/cebu"
+      })
+    ]);
+    expect(events.some((event) => event.type === "source.added")).toBe(true);
   });
 
   it("enforces map and web tool call limits", async () => {
+    const agentService = {
+      async recordRunEvent() {
+        return undefined;
+      },
+      async recordTask() {
+        return undefined;
+      },
+      async recordSources() {
+        return undefined;
+      }
+    };
     const registry = createAgentToolRegistry(
       [
         createSearchGooglePlacesTool({
+          agentService,
           maps: {
             async searchPlaces() {
               return [];
@@ -223,6 +436,7 @@ describe("agent orchestrator", () => {
           }
         }),
         createWebSearchTool({
+          agentService,
           webSearch: {
             async search() {
               return [];
@@ -269,5 +483,88 @@ describe("agent orchestrator", () => {
       errorCode: "MODEL_OUTPUT_INVALID"
     });
     expect(events.map((event) => event.type)).toEqual(["run.started", "run.failed"]);
+  });
+
+  it("fails when tool inputs exceed the per-run limit", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Done.",
+      toolCalls: Array.from({ length: 21 }, (_, index) => ({
+        name: "record_agent_task",
+        input: {
+          label: `Task ${index + 1}`,
+          status: "RUNNING"
+        }
+      }))
+    });
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: createModelProvider(modelOutput),
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([
+        createRecordAgentTaskTool({
+          agentService: service
+        })
+      ]),
+      maxToolCallsPerRun: 20
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("FAILED");
+    expect(events.at(-1)).toMatchObject({
+      type: "run.failed",
+      payload: {
+        code: "AGENT_TOOL_LIMIT_REACHED",
+        message: "Agent tool call limit reached."
+      }
+    });
+  });
+
+  it("fails invalid tool input with AGENT_TOOL_INPUT_INVALID", async () => {
+    const { service, events } = createFakeAgentService();
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: createModelProvider(
+        JSON.stringify({
+          assistantMessage: "Trying a bad tool call.",
+          toolCalls: [
+            {
+              name: "record_agent_task",
+              input: {
+                label: "",
+                status: "RUNNING"
+              }
+            }
+          ]
+        })
+      ),
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([
+        createRecordAgentTaskTool({
+          agentService: service
+        })
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "tool.failed",
+      "run.failed"
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "tool.failed",
+      payload: {
+        name: "record_agent_task",
+        code: "AGENT_TOOL_INPUT_INVALID"
+      }
+    });
+    expect(events[3]).toMatchObject({
+      type: "run.failed",
+      payload: {
+        code: "AGENT_TOOL_INPUT_INVALID"
+      }
+    });
   });
 });

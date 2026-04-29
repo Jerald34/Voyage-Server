@@ -54,6 +54,11 @@ export type AgentToolCallRecord = {
   createdAt: Date;
 };
 
+export type AgentToolCallInput = {
+  toolName: string;
+  input: unknown;
+};
+
 export type AgentTaskRecord = {
   id: string;
   runId: string;
@@ -63,6 +68,12 @@ export type AgentTaskRecord = {
   sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type AgentTaskInput = {
+  label: string;
+  status: AgentTaskStatus;
+  sortOrder?: number;
 };
 
 export type AgentSourceRecord = {
@@ -77,6 +88,16 @@ export type AgentSourceRecord = {
   retrievedAt: Date;
   metadata: unknown;
   createdAt: Date;
+};
+
+export type AgentSourceInput = {
+  sourceType: AgentSourceType;
+  title: string;
+  url?: string | null;
+  snippet?: string | null;
+  provider: string;
+  retrievedAt: Date;
+  metadata?: unknown;
 };
 
 export type AgentRunEventRecord = {
@@ -136,6 +157,7 @@ export interface AgentRepository {
     modelProvider: string;
     modelName: string;
   }): Promise<AgentRunRecord>;
+  startRun(id: string, startedAt: Date): Promise<AgentRunRecord | null>;
   createUserMessageAndRun(data: {
     threadId: string;
     agencyId: string;
@@ -151,6 +173,40 @@ export interface AgentRepository {
     type: AgentEvent["type"];
     payload: Record<string, unknown>;
   }): Promise<AgentRunEventRecord>;
+  createToolCall(data: {
+    runId: string;
+    threadId: string;
+    toolName: string;
+    status: AgentToolCallStatus;
+    input?: unknown;
+    outputSummary?: string | null;
+    errorCode?: string | null;
+    errorMessage?: string | null;
+    startedAt?: Date | null;
+    completedAt?: Date | null;
+  }): Promise<AgentToolCallRecord>;
+  updateToolCall(
+    id: string,
+    data: {
+      status: AgentToolCallStatus;
+      outputSummary?: string | null;
+      errorCode?: string | null;
+      errorMessage?: string | null;
+      completedAt?: Date | null;
+    }
+  ): Promise<AgentToolCallRecord | null>;
+  createTask(data: {
+    runId: string;
+    threadId: string;
+    label: string;
+    status: AgentTaskStatus;
+    sortOrder: number;
+  }): Promise<AgentTaskRecord>;
+  createSources(data: {
+    runId: string;
+    threadId: string;
+    sources: AgentSourceInput[];
+  }): Promise<AgentSourceRecord[]>;
   completeRunIfOpen(
     id: string,
     data: {
@@ -189,6 +245,23 @@ export function createAgentService(options: {
   function assertRunOpen(run: AgentRunRecord) {
     if (isTerminalRunStatus(run.status)) {
       throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
+    }
+  }
+
+  function summarizeValue(value: unknown) {
+    if (value === undefined) {
+      return null;
+    }
+
+    try {
+      const text = typeof value === "string" ? value : JSON.stringify(value);
+      if (text === undefined) {
+        return null;
+      }
+      return text.length > 500 ? `${text.slice(0, 497)}...` : text;
+    } catch {
+      const text = String(value);
+      return text.length > 500 ? `${text.slice(0, 497)}...` : text;
     }
   }
 
@@ -233,6 +306,25 @@ export function createAgentService(options: {
       });
     },
 
+    async startRun(runId: string) {
+      const run = await getRun(runId);
+      assertRunOpen(run);
+
+      const startedAt = now();
+      const startedRun = await options.repository.startRun(runId, startedAt);
+      if (startedRun) {
+        return startedRun;
+      }
+
+      const current = await getRun(runId);
+      if (current.status === "RUNNING") {
+        return current;
+      }
+
+      assertRunOpen(current);
+      throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
+    },
+
     async recordRunEvent(run: AgentRunRecord, event: AgentEvent) {
       const parsed = agentEventSchema.parse(event);
       const persisted = await options.repository.createRunEvent({
@@ -243,6 +335,77 @@ export function createAgentService(options: {
       });
       publishAgentRunEvent(run.id, parsed);
       return persisted;
+    },
+
+    async recordToolCallStarted(run: AgentRunRecord, input: AgentToolCallInput, startedAt = now()) {
+      return options.repository.createToolCall({
+        runId: run.id,
+        threadId: run.threadId,
+        toolName: input.toolName,
+        status: "RUNNING",
+        input: input.input,
+        startedAt
+      });
+    },
+
+    async completeToolCall(toolCallId: string, output: unknown, completedAt = now()) {
+      return options.repository.updateToolCall(toolCallId, {
+        status: "COMPLETED",
+        outputSummary: summarizeValue(output),
+        completedAt
+      });
+    },
+
+    async failToolCall(toolCallId: string, code: string, message: string, completedAt = now()) {
+      return options.repository.updateToolCall(toolCallId, {
+        status: "FAILED",
+        errorCode: code,
+        errorMessage: message,
+        completedAt
+      });
+    },
+
+    async recordTask(run: AgentRunRecord, input: AgentTaskInput) {
+      const task = await options.repository.createTask({
+        runId: run.id,
+        threadId: run.threadId,
+        label: input.label,
+        status: input.status,
+        sortOrder: input.sortOrder ?? 0
+      });
+
+      await this.recordRunEvent(run, {
+        type: "task.updated",
+        payload: {
+          label: input.label,
+          status: input.status,
+          ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {})
+        }
+      });
+
+      return task;
+    },
+
+    async recordSources(run: AgentRunRecord, sources: AgentSourceInput[]) {
+      const created = await options.repository.createSources({
+        runId: run.id,
+        threadId: run.threadId,
+        sources
+      });
+
+      for (const source of created) {
+        await this.recordRunEvent(run, {
+          type: "source.added",
+          payload: {
+            sourceType: source.sourceType,
+            title: source.title,
+            url: source.url,
+            snippet: source.snippet
+          }
+        });
+      }
+
+      return created;
     },
 
     async completeRun(runId: string, assistantContent: string) {
@@ -362,6 +525,23 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       }) as Promise<AgentRunRecord>;
     },
 
+    async startRun(id, startedAt) {
+      const update = await client.agentRun.updateMany({
+        where: {
+          id,
+          status: "QUEUED"
+        },
+        data: {
+          status: "RUNNING",
+          startedAt
+        }
+      });
+      if (update.count === 0) {
+        return null;
+      }
+      return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
+    },
+
     async createUserMessageAndRun(data) {
       return client.$transaction(async (tx) => {
         const message = await tx.agentMessage.create({
@@ -399,6 +579,78 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           payload: data.payload as Prisma.InputJsonValue
         }
       }) as Promise<AgentRunEventRecord>;
+    },
+
+    async createToolCall(data) {
+      return client.agentToolCall.create({
+        data: {
+          runId: data.runId,
+          threadId: data.threadId,
+          toolName: data.toolName,
+          status: data.status,
+          input: toJsonInput(data.input),
+          outputSummary: data.outputSummary ?? null,
+          errorCode: data.errorCode ?? null,
+          errorMessage: data.errorMessage ?? null,
+          startedAt: data.startedAt ?? null,
+          completedAt: data.completedAt ?? null
+        }
+      }) as Promise<AgentToolCallRecord>;
+    },
+
+    async updateToolCall(id, data) {
+      const update = await client.agentToolCall.updateMany({
+        where: { id },
+        data: {
+          status: data.status,
+          outputSummary: data.outputSummary ?? null,
+          errorCode: data.errorCode ?? null,
+          errorMessage: data.errorMessage ?? null,
+          completedAt: data.completedAt ?? null
+        }
+      });
+      if (update.count === 0) {
+        return null;
+      }
+      return client.agentToolCall.findUnique({ where: { id } }) as Promise<AgentToolCallRecord | null>;
+    },
+
+    async createTask(data) {
+      return client.agentTask.create({
+        data: {
+          runId: data.runId,
+          threadId: data.threadId,
+          label: data.label,
+          status: data.status,
+          sortOrder: data.sortOrder
+        }
+      }) as Promise<AgentTaskRecord>;
+    },
+
+    async createSources(data) {
+      return client.$transaction(async (tx) => {
+        const created: AgentSourceRecord[] = [];
+
+        for (const source of data.sources) {
+          created.push(
+            (await tx.agentSource.create({
+              data: {
+                runId: data.runId,
+                threadId: data.threadId,
+                sourceType: source.sourceType,
+                title: source.title,
+                url: source.url ?? null,
+                snippet: source.snippet ?? null,
+                provider: source.provider,
+                retrievedAt: source.retrievedAt,
+                metadata: toJsonInput(source.metadata)
+              }
+            })) as AgentSourceRecord
+          );
+        }
+
+        return created;
+      });
     },
 
     async completeRunIfOpen(id, data) {

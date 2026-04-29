@@ -1,10 +1,10 @@
-import { z } from "zod";
+import { ZodError, z } from "zod";
 import { ApiError } from "../../http/errors";
 import type { MapsProvider } from "../../services/maps";
 import type { WebSearchProvider } from "../../services/webSearch";
 import { replaceItinerarySchema, structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
 import type { StructuredItineraryInput } from "../itineraries/itineraryService";
-import type { AgentRunRecord } from "./agentService";
+import type { AgentRunRecord, AgentSourceInput, AgentTaskInput } from "./agentService";
 import type { AgentEvent } from "./agentSchemas";
 
 export type AgentToolContext = {
@@ -27,10 +27,10 @@ type AgentToolRegistryOptions = {
   maxCallsByTool?: Record<string, number>;
 };
 
-type AgentTaskStatus = "PENDING" | "RUNNING" | "COMPLETED" | "FAILED";
-
-type AgentTaskEventService = {
+type AgentToolService = {
   recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<unknown>;
+  recordTask(run: AgentRunRecord, input: AgentTaskInput): Promise<unknown>;
+  recordSources(run: AgentRunRecord, sources: AgentSourceInput[]): Promise<unknown>;
 };
 
 type CreateItineraryService = {
@@ -105,6 +105,14 @@ function createRunRecord(context: AgentToolContext): AgentRunRecord {
   };
 }
 
+function inputError() {
+  return new ApiError(400, "AGENT_TOOL_INPUT_INVALID", "Agent tool input was invalid.");
+}
+
+function toCompactMetadata(value: Record<string, unknown>) {
+  return value;
+}
+
 function limitKey(runId: string, toolName: string) {
   return `${runId}:${toolName}`;
 }
@@ -130,30 +138,29 @@ export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRe
         callsByRunAndTool.set(key, currentCalls + 1);
       }
 
-      return tool.execute(context, input);
+      try {
+        return await tool.execute(context, input);
+      } catch (error) {
+        if (error instanceof ZodError) {
+          throw inputError();
+        }
+        throw error;
+      }
     }
   };
 }
 
-export function createRecordAgentTaskTool(options: { agentService: AgentTaskEventService }): AgentTool {
+export function createRecordAgentTaskTool(options: { agentService: AgentToolService }): AgentTool {
   return {
     name: "record_agent_task",
     async execute(context, input) {
       const parsed = taskInputSchema.parse(input);
-      const payload: { label: string; status: AgentTaskStatus; sortOrder?: number } = {
+      const run = createRunRecord(context);
+      return options.agentService.recordTask(run, {
         label: parsed.label,
-        status: parsed.status
-      };
-      if (parsed.sortOrder !== undefined) {
-        payload.sortOrder = parsed.sortOrder;
-      }
-
-      await options.agentService.recordRunEvent(createRunRecord(context), {
-        type: "task.updated",
-        payload
+        status: parsed.status,
+        ...(parsed.sortOrder !== undefined ? { sortOrder: parsed.sortOrder } : {})
       });
-
-      return payload;
     }
   };
 }
@@ -178,54 +185,135 @@ export function createUpdateItineraryTool(options: { itineraryService: UpdateIti
   };
 }
 
-export function createSearchGooglePlacesTool(options: { maps: MapsProvider }): AgentTool {
+export function createSearchGooglePlacesTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
   return {
     name: "search_google_places",
     async execute(_context, input) {
       const parsed = searchPlacesInputSchema.parse(input);
-      return options.maps.searchPlaces({
+      const results = await options.maps.searchPlaces({
         query: parsed.query,
         languageCode: parsed.languageCode,
         maxResultCount: parsed.maxResults
       });
+      await options.agentService.recordSources(
+        createRunRecord(_context),
+        results.map((result, index) => ({
+          sourceType: "MAP_PLACE",
+          title: result.name,
+          url: null,
+          snippet: result.address ?? null,
+          provider: "google_maps",
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            query: parsed.query,
+            languageCode: parsed.languageCode ?? null,
+            maxResults: parsed.maxResults,
+            index,
+            placeId: result.id,
+            rating: result.rating ?? null,
+            userRatingCount: result.userRatingCount ?? null,
+            types: result.types
+          })
+        }))
+      );
+      return results;
     }
   };
 }
 
-export function createGetGooglePlaceDetailsTool(options: { maps: MapsProvider }): AgentTool {
+export function createGetGooglePlaceDetailsTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
   return {
     name: "get_google_place_details",
     async execute(_context, input) {
       const parsed = placeDetailsInputSchema.parse(input);
-      return options.maps.getPlaceDetails(parsed.placeId);
+      const result = await options.maps.getPlaceDetails(parsed.placeId);
+      await options.agentService.recordSources(createRunRecord(_context), [
+        {
+          sourceType: "MAP_PLACE",
+          title: result.name,
+          url: result.websiteUri ?? null,
+          snippet: result.address ?? null,
+          provider: "google_maps",
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            placeId: result.id,
+            phoneNumber: result.phoneNumber ?? null,
+            websiteUri: result.websiteUri ?? null,
+            rating: result.rating ?? null,
+            userRatingCount: result.userRatingCount ?? null,
+            types: result.types
+          })
+        }
+      ]);
+      return result;
     }
   };
 }
 
-export function createEstimateRouteTool(options: { maps: MapsProvider }): AgentTool {
+export function createEstimateRouteTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
   return {
     name: "estimate_route",
     async execute(_context, input) {
       const parsed = routeInputSchema.parse(input);
-      return options.maps.estimateRoute({
+      const result = await options.maps.estimateRoute({
         origin: parsed.origin,
         destination: parsed.destination,
         travelMode: parsed.travelMode
       });
+      await options.agentService.recordSources(createRunRecord(_context), [
+        {
+          sourceType: "MAP_ROUTE",
+          title: "Route estimate",
+          url: null,
+          snippet:
+            result.distanceMeters !== undefined || result.durationSeconds !== undefined
+              ? `distance=${result.distanceMeters ?? "unknown"} duration=${result.durationSeconds ?? "unknown"}`
+              : null,
+          provider: "google_maps",
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            origin: parsed.origin,
+            destination: parsed.destination,
+            travelMode: parsed.travelMode,
+            distanceMeters: result.distanceMeters ?? null,
+            durationSeconds: result.durationSeconds ?? null,
+            staticDurationSeconds: result.staticDurationSeconds ?? null
+          })
+        }
+      ]);
+      return result;
     }
   };
 }
 
-export function createWebSearchTool(options: { webSearch: WebSearchProvider }): AgentTool {
+export function createWebSearchTool(options: { webSearch: WebSearchProvider; agentService: AgentToolService }): AgentTool {
   return {
     name: "web_search",
     async execute(_context, input) {
       const parsed = webSearchInputSchema.parse(input);
-      return options.webSearch.search({
+      const results = await options.webSearch.search({
         query: parsed.query,
         num: parsed.maxResults,
         hl: parsed.language
       });
+      await options.agentService.recordSources(
+        createRunRecord(_context),
+        results.map((result, index) => ({
+          sourceType: "WEB",
+          title: result.title,
+          url: result.url,
+          snippet: result.snippet,
+          provider: result.provider,
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            query: parsed.query,
+            index,
+            language: parsed.language ?? null,
+            region: parsed.region ?? null
+          })
+        }))
+      );
+      return results;
     }
   };
 }

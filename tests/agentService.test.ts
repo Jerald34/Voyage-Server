@@ -6,6 +6,9 @@ import {
   type AgentMessageRecord,
   type AgentRepository,
   type AgentRunEventRecord,
+  type AgentSourceRecord,
+  type AgentTaskRecord,
+  type AgentToolCallRecord,
   type AgentRunRecord,
   type AgentRunStatus,
   type AgentThreadRecord
@@ -17,12 +20,18 @@ function createMemoryRepository(): AgentRepository & {
   messages: AgentMessageRecord[];
   runs: AgentRunRecord[];
   events: AgentRunEventRecord[];
+  toolCalls: AgentToolCallRecord[];
+  tasks: AgentTaskRecord[];
+  sources: AgentSourceRecord[];
 } {
   const now = new Date("2026-04-28T00:00:00.000Z");
   const threads: AgentThreadRecord[] = [];
   const messages: AgentMessageRecord[] = [];
   const runs: AgentRunRecord[] = [];
   const events: AgentRunEventRecord[] = [];
+  const toolCalls: AgentToolCallRecord[] = [];
+  const tasks: AgentTaskRecord[] = [];
+  const sources: AgentSourceRecord[] = [];
   const isTerminalRunStatus = (status: AgentRunStatus) =>
     status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
 
@@ -38,6 +47,9 @@ function createMemoryRepository(): AgentRepository & {
     messages,
     runs,
     events,
+    toolCalls,
+    tasks,
+    sources,
     async createThread(data) {
       const thread: AgentThreadRecord = {
         id: `thread-${threads.length + 1}`,
@@ -118,6 +130,16 @@ function createMemoryRepository(): AgentRepository & {
     async findRunById(id) {
       return runs.find((run) => run.id === id) ?? null;
     },
+    async startRun(id, startedAt) {
+      const run = runs.find((candidate) => candidate.id === id);
+      if (!run || run.status !== "QUEUED") {
+        return null;
+      }
+      run.status = "RUNNING";
+      run.startedAt = startedAt;
+      run.updatedAt = startedAt;
+      return run;
+    },
     async createRunEvent(data) {
       const event: AgentRunEventRecord = {
         id: `event-${events.length + 1}`,
@@ -129,6 +151,67 @@ function createMemoryRepository(): AgentRepository & {
       };
       events.push(event);
       return event;
+    },
+    async createToolCall(data) {
+      const toolCall: AgentToolCallRecord = {
+        id: `tool-call-${toolCalls.length + 1}`,
+        runId: data.runId,
+        threadId: data.threadId,
+        toolName: data.toolName,
+        status: data.status,
+        input: data.input ?? null,
+        outputSummary: data.outputSummary ?? null,
+        errorCode: data.errorCode ?? null,
+        errorMessage: data.errorMessage ?? null,
+        startedAt: data.startedAt ?? null,
+        completedAt: data.completedAt ?? null,
+        createdAt: now
+      };
+      toolCalls.push(toolCall);
+      return toolCall;
+    },
+    async updateToolCall(id, data) {
+      const toolCall = toolCalls.find((candidate) => candidate.id === id);
+      if (!toolCall) {
+        return null;
+      }
+      toolCall.status = data.status;
+      toolCall.outputSummary = data.outputSummary ?? toolCall.outputSummary;
+      toolCall.errorCode = data.errorCode ?? toolCall.errorCode;
+      toolCall.errorMessage = data.errorMessage ?? toolCall.errorMessage;
+      toolCall.completedAt = data.completedAt ?? toolCall.completedAt;
+      return toolCall;
+    },
+    async createTask(data) {
+      const task: AgentTaskRecord = {
+        id: `task-${tasks.length + 1}`,
+        runId: data.runId,
+        threadId: data.threadId,
+        label: data.label,
+        status: data.status,
+        sortOrder: data.sortOrder,
+        createdAt: now,
+        updatedAt: now
+      };
+      tasks.push(task);
+      return task;
+    },
+    async createSources(data) {
+      const created: AgentSourceRecord[] = data.sources.map((source, index) => ({
+        id: `source-${sources.length + index + 1}`,
+        runId: data.runId,
+        threadId: data.threadId,
+        sourceType: source.sourceType,
+        title: source.title,
+        url: source.url ?? null,
+        snippet: source.snippet ?? null,
+        provider: source.provider,
+        retrievedAt: source.retrievedAt,
+        metadata: source.metadata ?? null,
+        createdAt: now
+      }));
+      sources.push(...created);
+      return created;
     },
     async completeRunIfOpen(id, data) {
       const run = runs.find((candidate) => candidate.id === id);
@@ -220,6 +303,39 @@ describe("agent service", () => {
       modelProvider: "openai",
       modelName: "gpt-test"
     });
+  });
+
+  it("marks a queued run running with startedAt", async () => {
+    const repository = createMemoryRepository();
+    const now = new Date("2026-04-28T01:02:03.000Z");
+    const service = createAgentService({ repository, now: () => now });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    const started = await service.startRun(run.id);
+
+    expect(started).toMatchObject({
+      id: run.id,
+      status: "RUNNING",
+      startedAt: now
+    });
+    expect(repository.runs[0]).toMatchObject({
+      status: "RUNNING",
+      startedAt: now
+    });
+  });
+
+  it("rejects starting a finished run", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    await service.completeRun(run.id, "Here is the itinerary.");
+    await expect(service.startRun(run.id)).rejects.toMatchObject({
+      code: "AGENT_RUN_ALREADY_FINISHED",
+      statusCode: 409
+    } satisfies Partial<ApiError>);
   });
 
   it("persists and publishes run events", async () => {

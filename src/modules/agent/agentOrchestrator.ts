@@ -18,12 +18,20 @@ export type AgentOrchestrator = {
 };
 
 export type AgentOrchestratorAgentService = {
-  recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<AgentRunEventRecord | unknown>;
+  startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
+  recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<AgentRunEventRecord>;
+  recordToolCallStarted(
+    run: AgentRunRecord,
+    input: { toolName: string; input: unknown },
+    startedAt: Date
+  ): Promise<{ id: string }>;
+  completeToolCall(toolCallId: string, output: unknown, completedAt: Date): Promise<unknown>;
+  failToolCall(toolCallId: string, code: string, message: string, completedAt: Date): Promise<unknown>;
   completeRun(
     runId: string,
     assistantContent: string
-  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord } | unknown>;
-  failRun(runId: string, code: string, message: string): Promise<AgentRunRecord | unknown>;
+  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord }>;
+  failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
 };
 
 const modelToolCallSchema = z.object({
@@ -35,25 +43,6 @@ const modelJsonOutputSchema = z.object({
   assistantMessage: z.string().min(1).max(12000),
   toolCalls: z.array(modelToolCallSchema).default([])
 });
-
-function createRunRecord(input: AgentOrchestratorRunInput, now: Date): AgentRunRecord {
-  return {
-    id: input.runId,
-    threadId: input.threadId,
-    agencyId: input.agencyId,
-    triggerMessageId: null,
-    status: "RUNNING",
-    modelProvider: "agent-orchestrator",
-    modelName: "agent-orchestrator",
-    startedAt: now,
-    completedAt: null,
-    failedAt: null,
-    errorCode: null,
-    errorMessage: null,
-    createdAt: now,
-    updatedAt: now
-  };
-}
 
 function isLikelyJson(content: string) {
   const trimmed = content.trim();
@@ -97,8 +86,10 @@ export function createAgentOrchestrator(options: {
   agentService: AgentOrchestratorAgentService;
   toolRegistry: AgentToolRegistry;
   now?: () => Date;
+  maxToolCallsPerRun?: number;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
+  const maxToolCallsPerRun = options.maxToolCallsPerRun ?? 20;
 
   async function failRun(input: AgentOrchestratorRunInput, error: unknown) {
     const details = errorDetails(error);
@@ -115,7 +106,7 @@ export function createAgentOrchestrator(options: {
 
   return {
     async run(input) {
-      const run = createRunRecord(input, now());
+      const run = await options.agentService.startRun(input.runId, now());
 
       await options.agentService.recordRunEvent(run, {
         type: "run.started",
@@ -164,20 +155,35 @@ export function createAgentOrchestrator(options: {
         userId: input.userId
       };
 
+      let toolCallsExecuted = 0;
       for (const toolCall of parsedOutput.toolCalls) {
+        if (toolCallsExecuted >= maxToolCallsPerRun) {
+          await failRun(input, new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached."));
+          return;
+        }
+
+        const startedAt = now();
+        const persistedToolCall = await options.agentService.recordToolCallStarted(
+          run,
+          { toolName: toolCall.name, input: toolCall.input },
+          startedAt
+        );
         await options.agentService.recordRunEvent(run, {
           type: "tool.started",
           payload: { name: toolCall.name, input: toolCall.input }
         });
+        toolCallsExecuted += 1;
 
         try {
           const output = await options.toolRegistry.execute(toolCall.name, context, toolCall.input);
+          await options.agentService.completeToolCall(persistedToolCall.id, output, now());
           await options.agentService.recordRunEvent(run, {
             type: "tool.completed",
             payload: { name: toolCall.name, output }
           });
         } catch (error) {
           const details = errorDetails(error);
+          await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
           await options.agentService.recordRunEvent(run, {
             type: "tool.failed",
             payload: { name: toolCall.name, code: details.code, message: details.message }
