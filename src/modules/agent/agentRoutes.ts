@@ -1,4 +1,5 @@
 import { Router } from "express";
+import type { Request, Response } from "express";
 import { prisma } from "../../db/prisma";
 import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
@@ -61,29 +62,117 @@ function getAgentOrchestrator() {
   return agentOrchestrator;
 }
 
+type AgentRunSseRequest = Pick<Request, "aborted" | "on">;
+type AgentRunSseResponse = Pick<
+  Response,
+  "destroyed" | "on" | "write" | "writableEnded" | "writableFinished"
+> & {
+  closed?: boolean;
+};
+
+function isSseConnectionClosed(request: AgentRunSseRequest, response: AgentRunSseResponse) {
+  return Boolean(
+    request.aborted || response.closed || response.destroyed || response.writableEnded || response.writableFinished
+  );
+}
+
+export function createSafeSseWrite(
+  request: AgentRunSseRequest,
+  response: AgentRunSseResponse,
+  cleanup: () => void,
+  isStopped?: () => boolean
+) {
+  return (chunk: string) => {
+    if (isStopped?.() || isSseConnectionClosed(request, response)) {
+      cleanup();
+      return false;
+    }
+
+    try {
+      response.write(chunk);
+      return true;
+    } catch {
+      cleanup();
+      return false;
+    }
+  };
+}
+
+export function createAgentRunStreamController(options: {
+  request: AgentRunSseRequest;
+  response: AgentRunSseResponse;
+  onCleanup: () => void;
+}) {
+  let cleaned = false;
+
+  const cleanup = () => {
+    if (cleaned) {
+      return;
+    }
+
+    cleaned = true;
+    options.onCleanup();
+  };
+
+  const safeWrite = createSafeSseWrite(options.request, options.response, cleanup, () => cleaned);
+
+  options.request.on("aborted", cleanup);
+  options.request.on("close", cleanup);
+  options.response.on("close", cleanup);
+
+  return {
+    cleanup,
+    safeWrite
+  };
+}
+
 async function verifyAgencyAccess(requestAgencyId: string, user: NonNullable<Express.Request["authUser"]>) {
   await agencyAccessService.requireVerifiedAgencyMember(user, requestAgencyId);
 }
 
-async function startAgentRunInBackground(input: {
+export async function startAgentRunInBackground(
+  input: {
   agencyId: string;
   threadId: string;
   runId: string;
   userId: string;
   userContent: string;
-}) {
+  },
+  dependencies: {
+    agentService?: Pick<typeof agentService, "failRun">;
+    orchestrator?: Pick<ReturnType<typeof createAgencyAgentOrchestrator>, "run">;
+  } = {}
+) {
+  const agentServiceDependency = dependencies.agentService ?? agentService;
+  const orchestrator = dependencies.orchestrator ?? getAgentOrchestrator();
+
   try {
-    await getAgentOrchestrator().run(input);
+    await orchestrator.run(input);
   } catch (error) {
+    console.error("Agent orchestration failed", {
+      agencyId: input.agencyId,
+      threadId: input.threadId,
+      runId: input.runId,
+      error
+    });
+
     const failure =
       error instanceof ApiError
         ? error
         : new ApiError(500, "AGENT_RUN_FAILED", "Agent run failed.");
 
     try {
-      await agentService.failRun(input.runId, failure.code, failure.message);
-    } catch {
-      // The run may already be terminal or missing; the response has already been sent.
+      await agentServiceDependency.failRun(input.runId, failure.code, failure.message);
+    } catch (failRunError) {
+      console.error("Failed to mark agent run failed after orchestration failure", {
+        agencyId: input.agencyId,
+        threadId: input.threadId,
+        runId: input.runId,
+        failureCode: failure.code,
+        failureMessage: failure.message,
+        error,
+        failRunError
+      });
     }
   }
 }
@@ -181,25 +270,37 @@ agentRoutes.get("/runs/:runId/stream", async (request, response, next) => {
     response.setHeader("Content-Type", "text/event-stream; charset=utf-8");
     response.setHeader("Cache-Control", "no-cache, no-transform");
     response.setHeader("Connection", "keep-alive");
-    response.write(`event: connected\ndata: ${JSON.stringify({ runId, status: run.status })}\n\n`);
+    let heartbeat: ReturnType<typeof setInterval> | undefined;
+    let unsubscribe = () => {};
+    const { cleanup, safeWrite } = createAgentRunStreamController({
+      request,
+      response,
+      onCleanup: () => {
+        if (heartbeat) {
+          clearInterval(heartbeat);
+          heartbeat = undefined;
+        }
 
-    const unsubscribe = subscribeToAgentRun(runId, (event) => {
-      response.write(formatSseEvent(event));
+        unsubscribe();
+      }
     });
 
-    const heartbeat = setInterval(() => {
-      if (!response.writableEnded) {
-        response.write(": heartbeat\n\n");
+    unsubscribe = subscribeToAgentRun(runId, (event) => {
+      if (!safeWrite(formatSseEvent(event))) {
+        cleanup();
+      }
+    });
+
+    heartbeat = setInterval(() => {
+      if (!safeWrite(": heartbeat\n\n")) {
+        cleanup();
       }
     }, 15000);
 
-    const cleanup = () => {
-      clearInterval(heartbeat);
-      unsubscribe();
-    };
-
-    request.on("close", cleanup);
-    response.on("close", cleanup);
+    if (!safeWrite(`event: connected\ndata: ${JSON.stringify({ runId, status: run.status })}\n\n`)) {
+      cleanup();
+      return;
+    }
   } catch (error) {
     next(error);
   }
