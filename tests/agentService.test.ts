@@ -182,21 +182,36 @@ function createMemoryRepository(): AgentRepository & {
       toolCall.completedAt = data.completedAt ?? toolCall.completedAt;
       return toolCall;
     },
-    async createTask(data) {
+    async createTaskAndEvent(data) {
+      const sortOrder =
+        data.sortOrder ?? tasks.filter((task) => task.runId === data.runId).reduce((max, task) => Math.max(max, task.sortOrder), 0) + 1;
       const task: AgentTaskRecord = {
         id: `task-${tasks.length + 1}`,
         runId: data.runId,
         threadId: data.threadId,
         label: data.label,
         status: data.status,
-        sortOrder: data.sortOrder,
+        sortOrder,
         createdAt: now,
         updatedAt: now
       };
       tasks.push(task);
-      return task;
+      const event: AgentRunEventRecord = {
+        id: `event-${events.length + 1}`,
+        runId: data.runId,
+        threadId: data.threadId,
+        type: "task.updated",
+        payload: {
+          label: task.label,
+          status: task.status,
+          sortOrder: task.sortOrder
+        },
+        createdAt: now
+      };
+      events.push(event);
+      return { task, event };
     },
-    async createSources(data) {
+    async createSourcesAndEvents(data) {
       const created: AgentSourceRecord[] = data.sources.map((source, index) => ({
         id: `source-${sources.length + index + 1}`,
         runId: data.runId,
@@ -211,7 +226,24 @@ function createMemoryRepository(): AgentRepository & {
         createdAt: now
       }));
       sources.push(...created);
-      return created;
+      const createdEvents = created.map((source) => {
+        const event: AgentRunEventRecord = {
+          id: `event-${events.length + 1}`,
+          runId: data.runId,
+          threadId: data.threadId,
+          type: "source.added",
+          payload: {
+            sourceType: source.sourceType,
+            title: source.title,
+            url: source.url,
+            snippet: source.snippet
+          },
+          createdAt: now
+        };
+        events.push(event);
+        return event;
+      });
+      return { sources: created, events: createdEvents };
     },
     async completeRunIfOpen(id, data) {
       const run = runs.find((candidate) => candidate.id === id);
@@ -230,7 +262,26 @@ function createMemoryRepository(): AgentRepository & {
         role: "ASSISTANT",
         content: data.assistantContent
       });
-      return { run, message };
+      const completedEvents: AgentRunEventRecord[] = [
+        {
+          id: `event-${events.length + 1}`,
+          runId: run.id,
+          threadId: run.threadId,
+          type: "message.completed",
+          payload: { messageId: message.id, content: data.assistantContent },
+          createdAt: now
+        },
+        {
+          id: `event-${events.length + 2}`,
+          runId: run.id,
+          threadId: run.threadId,
+          type: "run.completed",
+          payload: { runId: run.id },
+          createdAt: now
+        }
+      ];
+      events.push(...completedEvents);
+      return { run, message, events: completedEvents };
     },
     async failRunIfOpen(id, data) {
       const run = runs.find((candidate) => candidate.id === id);
@@ -365,6 +416,63 @@ describe("agent service", () => {
         type: "task.updated",
         payload: { label: "Research hotels", status: "RUNNING" }
       }
+    ]);
+  });
+
+  it("assigns distinct sortOrder values when record_task omits sortOrder", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    const first = await service.recordTask(run, {
+      label: "Research hotels",
+      status: "RUNNING"
+    });
+    const second = await service.recordTask(run, {
+      label: "Book transfers",
+      status: "PENDING"
+    });
+
+    expect(first.sortOrder).toBe(1);
+    expect(second.sortOrder).toBe(2);
+    expect(repository.tasks.map((task) => task.sortOrder)).toEqual([1, 2]);
+    expect(repository.events.map((event) => event.type)).toEqual(["task.updated", "task.updated"]);
+    expect(repository.events.map((event) => event.payload)).toEqual([
+      { label: "Research hotels", status: "RUNNING", sortOrder: 1 },
+      { label: "Book transfers", status: "PENDING", sortOrder: 2 }
+    ]);
+  });
+
+  it("records source events along with source rows", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    const created = await service.recordSources(run, [
+      {
+        sourceType: "WEB",
+        title: "Cebu trip ideas",
+        url: "https://example.com/cebu",
+        snippet: "A short result",
+        provider: "google_custom_search",
+        retrievedAt: new Date("2026-04-28T02:00:00.000Z")
+      }
+    ]);
+
+    expect(created).toHaveLength(1);
+    expect(repository.sources).toHaveLength(1);
+    expect(repository.events).toEqual([
+      expect.objectContaining({
+        type: "source.added",
+        payload: {
+          sourceType: "WEB",
+          title: "Cebu trip ideas",
+          url: "https://example.com/cebu",
+          snippet: "A short result"
+        }
+      })
     ]);
   });
 

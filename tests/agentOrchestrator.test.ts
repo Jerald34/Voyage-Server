@@ -133,20 +133,26 @@ function createFakeAgentService(run = createRun()) {
       return toolCall;
     },
     async recordTask(_run, input) {
+      const sortOrder =
+        input.sortOrder ?? tasks.filter((task) => task.runId === run.id).reduce((max, task) => Math.max(max, task.sortOrder), 0) + 1;
       const task = {
         id: `task-${tasks.length + 1}`,
         runId: run.id,
         threadId: run.threadId,
         label: input.label,
         status: input.status,
-        sortOrder: input.sortOrder ?? tasks.length + 1,
+        sortOrder,
         createdAt: new Date("2026-04-28T00:00:00.000Z"),
         updatedAt: new Date("2026-04-28T00:00:00.000Z")
       };
       tasks.push(task);
-      await service.recordRunEvent(run, {
+      events.push({
         type: "task.updated",
-        payload: input
+        payload: {
+          label: task.label,
+          status: task.status,
+          sortOrder: task.sortOrder
+        }
       });
       return task;
     },
@@ -169,7 +175,7 @@ function createFakeAgentService(run = createRun()) {
         return record;
       });
       for (const source of created) {
-        await service.recordRunEvent(run, {
+        events.push({
           type: "source.added",
           payload: {
             sourceType: source.sourceType,
@@ -184,11 +190,11 @@ function createFakeAgentService(run = createRun()) {
     async completeRun(runId, assistantContent) {
       run.status = "COMPLETED";
       run.completedAt = new Date("2026-04-28T00:00:00.000Z");
-      await service.recordRunEvent(run, {
+      events.push({
         type: "message.completed",
         payload: { messageId: "message-1", content: assistantContent }
       });
-      await service.recordRunEvent(run, {
+      events.push({
         type: "run.completed",
         payload: { runId }
       });

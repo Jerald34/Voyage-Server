@@ -195,25 +195,25 @@ export interface AgentRepository {
       completedAt?: Date | null;
     }
   ): Promise<AgentToolCallRecord | null>;
-  createTask(data: {
+  createTaskAndEvent(data: {
     runId: string;
     threadId: string;
     label: string;
     status: AgentTaskStatus;
-    sortOrder: number;
-  }): Promise<AgentTaskRecord>;
-  createSources(data: {
+    sortOrder?: number;
+  }): Promise<{ task: AgentTaskRecord; event: AgentRunEventRecord }>;
+  createSourcesAndEvents(data: {
     runId: string;
     threadId: string;
     sources: AgentSourceInput[];
-  }): Promise<AgentSourceRecord[]>;
+  }): Promise<{ sources: AgentSourceRecord[]; events: AgentRunEventRecord[] }>;
   completeRunIfOpen(
     id: string,
     data: {
       assistantContent: string;
       completedAt: Date;
     }
-  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord } | null>;
+  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] } | null>;
   failRunIfOpen(
     id: string,
     data: {
@@ -366,43 +366,27 @@ export function createAgentService(options: {
     },
 
     async recordTask(run: AgentRunRecord, input: AgentTaskInput) {
-      const task = await options.repository.createTask({
+      const { task, event } = await options.repository.createTaskAndEvent({
         runId: run.id,
         threadId: run.threadId,
         label: input.label,
         status: input.status,
-        sortOrder: input.sortOrder ?? 0
+        ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {})
       });
-
-      await this.recordRunEvent(run, {
-        type: "task.updated",
-        payload: {
-          label: input.label,
-          status: input.status,
-          ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {})
-        }
-      });
+      publishAgentRunEvent(run.id, { type: event.type, payload: event.payload });
 
       return task;
     },
 
     async recordSources(run: AgentRunRecord, sources: AgentSourceInput[]) {
-      const created = await options.repository.createSources({
+      const { sources: created, events } = await options.repository.createSourcesAndEvents({
         runId: run.id,
         threadId: run.threadId,
         sources
       });
 
-      for (const source of created) {
-        await this.recordRunEvent(run, {
-          type: "source.added",
-          payload: {
-            sourceType: source.sourceType,
-            title: source.title,
-            url: source.url,
-            snippet: source.snippet
-          }
-        });
+      for (const event of events) {
+        publishAgentRunEvent(run.id, { type: event.type, payload: event.payload });
       }
 
       return created;
@@ -420,14 +404,9 @@ export function createAgentService(options: {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
       }
 
-      await this.recordRunEvent(completed.run, {
-        type: "message.completed",
-        payload: { messageId: completed.message.id, content: assistantContent }
-      });
-      await this.recordRunEvent(completed.run, {
-        type: "run.completed",
-        payload: { runId: completed.run.id }
-      });
+      for (const event of completed.events) {
+        publishAgentRunEvent(completed.run.id, { type: event.type, payload: event.payload });
+      }
 
       return completed;
     },
@@ -615,41 +594,79 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       return client.agentToolCall.findUnique({ where: { id } }) as Promise<AgentToolCallRecord | null>;
     },
 
-    async createTask(data) {
-      return client.agentTask.create({
-        data: {
-          runId: data.runId,
-          threadId: data.threadId,
-          label: data.label,
-          status: data.status,
-          sortOrder: data.sortOrder
-        }
-      }) as Promise<AgentTaskRecord>;
+    async createTaskAndEvent(data) {
+      return client.$transaction(async (tx) => {
+        const resolvedSortOrder =
+          data.sortOrder ??
+          ((await tx.agentTask.aggregate({
+            where: { runId: data.runId },
+            _max: { sortOrder: true }
+          }))._max.sortOrder ?? 0) + 1;
+
+        const task = (await tx.agentTask.create({
+          data: {
+            runId: data.runId,
+            threadId: data.threadId,
+            label: data.label,
+            status: data.status,
+            sortOrder: resolvedSortOrder
+          }
+        })) as AgentTaskRecord;
+        const event = (await tx.agentRunEvent.create({
+          data: {
+            runId: data.runId,
+            threadId: data.threadId,
+            type: "task.updated",
+            payload: {
+              label: task.label,
+              status: task.status,
+              sortOrder: task.sortOrder
+            } satisfies Record<string, unknown>
+          }
+        })) as AgentRunEventRecord;
+
+        return { task, event };
+      });
     },
 
-    async createSources(data) {
+    async createSourcesAndEvents(data) {
       return client.$transaction(async (tx) => {
         const created: AgentSourceRecord[] = [];
+        const events: AgentRunEventRecord[] = [];
 
         for (const source of data.sources) {
-          created.push(
-            (await tx.agentSource.create({
+          const createdSource = (await tx.agentSource.create({
+            data: {
+              runId: data.runId,
+              threadId: data.threadId,
+              sourceType: source.sourceType,
+              title: source.title,
+              url: source.url ?? null,
+              snippet: source.snippet ?? null,
+              provider: source.provider,
+              retrievedAt: source.retrievedAt,
+              metadata: toJsonInput(source.metadata)
+            }
+          })) as AgentSourceRecord;
+          created.push(createdSource);
+          events.push(
+            (await tx.agentRunEvent.create({
               data: {
                 runId: data.runId,
                 threadId: data.threadId,
-                sourceType: source.sourceType,
-                title: source.title,
-                url: source.url ?? null,
-                snippet: source.snippet ?? null,
-                provider: source.provider,
-                retrievedAt: source.retrievedAt,
-                metadata: toJsonInput(source.metadata)
+                type: "source.added",
+                payload: {
+                  sourceType: createdSource.sourceType,
+                  title: createdSource.title,
+                  url: createdSource.url,
+                  snippet: createdSource.snippet
+                } satisfies Record<string, unknown>
               }
-            })) as AgentSourceRecord
+            })) as AgentRunEventRecord
           );
         }
 
-        return created;
+        return { sources: created, events };
       });
     },
 
@@ -683,7 +700,31 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           }
         })) as AgentMessageRecord;
 
-        return { run, message };
+        const events = [
+          (await tx.agentRunEvent.create({
+            data: {
+              runId: run.id,
+              threadId: run.threadId,
+              type: "message.completed",
+              payload: {
+                messageId: message.id,
+                content: data.assistantContent
+              } satisfies Record<string, unknown>
+            }
+          })) as AgentRunEventRecord,
+          (await tx.agentRunEvent.create({
+            data: {
+              runId: run.id,
+              threadId: run.threadId,
+              type: "run.completed",
+              payload: {
+                runId: run.id
+              } satisfies Record<string, unknown>
+            }
+          })) as AgentRunEventRecord
+        ];
+
+        return { run, message, events };
       });
     },
 
