@@ -81,6 +81,14 @@ function errorDetails(error: unknown) {
   };
 }
 
+function stringifyToolResults(toolResults: Array<{ name: string; output: unknown }>) {
+  const text = JSON.stringify(toolResults);
+  if (text.length <= 12000) {
+    return text;
+  }
+  return `${text.slice(0, 11997)}...`;
+}
+
 export function createAgentOrchestrator(options: {
   modelProvider: ModelProvider;
   agentService: AgentOrchestratorAgentService;
@@ -156,6 +164,7 @@ export function createAgentOrchestrator(options: {
       };
 
       let toolCallsExecuted = 0;
+      const toolResults: Array<{ name: string; output: unknown }> = [];
       for (const toolCall of parsedOutput.toolCalls) {
         if (toolCallsExecuted >= maxToolCallsPerRun) {
           await failRun(input, new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached."));
@@ -176,6 +185,7 @@ export function createAgentOrchestrator(options: {
 
         try {
           const output = await options.toolRegistry.execute(toolCall.name, context, toolCall.input);
+          toolResults.push({ name: toolCall.name, output });
           await options.agentService.completeToolCall(persistedToolCall.id, output, now());
           await options.agentService.recordRunEvent(run, {
             type: "tool.completed",
@@ -193,7 +203,41 @@ export function createAgentOrchestrator(options: {
         }
       }
 
-      await streamAndComplete(run, parsedOutput.assistantMessage);
+      if (toolResults.length === 0) {
+        await streamAndComplete(run, parsedOutput.assistantMessage);
+        return;
+      }
+
+      let synthesizedMessage = parsedOutput.assistantMessage;
+      try {
+        const synthesis = await options.modelProvider.complete({
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are an agency itinerary planning assistant. Write the final assistant response for agency staff using the tool results. Mention concrete itinerary, map, and search outcomes when available."
+            },
+            {
+              role: "user",
+              content: input.userContent
+            },
+            {
+              role: "assistant",
+              content: parsedOutput.assistantMessage
+            },
+            {
+              role: "user",
+              content: `Tool results JSON:\n${stringifyToolResults(toolResults)}`
+            }
+          ],
+          temperature: 0.2
+        });
+        synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
+      } catch {
+        synthesizedMessage = parsedOutput.assistantMessage;
+      }
+
+      await streamAndComplete(run, synthesizedMessage);
     }
   };
 }

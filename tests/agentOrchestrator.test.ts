@@ -7,6 +7,8 @@ import {
 import {
   createAgentToolRegistry,
   createCreateItineraryTool,
+  createEstimateRouteTool,
+  createGetGooglePlaceDetailsTool,
   createRecordAgentTaskTool,
   createSearchGooglePlacesTool,
   createWebSearchTool
@@ -228,10 +230,14 @@ function createFakeAgentService(run = createRun()) {
   return { service, events, run, toolCalls, tasks, sources };
 }
 
-function createModelProvider(content: string): ModelProvider {
+function createModelProvider(content: string | string[]): ModelProvider & { calls: Array<Parameters<ModelProvider["complete"]>[0]> } {
+  const contents = Array.isArray(content) ? [...content] : [content];
+  const calls: Array<Parameters<ModelProvider["complete"]>[0]> = [];
   return {
-    async complete() {
-      return { content };
+    calls,
+    async complete(input) {
+      calls.push(input);
+      return { content: contents.shift() ?? contents.at(-1) ?? "" };
     }
   };
 }
@@ -318,8 +324,9 @@ describe("agent orchestrator", () => {
         }
       ]
     });
+    const modelProvider = createModelProvider([modelOutput, "Created a draft itinerary from the itinerary tool."]);
     const orchestrator = createAgentOrchestrator({
-      modelProvider: createModelProvider(modelOutput),
+      modelProvider,
       agentService: service,
       toolRegistry: registry
     });
@@ -345,6 +352,113 @@ describe("agent orchestrator", () => {
     expect(events[2]).toMatchObject({
       type: "tool.completed",
       payload: { name: "create_itinerary", output: { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } } }
+    });
+    expect(events[3]).toMatchObject({
+      type: "message.delta",
+      payload: { delta: "Created a draft itinerary from the itinerary tool." }
+    });
+    expect(modelProvider.calls).toHaveLength(2);
+    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("itinerary-1");
+  });
+
+  it("uses tool output in the second model pass before completing", async () => {
+    const { service, events } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "I checked a tool.",
+      toolCalls: [
+        {
+          name: "web_search",
+          input: { query: "Cebu travel advisories", maxResults: 1 }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([
+      modelOutput,
+      "Final response grounded by Google Search: Cebu travel advisories result."
+    ]);
+    const registry = createAgentToolRegistry([
+      createWebSearchTool({
+        agentService: service,
+        webSearch: {
+          async search() {
+            return [
+              {
+                title: "Cebu travel advisories",
+                url: "https://example.com/advisories",
+                snippet: "Official travel advisory result",
+                provider: "google_custom_search" as const
+              }
+            ];
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(modelProvider.calls).toHaveLength(2);
+    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("Official travel advisory result");
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "source.added",
+      "tool.completed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
+    expect(events[4]).toMatchObject({
+      type: "message.delta",
+      payload: { delta: "Final response grounded by Google Search: Cebu travel advisories result." }
+    });
+  });
+
+  it("falls back to the planned assistant message when second synthesis fails", async () => {
+    const { service, events, run } = createFakeAgentService();
+    let calls = 0;
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Created a draft itinerary.",
+      toolCalls: [
+        {
+          name: "record_agent_task",
+          input: { label: "Create draft", status: "COMPLETED" }
+        }
+      ]
+    });
+    const modelProvider: ModelProvider = {
+      async complete() {
+        calls += 1;
+        if (calls === 1) {
+          return { content: modelOutput };
+        }
+        throw new ApiError(503, "LOCAL_MODEL_UNAVAILABLE", "Local model provider is unavailable.");
+      }
+    };
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([
+        createRecordAgentTaskTool({
+          agentService: service
+        })
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(calls).toBe(2);
+    expect(run.status).toBe("COMPLETED");
+    expect(events.at(-3)).toMatchObject({
+      type: "message.delta",
+      payload: { delta: "Created a draft itinerary." }
+    });
+    expect(events.at(-1)).toMatchObject({
+      type: "run.completed"
     });
   });
 
@@ -413,7 +527,7 @@ describe("agent orchestrator", () => {
     expect(events.some((event) => event.type === "source.added")).toBe(true);
   });
 
-  it("enforces map and web tool call limits", async () => {
+  it("enforces shared map and separate web tool call limits", async () => {
     const agentService = {
       async recordRunEvent() {
         return undefined;
@@ -434,10 +548,48 @@ describe("agent orchestrator", () => {
               return [];
             },
             async getPlaceDetails() {
+              return {
+                id: "place-1",
+                name: "Cebu Hotel",
+                address: "Cebu City",
+                types: []
+              };
+            },
+            async estimateRoute() {
+              return {};
+            }
+          }
+        }),
+        createGetGooglePlaceDetailsTool({
+          agentService,
+          maps: {
+            async searchPlaces() {
               throw new Error("not used");
+            },
+            async getPlaceDetails() {
+              return {
+                id: "place-1",
+                name: "Cebu Hotel",
+                address: "Cebu City",
+                types: []
+              };
             },
             async estimateRoute() {
               throw new Error("not used");
+            }
+          }
+        }),
+        createEstimateRouteTool({
+          agentService,
+          maps: {
+            async searchPlaces() {
+              throw new Error("not used");
+            },
+            async getPlaceDetails() {
+              throw new Error("not used");
+            },
+            async estimateRoute() {
+              return {};
             }
           }
         }),
@@ -451,17 +603,28 @@ describe("agent orchestrator", () => {
         })
       ],
       {
-        maxCallsByTool: {
-          search_google_places: 1,
+        maxCallsByGroup: {
+          google_maps: 2,
           web_search: 1
+        },
+        toolGroups: {
+          search_google_places: "google_maps",
+          get_google_place_details: "google_maps",
+          estimate_route: "google_maps",
+          web_search: "web_search"
         }
       }
     );
     const context = createRunInput();
 
     await registry.execute("search_google_places", context, { query: "Cebu hotels", maxResults: 3 });
+    await registry.execute("get_google_place_details", context, { placeId: "place-1" });
     await expect(
-      registry.execute("search_google_places", context, { query: "Cebu restaurants", maxResults: 3 })
+      registry.execute("estimate_route", context, {
+        origin: { latitude: 10.3157, longitude: 123.8854 },
+        destination: { latitude: 10.295, longitude: 123.9 },
+        travelMode: "DRIVE"
+      })
     ).rejects.toMatchObject({
       code: "AGENT_TOOL_LIMIT_REACHED",
       statusCode: 429

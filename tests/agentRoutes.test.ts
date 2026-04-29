@@ -2,8 +2,10 @@ import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
 import {
   createAgentRunStreamController,
+  replayPersistedAgentRunEvents,
   startAgentRunInBackground
 } from "../src/modules/agent/agentRoutes";
+import type { AgentRunEventRecord } from "../src/modules/agent/agentService";
 
 function createStreamHarness() {
   const request = new EventEmitter() as EventEmitter & { aborted?: boolean };
@@ -123,5 +125,85 @@ describe("agent route helpers", () => {
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("replays persisted run events in creation order", async () => {
+    const writes: string[] = [];
+    const events: AgentRunEventRecord[] = [
+      {
+        id: "event-1",
+        runId: "run-1",
+        threadId: "thread-1",
+        type: "run.started",
+        payload: { runId: "run-1" },
+        sequence: 1,
+        createdAt: new Date("2026-04-28T01:00:00.000Z")
+      },
+      {
+        id: "event-2",
+        runId: "run-1",
+        threadId: "thread-1",
+        type: "message.delta",
+        payload: { delta: "Drafting..." },
+        sequence: 2,
+        createdAt: new Date("2026-04-28T01:00:01.000Z")
+      }
+    ];
+
+    const replay = await replayPersistedAgentRunEvents({
+      runId: "run-1",
+      async listRunEvents(runId) {
+        expect(runId).toBe("run-1");
+        return events;
+      },
+      safeWrite(chunk) {
+        writes.push(chunk);
+        return true;
+      }
+    });
+
+    expect(replay.completed).toBe(true);
+    expect(writes).toEqual([
+      'event: run.started\ndata: {"type":"run.started","payload":{"runId":"run-1"}}\n\n',
+      'event: message.delta\ndata: {"type":"message.delta","payload":{"delta":"Drafting..."}}\n\n'
+    ]);
+    expect(replay.replayedEventIds).toEqual(new Set(["event-1", "event-2"]));
+  });
+
+  it("stops replay when the SSE connection closes", async () => {
+    const writes: string[] = [];
+
+    const replay = await replayPersistedAgentRunEvents({
+      runId: "run-1",
+      async listRunEvents() {
+        return [
+          {
+            id: "event-1",
+            runId: "run-1",
+            threadId: "thread-1",
+            type: "run.started",
+            payload: { runId: "run-1" },
+            sequence: 1,
+            createdAt: new Date("2026-04-28T01:00:00.000Z")
+          },
+          {
+            id: "event-2",
+            runId: "run-1",
+            threadId: "thread-1",
+            type: "message.delta",
+            payload: { delta: "Lost" },
+            sequence: 2,
+            createdAt: new Date("2026-04-28T01:00:01.000Z")
+          }
+        ];
+      },
+      safeWrite(chunk) {
+        writes.push(chunk);
+        return false;
+      }
+    });
+
+    expect(replay.completed).toBe(false);
+    expect(writes).toHaveLength(1);
   });
 });

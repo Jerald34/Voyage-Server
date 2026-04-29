@@ -106,6 +106,7 @@ export type AgentRunEventRecord = {
   threadId: string;
   type: AgentEvent["type"];
   payload: Record<string, unknown>;
+  sequence: number;
   createdAt: Date;
 };
 
@@ -167,6 +168,8 @@ export interface AgentRepository {
     modelName: string;
   }): Promise<{ message: AgentMessageRecord; run: AgentRunRecord }>;
   findRunById(id: string): Promise<AgentRunRecord | null>;
+  listRunEvents(runId: string): Promise<AgentRunEventRecord[]>;
+  touchThread?(threadId: string, updatedAt: Date): Promise<void>;
   createRunEvent(data: {
     runId: string;
     threadId: string;
@@ -265,6 +268,14 @@ export function createAgentService(options: {
     }
   }
 
+  async function touchThread(threadId: string) {
+    try {
+      await options.repository.touchThread?.(threadId, now());
+    } catch {
+      // Thread freshness should not fail the durable agent write that already succeeded.
+    }
+  }
+
   return {
     async createThread(agencyId: string, userId: string, input: unknown) {
       const parsed = createThreadSchema.parse(input);
@@ -296,7 +307,7 @@ export function createAgentService(options: {
     ) {
       const parsed = createMessageSchema.parse({ content });
       await this.getThread(agencyId, threadId);
-      return options.repository.createUserMessageAndRun({
+      const result = await options.repository.createUserMessageAndRun({
         agencyId,
         threadId,
         authorUserId: userId,
@@ -304,6 +315,8 @@ export function createAgentService(options: {
         modelProvider,
         modelName
       });
+      await touchThread(threadId);
+      return result;
     },
 
     async startRun(runId: string) {
@@ -313,6 +326,7 @@ export function createAgentService(options: {
       const startedAt = now();
       const startedRun = await options.repository.startRun(runId, startedAt);
       if (startedRun) {
+        await touchThread(startedRun.threadId);
         return startedRun;
       }
 
@@ -333,12 +347,18 @@ export function createAgentService(options: {
         type: parsed.type,
         payload: parsed.payload
       });
-      publishAgentRunEvent(run.id, parsed);
+      await touchThread(run.threadId);
+      publishAgentRunEvent(run.id, parsed, persisted.id);
       return persisted;
     },
 
+    async listRunEvents(runId: string) {
+      await getRun(runId);
+      return options.repository.listRunEvents(runId);
+    },
+
     async recordToolCallStarted(run: AgentRunRecord, input: AgentToolCallInput, startedAt = now()) {
-      return options.repository.createToolCall({
+      const toolCall = await options.repository.createToolCall({
         runId: run.id,
         threadId: run.threadId,
         toolName: input.toolName,
@@ -346,23 +366,33 @@ export function createAgentService(options: {
         input: input.input,
         startedAt
       });
+      await touchThread(run.threadId);
+      return toolCall;
     },
 
     async completeToolCall(toolCallId: string, output: unknown, completedAt = now()) {
-      return options.repository.updateToolCall(toolCallId, {
+      const toolCall = await options.repository.updateToolCall(toolCallId, {
         status: "COMPLETED",
         outputSummary: summarizeValue(output),
         completedAt
       });
+      if (toolCall) {
+        await touchThread(toolCall.threadId);
+      }
+      return toolCall;
     },
 
     async failToolCall(toolCallId: string, code: string, message: string, completedAt = now()) {
-      return options.repository.updateToolCall(toolCallId, {
+      const toolCall = await options.repository.updateToolCall(toolCallId, {
         status: "FAILED",
         errorCode: code,
         errorMessage: message,
         completedAt
       });
+      if (toolCall) {
+        await touchThread(toolCall.threadId);
+      }
+      return toolCall;
     },
 
     async recordTask(run: AgentRunRecord, input: AgentTaskInput) {
@@ -373,7 +403,8 @@ export function createAgentService(options: {
         status: input.status,
         ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {})
       });
-      publishAgentRunEvent(run.id, { type: event.type, payload: event.payload });
+      await touchThread(run.threadId);
+      publishAgentRunEvent(run.id, { type: event.type, payload: event.payload }, event.id);
 
       return task;
     },
@@ -384,9 +415,10 @@ export function createAgentService(options: {
         threadId: run.threadId,
         sources
       });
+      await touchThread(run.threadId);
 
       for (const event of events) {
-        publishAgentRunEvent(run.id, { type: event.type, payload: event.payload });
+        publishAgentRunEvent(run.id, { type: event.type, payload: event.payload }, event.id);
       }
 
       return created;
@@ -405,8 +437,9 @@ export function createAgentService(options: {
       }
 
       for (const event of completed.events) {
-        publishAgentRunEvent(completed.run.id, { type: event.type, payload: event.payload });
+        publishAgentRunEvent(completed.run.id, { type: event.type, payload: event.payload }, event.id);
       }
+      await touchThread(completed.run.threadId);
 
       return completed;
     },
@@ -428,6 +461,7 @@ export function createAgentService(options: {
         type: "run.failed",
         payload: { code, message }
       });
+      await touchThread(failedRun.threadId);
 
       return failedRun;
     }
@@ -447,6 +481,14 @@ function includeThreadDetails() {
 
 function toJsonInput(value: unknown): Prisma.InputJsonValue | undefined {
   return value === undefined ? undefined : (value as Prisma.InputJsonValue);
+}
+
+async function nextRunEventSequence(client: Prisma.TransactionClient, runId: string) {
+  const aggregate = await client.agentRunEvent.aggregate({
+    where: { runId },
+    _max: { sequence: true }
+  });
+  return (aggregate._max.sequence ?? 0) + 1;
 }
 
 export function createPrismaAgentRepository(client: PrismaClient = prisma): AgentRepository {
@@ -549,15 +591,33 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
     },
 
+    async listRunEvents(runId) {
+      return client.agentRunEvent.findMany({
+        where: { runId },
+        orderBy: [{ sequence: "asc" }, { createdAt: "asc" }]
+      }) as Promise<AgentRunEventRecord[]>;
+    },
+
+    async touchThread(threadId, updatedAt) {
+      await client.agentThread.update({
+        where: { id: threadId },
+        data: { updatedAt }
+      });
+    },
+
     async createRunEvent(data) {
-      return client.agentRunEvent.create({
-        data: {
-          runId: data.runId,
-          threadId: data.threadId,
-          type: data.type,
-          payload: data.payload as Prisma.InputJsonValue
-        }
-      }) as Promise<AgentRunEventRecord>;
+      return client.$transaction(async (tx) => {
+        const sequence = await nextRunEventSequence(tx, data.runId);
+        return tx.agentRunEvent.create({
+          data: {
+            runId: data.runId,
+            threadId: data.threadId,
+            type: data.type,
+            payload: data.payload as Prisma.InputJsonValue,
+            sequence
+          }
+        }) as Promise<AgentRunEventRecord>;
+      });
     },
 
     async createToolCall(data) {
@@ -612,11 +672,13 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             sortOrder: resolvedSortOrder
           }
         })) as AgentTaskRecord;
+        const sequence = await nextRunEventSequence(tx, data.runId);
         const event = (await tx.agentRunEvent.create({
           data: {
             runId: data.runId,
             threadId: data.threadId,
             type: "task.updated",
+            sequence,
             payload: {
               label: task.label,
               status: task.status,
@@ -633,6 +695,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       return client.$transaction(async (tx) => {
         const created: AgentSourceRecord[] = [];
         const events: AgentRunEventRecord[] = [];
+        let sequence = await nextRunEventSequence(tx, data.runId);
 
         for (const source of data.sources) {
           const createdSource = (await tx.agentSource.create({
@@ -655,6 +718,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
                 runId: data.runId,
                 threadId: data.threadId,
                 type: "source.added",
+                sequence,
                 payload: {
                   sourceType: createdSource.sourceType,
                   title: createdSource.title,
@@ -664,6 +728,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
               }
             })) as AgentRunEventRecord
           );
+          sequence += 1;
         }
 
         return { sources: created, events };
@@ -700,12 +765,14 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           }
         })) as AgentMessageRecord;
 
+        const nextSequence = await nextRunEventSequence(tx, run.id);
         const events = [
           (await tx.agentRunEvent.create({
             data: {
               runId: run.id,
               threadId: run.threadId,
               type: "message.completed",
+              sequence: nextSequence,
               payload: {
                 messageId: message.id,
                 content: data.assistantContent
@@ -717,6 +784,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
               runId: run.id,
               threadId: run.threadId,
               type: "run.completed",
+              sequence: nextSequence + 1,
               payload: {
                 runId: run.id
               } satisfies Record<string, unknown>

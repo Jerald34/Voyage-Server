@@ -25,6 +25,8 @@ export type AgentToolRegistry = {
 
 type AgentToolRegistryOptions = {
   maxCallsByTool?: Record<string, number>;
+  maxCallsByGroup?: Record<string, number>;
+  toolGroups?: Record<string, string>;
 };
 
 type AgentToolService = {
@@ -120,6 +122,7 @@ function limitKey(runId: string, toolName: string) {
 export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRegistryOptions = {}): AgentToolRegistry {
   const byName = new Map(tools.map((tool) => [tool.name, tool]));
   const callsByRunAndTool = new Map<string, number>();
+  const callsByRunAndGroup = new Map<string, number>();
 
   return {
     async execute(name, context, input) {
@@ -136,6 +139,17 @@ export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRe
           throw new ApiError(429, "AGENT_TOOL_LIMIT_REACHED", `Agent tool call limit reached: ${name}`);
         }
         callsByRunAndTool.set(key, currentCalls + 1);
+      }
+
+      const groupName = options.toolGroups?.[name];
+      const maxGroupCalls = groupName ? options.maxCallsByGroup?.[groupName] : undefined;
+      if (groupName && maxGroupCalls !== undefined) {
+        const key = limitKey(context.runId, groupName);
+        const currentCalls = callsByRunAndGroup.get(key) ?? 0;
+        if (currentCalls >= maxGroupCalls) {
+          throw new ApiError(429, "AGENT_TOOL_LIMIT_REACHED", `Agent tool call limit reached: ${groupName}`);
+        }
+        callsByRunAndGroup.set(key, currentCalls + 1);
       }
 
       try {

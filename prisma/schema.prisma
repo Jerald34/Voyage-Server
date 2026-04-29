@@ -550,9 +550,11 @@ model AgentRunEvent {
   thread    AgentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
   type      String
   payload   Json
+  sequence  Int         @default(0)
   createdAt DateTime    @default(now())
 
   @@index([runId, createdAt])
+  @@index([runId, sequence])
   @@index([threadId])
   @@index([type])
 }

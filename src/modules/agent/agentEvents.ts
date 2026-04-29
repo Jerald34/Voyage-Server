@@ -1,18 +1,24 @@
 import type { AgentEvent } from "./agentSchemas";
 
-type AgentRunEventListener = (event: AgentEvent) => void;
+export type PublishedAgentEvent = {
+  event: AgentEvent;
+  eventId?: string;
+};
+
+type AgentRunEventListener = (event: PublishedAgentEvent) => void;
 
 const listenersByRunId = new Map<string, Set<AgentRunEventListener>>();
 
-export function publishAgentRunEvent(runId: string, event: AgentEvent) {
+export function publishAgentRunEvent(runId: string, event: AgentEvent, eventId?: string) {
   const listeners = listenersByRunId.get(runId);
   if (!listeners) {
     return;
   }
 
+  const published = { event, eventId };
   for (const listener of listeners) {
     try {
-      listener(event);
+      listener(published);
     } catch {
       // Listener failures should not prevent persistence or other subscribers.
     }

@@ -1,11 +1,12 @@
 import { Router } from "express";
 import type { Request, Response } from "express";
 import { prisma } from "../../db/prisma";
+import { env } from "../../config/env";
 import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { itineraryService } from "../itineraries/itineraryService";
-import { formatSseEvent, subscribeToAgentRun } from "./agentEvents";
+import { formatSseEvent, subscribeToAgentRun, type PublishedAgentEvent } from "./agentEvents";
 import { createAgentOrchestrator } from "./agentOrchestrator";
 import { createMessageSchema, createThreadSchema } from "./agentSchemas";
 import { agentService } from "./agentService";
@@ -22,6 +23,11 @@ import {
 import { createGoogleMapsProvider } from "../../services/maps";
 import { createGoogleSearchProvider } from "../../services/webSearch";
 import { lmStudioModelProvider } from "../../services/modelProvider";
+import type { AgentEvent } from "./agentSchemas";
+import type { AgentRunEventRecord } from "./agentService";
+
+const GOOGLE_MAPS_TOOL_NAMES = ["search_google_places", "get_google_place_details", "estimate_route"] as const;
+const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
 
 function createAgencyAgentOrchestrator() {
   const tools = [
@@ -51,7 +57,16 @@ function createAgencyAgentOrchestrator() {
   return createAgentOrchestrator({
     modelProvider: lmStudioModelProvider,
     agentService,
-    toolRegistry: createAgentToolRegistry(tools)
+    toolRegistry: createAgentToolRegistry(tools, {
+      maxCallsByGroup: {
+        google_maps: env.GOOGLE_MAPS_MAX_CALLS_PER_RUN,
+        web_search: env.WEB_SEARCH_MAX_CALLS_PER_RUN
+      },
+      toolGroups: {
+        ...Object.fromEntries(GOOGLE_MAPS_TOOL_NAMES.map((toolName) => [toolName, "google_maps"])),
+        ...Object.fromEntries(WEB_SEARCH_TOOL_NAMES.map((toolName) => [toolName, "web_search"]))
+      }
+    })
   });
 }
 
@@ -124,6 +139,36 @@ export function createAgentRunStreamController(options: {
     cleanup,
     safeWrite
   };
+}
+
+function agentRunEventRecordToEvent(record: AgentRunEventRecord): AgentEvent {
+  return {
+    type: record.type,
+    payload: record.payload
+  } as AgentEvent;
+}
+
+export async function replayPersistedAgentRunEvents(options: {
+  runId: string;
+  listRunEvents: (runId: string) => Promise<AgentRunEventRecord[]>;
+  safeWrite: (chunk: string) => boolean;
+}) {
+  const replayedEventIds = new Set<string>();
+  const records = await options.listRunEvents(options.runId);
+
+  for (const record of records) {
+    const event = agentRunEventRecordToEvent(record);
+    replayedEventIds.add(record.id);
+    if (!options.safeWrite(formatSseEvent(event))) {
+      return { completed: false, replayedEventIds };
+    }
+  }
+
+  return { completed: true, replayedEventIds };
+}
+
+function writeAgentEvent(safeWrite: (chunk: string) => boolean, event: AgentEvent) {
+  return safeWrite(formatSseEvent(event));
 }
 
 async function verifyAgencyAccess(requestAgencyId: string, user: NonNullable<Express.Request["authUser"]>) {
@@ -253,6 +298,8 @@ agentRoutes.post("/threads/:threadId/messages", async (request, response, next) 
 });
 
 agentRoutes.get("/runs/:runId/stream", async (request, response, next) => {
+  let cleanupStream = () => {};
+
   try {
     const params = request.params as Record<string, string | undefined>;
     const agencyId = String(params.agencyId);
@@ -272,6 +319,8 @@ agentRoutes.get("/runs/:runId/stream", async (request, response, next) => {
     response.setHeader("Connection", "keep-alive");
     let heartbeat: ReturnType<typeof setInterval> | undefined;
     let unsubscribe = () => {};
+    let replayingPersistedEvents = true;
+    const liveEventsDuringReplay: PublishedAgentEvent[] = [];
     const { cleanup, safeWrite } = createAgentRunStreamController({
       request,
       response,
@@ -284,9 +333,15 @@ agentRoutes.get("/runs/:runId/stream", async (request, response, next) => {
         unsubscribe();
       }
     });
+    cleanupStream = cleanup;
 
-    unsubscribe = subscribeToAgentRun(runId, (event) => {
-      if (!safeWrite(formatSseEvent(event))) {
+    unsubscribe = subscribeToAgentRun(runId, (published) => {
+      if (replayingPersistedEvents) {
+        liveEventsDuringReplay.push(published);
+        return;
+      }
+
+      if (!writeAgentEvent(safeWrite, published.event)) {
         cleanup();
       }
     });
@@ -301,7 +356,29 @@ agentRoutes.get("/runs/:runId/stream", async (request, response, next) => {
       cleanup();
       return;
     }
+
+    const replay = await replayPersistedAgentRunEvents({
+      runId,
+      listRunEvents: agentService.listRunEvents,
+      safeWrite
+    });
+    replayingPersistedEvents = false;
+    if (!replay.completed) {
+      cleanup();
+      return;
+    }
+
+    for (const liveEvent of liveEventsDuringReplay) {
+      if (liveEvent.eventId && replay.replayedEventIds.has(liveEvent.eventId)) {
+        continue;
+      }
+      if (!writeAgentEvent(safeWrite, liveEvent.event)) {
+        cleanup();
+        return;
+      }
+    }
   } catch (error) {
+    cleanupStream();
     next(error);
   }
 });

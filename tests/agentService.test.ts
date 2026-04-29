@@ -39,6 +39,9 @@ function createMemoryRepository(): AgentRepository & {
     ...thread,
     messages: messages.filter((message) => message.threadId === thread.id),
     runs: runs.filter((run) => run.threadId === thread.id),
+    toolCalls: toolCalls.filter((toolCall) => toolCall.threadId === thread.id),
+    tasks: tasks.filter((task) => task.threadId === thread.id),
+    sources: sources.filter((source) => source.threadId === thread.id),
     events: events.filter((event) => event.threadId === thread.id)
   });
 
@@ -71,7 +74,10 @@ function createMemoryRepository(): AgentRepository & {
       return hydrateThread(thread);
     },
     async listThreadsByAgency(agencyId) {
-      return threads.filter((thread) => thread.agencyId === agencyId).map(hydrateThread);
+      return threads
+        .filter((thread) => thread.agencyId === agencyId)
+        .sort((left, right) => right.updatedAt.getTime() - left.updatedAt.getTime())
+        .map(hydrateThread);
     },
     async findThreadByAgency(id, agencyId) {
       const thread = threads.find((candidate) => candidate.id === id && candidate.agencyId === agencyId);
@@ -130,6 +136,17 @@ function createMemoryRepository(): AgentRepository & {
     async findRunById(id) {
       return runs.find((run) => run.id === id) ?? null;
     },
+    async listRunEvents(runId) {
+      return events
+        .filter((event) => event.runId === runId)
+        .sort((left, right) => left.sequence - right.sequence || left.createdAt.getTime() - right.createdAt.getTime());
+    },
+    async touchThread(threadId, updatedAt) {
+      const thread = threads.find((candidate) => candidate.id === threadId);
+      if (thread) {
+        thread.updatedAt = updatedAt;
+      }
+    },
     async startRun(id, startedAt) {
       const run = runs.find((candidate) => candidate.id === id);
       if (!run || run.status !== "QUEUED") {
@@ -147,6 +164,7 @@ function createMemoryRepository(): AgentRepository & {
         threadId: data.threadId,
         type: data.type,
         payload: data.payload,
+        sequence: events.filter((event) => event.runId === data.runId).length + 1,
         createdAt: now
       };
       events.push(event);
@@ -206,6 +224,7 @@ function createMemoryRepository(): AgentRepository & {
           status: task.status,
           sortOrder: task.sortOrder
         },
+        sequence: events.filter((event) => event.runId === data.runId).length + 1,
         createdAt: now
       };
       events.push(event);
@@ -238,6 +257,7 @@ function createMemoryRepository(): AgentRepository & {
             url: source.url,
             snippet: source.snippet
           },
+          sequence: events.filter((event) => event.runId === data.runId).length + 1,
           createdAt: now
         };
         events.push(event);
@@ -269,6 +289,7 @@ function createMemoryRepository(): AgentRepository & {
           threadId: run.threadId,
           type: "message.completed",
           payload: { messageId: message.id, content: data.assistantContent },
+          sequence: events.filter((event) => event.runId === run.id).length + 1,
           createdAt: now
         },
         {
@@ -277,6 +298,7 @@ function createMemoryRepository(): AgentRepository & {
           threadId: run.threadId,
           type: "run.completed",
           payload: { runId: run.id },
+          sequence: events.filter((event) => event.runId === run.id).length + 2,
           createdAt: now
         }
       ];
@@ -395,7 +417,7 @@ describe("agent service", () => {
     const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
     const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
     const received: AgentEvent[] = [];
-    const unsubscribe = subscribeToAgentRun(run.id, (event) => received.push(event));
+    const unsubscribe = subscribeToAgentRun(run.id, (published) => received.push(published.event));
 
     const event = await service.recordRunEvent(run, {
       type: "task.updated",
@@ -417,6 +439,72 @@ describe("agent service", () => {
         payload: { label: "Research hotels", status: "RUNNING" }
       }
     ]);
+  });
+
+  it("lists persisted run events for stream replay", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    await service.recordRunEvent(run, {
+      type: "run.started",
+      payload: { runId: run.id }
+    });
+    await service.recordRunEvent(run, {
+      type: "message.delta",
+      payload: { delta: "Drafting..." }
+    });
+
+    await expect(service.listRunEvents(run.id)).resolves.toMatchObject([
+      { type: "run.started", payload: { runId: run.id } },
+      { type: "message.delta", payload: { delta: "Drafting..." } }
+    ]);
+  });
+
+  it("orders agency threads by latest agent activity", async () => {
+    const repository = createMemoryRepository();
+    let currentTime = new Date("2026-04-28T01:00:00.000Z");
+    const service = createAgentService({
+      repository,
+      now: () => currentTime
+    });
+    const firstThread = await service.createThread("agency-1", "user-1", { title: "First" });
+    const secondThread = await service.createThread("agency-1", "user-1", { title: "Second" });
+
+    currentTime = new Date("2026-04-28T02:00:00.000Z");
+    await service.appendUserMessageAndCreateRun("agency-1", firstThread.id, "user-1", "Plan Cebu");
+
+    currentTime = new Date("2026-04-28T03:00:00.000Z");
+    await service.appendUserMessageAndCreateRun("agency-1", secondThread.id, "user-1", "Plan Bohol");
+
+    await expect(service.listThreads("agency-1")).resolves.toMatchObject([
+      { id: secondThread.id, title: "Second" },
+      { id: firstThread.id, title: "First" }
+    ]);
+  });
+
+  it("does not fail durable agent writes when thread freshness update fails", async () => {
+    const repository = createMemoryRepository();
+    repository.touchThread = async () => {
+      throw new Error("touch failed");
+    };
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+    await expect(
+      service.recordRunEvent(run, {
+        type: "run.started",
+        payload: { runId: run.id }
+      })
+    ).resolves.toMatchObject({
+      type: "run.started"
+    });
+
+    expect(repository.messages).toHaveLength(1);
+    expect(repository.runs).toHaveLength(1);
+    expect(repository.events).toHaveLength(1);
   });
 
   it("assigns distinct sortOrder values when record_task omits sortOrder", async () => {
@@ -595,7 +683,7 @@ describe("agent service", () => {
     const unsubscribeThrowing = subscribeToAgentRun(run.id, () => {
       throw new Error("subscriber failed");
     });
-    const unsubscribeReceiving = subscribeToAgentRun(run.id, (event) => received.push(event));
+    const unsubscribeReceiving = subscribeToAgentRun(run.id, (published) => received.push(published.event));
 
     await expect(
       service.recordRunEvent(run, {
