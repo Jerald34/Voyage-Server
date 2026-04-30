@@ -76,6 +76,16 @@ function createFakeAgentService(run = createRun()) {
     createdAt: Date;
   }> = [];
   const service: AgentOrchestratorAgentService = {
+    async getThread() {
+      return {
+        messages: [
+          { role: "SYSTEM_VISIBLE", content: "You are helping an agency planner." },
+          { role: "USER", content: "We are planning a Cebu itinerary." },
+          { role: "ASSISTANT", content: "Great, what dates are you targeting?" },
+          { role: "USER", content: "Build a Cebu itinerary." }
+        ]
+      };
+    },
     async startRun(runId, startedAt) {
       if (run.status === "COMPLETED" || run.status === "FAILED" || run.status === "CANCELLED") {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
@@ -255,8 +265,9 @@ function createRunInput() {
 describe("agent orchestrator", () => {
   it("streams and completes plain model text", async () => {
     const { service, events, run } = createFakeAgentService();
+    const provider = createModelProvider("Here is a draft itinerary.");
     const orchestrator = createAgentOrchestrator({
-      modelProvider: createModelProvider("Here is a draft itinerary."),
+      modelProvider: provider,
       agentService: service,
       toolRegistry: createAgentToolRegistry([])
     });
@@ -274,6 +285,13 @@ describe("agent orchestrator", () => {
       type: "message.delta",
       payload: { delta: "Here is a draft itinerary." }
     });
+    expect(provider.calls[0].messages).toEqual(
+      expect.arrayContaining([
+        { role: "user", content: "We are planning a Cebu itinerary." },
+        { role: "assistant", content: "Great, what dates are you targeting?" },
+        { role: "user", content: "Build a Cebu itinerary." }
+      ])
+    );
   });
 
   it("marks the run running before emitting run.started", async () => {
@@ -301,6 +319,7 @@ describe("agent orchestrator", () => {
     const createdInputs: unknown[] = [];
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
+        agentService: service,
         itineraryService: {
           async createDraftFromStructuredInput(agencyId, userId, input) {
             createdInputs.push({ agencyId, userId, input });
@@ -338,6 +357,7 @@ describe("agent orchestrator", () => {
     expect(events.map((event) => event.type)).toEqual([
       "run.started",
       "tool.started",
+      "itinerary.updated",
       "tool.completed",
       "message.delta",
       "message.completed",
@@ -350,15 +370,135 @@ describe("agent orchestrator", () => {
       })
     ]);
     expect(events[2]).toMatchObject({
+      type: "itinerary.updated",
+      payload: { itineraryId: "itinerary-1", change: "created" }
+    });
+    expect(events[3]).toMatchObject({
       type: "tool.completed",
       payload: { name: "create_itinerary", output: { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } } }
     });
-    expect(events[3]).toMatchObject({
+    expect(events[4]).toMatchObject({
       type: "message.delta",
       payload: { delta: "Created a draft itinerary from the itinerary tool." }
     });
     expect(modelProvider.calls).toHaveLength(2);
     expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("itinerary-1");
+  });
+
+  it("accepts shorthand create_itinerary payloads from the model", async () => {
+    const { service, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-2" }, itinerary: { id: "itinerary-2" } };
+          }
+        }
+      })
+    ]);
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Creating your itinerary now.",
+      toolCalls: [
+        {
+          name: "create_itinerary",
+          input: {
+            destination: "Hokkaido",
+            duration_days: 3,
+            activity_type: "adventure"
+          }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([modelOutput, "Your draft itinerary has been created."]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(createdInputs[0]).toMatchObject({
+      trip: {
+        destinationSummary: "Hokkaido"
+      },
+      itinerary: {
+        title: "3-Day Hokkaido Adventure Itinerary",
+        days: [{ dayNumber: 1 }, { dayNumber: 2 }, { dayNumber: 3 }]
+      }
+    });
+  });
+
+  it("accepts location and highlights shorthand in create_itinerary payload", async () => {
+    const { service, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-3" }, itinerary: { id: "itinerary-3" } };
+          }
+        }
+      })
+    ]);
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Creating your itinerary now.",
+      toolCalls: [
+        {
+          name: "create_itinerary",
+          input: {
+            location: "Hokkaido, Japan",
+            duration_days: 3,
+            activity_type: "adventure",
+            highlights: [
+              "Sapporo city exploration",
+              "Mount Moiwa views",
+              "Onsen hot springs"
+            ]
+          }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([modelOutput, "Your draft itinerary has been created."]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(createdInputs[0]).toMatchObject({
+      trip: {
+        destinationSummary: "Hokkaido, Japan"
+      },
+      itinerary: {
+        title: "3-Day Hokkaido, Japan Adventure Itinerary",
+        days: [
+          {
+            dayNumber: 1,
+            items: [{ title: "Sapporo city exploration" }]
+          },
+          {
+            dayNumber: 2,
+            items: [{ title: "Mount Moiwa views" }]
+          },
+          {
+            dayNumber: 3,
+            items: [{ title: "Onsen hot springs" }]
+          }
+        ]
+      }
+    });
   });
 
   it("uses tool output in the second model pass before completing", async () => {
@@ -416,6 +556,57 @@ describe("agent orchestrator", () => {
       type: "message.delta",
       payload: { delta: "Final response grounded by Google Search: Cebu travel advisories result." }
     });
+  });
+
+  it("does not fail the run when web_search provider is unavailable", async () => {
+    const { service, events, run, toolCalls } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "I will check current flight options.",
+      toolCalls: [
+        {
+          name: "web_search",
+          input: { query: "flights from Clark to Davao", maxResults: 3 }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([
+      modelOutput,
+      "I could not access live web search right now, but I can still draft options and what to verify."
+    ]);
+    const registry = createAgentToolRegistry([
+      createWebSearchTool({
+        agentService: service,
+        webSearch: {
+          async search() {
+            throw new ApiError(503, "WEB_SEARCH_PROVIDER_UNAVAILABLE", "Google Search provider is unavailable.");
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: "web_search",
+        status: "FAILED",
+        errorCode: "WEB_SEARCH_PROVIDER_UNAVAILABLE"
+      })
+    ]);
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "tool.failed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
   });
 
   it("falls back to the planned assistant message when second synthesis fails", async () => {

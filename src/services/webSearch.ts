@@ -9,7 +9,7 @@ export type WebSearchResult = {
 };
 
 export type WebSearchProvider = {
-  search(input: { query: string; num?: number; hl?: string }): Promise<WebSearchResult[]>;
+  search(input: { query: string; num?: number; hl?: string; gl?: string }): Promise<WebSearchResult[]>;
 };
 
 type GoogleSearchProviderOptions = {
@@ -50,6 +50,9 @@ export function createGoogleSearchProvider(options: GoogleSearchProviderOptions 
       if (input.hl) {
         url.searchParams.set("hl", input.hl);
       }
+      if (input.gl) {
+        url.searchParams.set("gl", input.gl);
+      }
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
@@ -58,7 +61,16 @@ export function createGoogleSearchProvider(options: GoogleSearchProviderOptions 
         const response = await fetchImpl(url, { signal: controller.signal });
 
         if (!response.ok) {
-          throw webSearchUnavailable();
+          let detail = "";
+          try {
+            detail = (await response.text()).slice(0, 300);
+          } catch {
+            detail = "";
+          }
+          const suffix = detail ? ` Detail: ${detail}` : "";
+          throw webSearchUnavailable(
+            `Google Search provider is unavailable (HTTP ${response.status}).${suffix}`
+          );
         }
 
         const body = (await response.json()) as {

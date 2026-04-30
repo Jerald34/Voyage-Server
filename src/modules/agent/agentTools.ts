@@ -40,11 +40,15 @@ type CreateItineraryService = {
     agencyId: string,
     createdByUserId: string,
     input: StructuredItineraryInput
-  ): Promise<unknown>;
+  ): Promise<{ itinerary?: { id?: string; version?: number; status?: string }; trip?: { id?: string } } | unknown>;
 };
 
 type UpdateItineraryService = {
-  replaceDraft(agencyId: string, itineraryId: string, input: z.infer<typeof replaceItinerarySchema>): Promise<unknown>;
+  replaceDraft(
+    agencyId: string,
+    itineraryId: string,
+    input: z.infer<typeof replaceItinerarySchema>
+  ): Promise<{ id?: string; version?: number; status?: string } | unknown>;
 };
 
 const taskInputSchema = z.object({
@@ -87,6 +91,23 @@ const webSearchInputSchema = z.object({
   language: z.string().min(2).max(20).optional()
 });
 
+const createItineraryShorthandSchema = z.object({
+  destination: z.string().min(1).max(500).optional(),
+  location: z.string().min(1).max(500).optional(),
+  duration_days: z.number().int().positive().max(60).default(3),
+  activity_type: z.string().min(1).max(120).optional(),
+  highlights: z.array(z.string().min(1).max(300)).max(50).optional(),
+  traveler_count: z.number().int().positive().max(999).optional(),
+  budget_level: z.string().max(100).optional()
+}).superRefine((value, context) => {
+  if (!value.destination && !value.location) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "Either destination or location is required."
+    });
+  }
+});
+
 function createRunRecord(context: AgentToolContext): AgentRunRecord {
   const now = new Date();
   return {
@@ -117,6 +138,66 @@ function toCompactMetadata(value: Record<string, unknown>) {
 
 function limitKey(runId: string, toolName: string) {
   return `${runId}:${toolName}`;
+}
+
+function toTitleCase(value: string) {
+  return value
+    .trim()
+    .split(/\s+/)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function normalizeCreateItineraryInput(input: unknown): StructuredItineraryInput {
+  const structured = structuredItineraryInputSchema.safeParse(input);
+  if (structured.success) {
+    return structured.data;
+  }
+
+  const shorthand = createItineraryShorthandSchema.parse(input);
+  const destination = (shorthand.destination ?? shorthand.location ?? "").trim();
+  const destinationTitle = toTitleCase(destination);
+  const durationDays = shorthand.duration_days;
+  const activityType = shorthand.activity_type?.trim();
+  const highlights = shorthand.highlights ?? [];
+  const tripTitle = `${durationDays}-Day ${destinationTitle} Trip`;
+  const itineraryTitle = activityType
+    ? `${durationDays}-Day ${destinationTitle} ${toTitleCase(activityType)} Itinerary`
+    : `${durationDays}-Day ${destinationTitle} Itinerary`;
+
+  const dayItems = Array.from({ length: durationDays }, (_, index) => {
+    const mappedHighlight = highlights[index];
+    if (!mappedHighlight) {
+      return [];
+    }
+    return [
+      {
+        type: "ACTIVITY" as const,
+        title: mappedHighlight.trim(),
+        description: `Suggested highlight for Day ${index + 1} in ${destinationTitle}.`
+      }
+    ];
+  });
+
+  return structuredItineraryInputSchema.parse({
+    trip: {
+      title: tripTitle,
+      destinationSummary: destinationTitle,
+      travelerCount: shorthand.traveler_count,
+      budgetLevel: shorthand.budget_level
+    },
+    itinerary: {
+      title: itineraryTitle,
+      summary: activityType
+        ? `A ${durationDays}-day ${activityType} itinerary in ${destinationTitle}.`
+        : `A ${durationDays}-day itinerary in ${destinationTitle}.`,
+      days: Array.from({ length: durationDays }, (_, index) => ({
+        dayNumber: index + 1,
+        title: index === 0 ? "Arrival And Orientation" : `Day ${index + 1} Plan`,
+        items: dayItems[index]
+      }))
+    }
+  });
 }
 
 export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRegistryOptions = {}): AgentToolRegistry {
@@ -179,22 +260,54 @@ export function createRecordAgentTaskTool(options: { agentService: AgentToolServ
   };
 }
 
-export function createCreateItineraryTool(options: { itineraryService: CreateItineraryService }): AgentTool {
+export function createCreateItineraryTool(options: {
+  itineraryService: CreateItineraryService;
+  agentService?: AgentToolService;
+}): AgentTool {
   return {
     name: "create_itinerary",
     async execute(context, input) {
-      const parsed = structuredItineraryInputSchema.parse(input);
-      return options.itineraryService.createDraftFromStructuredInput(context.agencyId, context.userId, parsed);
+      const parsed = normalizeCreateItineraryInput(input);
+      const result = await options.itineraryService.createDraftFromStructuredInput(context.agencyId, context.userId, parsed);
+      const itinerary = (result as { itinerary?: { id?: string; version?: number; status?: string } } | null)?.itinerary;
+      if (itinerary?.id && options.agentService) {
+        await options.agentService.recordRunEvent(createRunRecord(context), {
+          type: "itinerary.updated",
+          payload: {
+            itineraryId: itinerary.id,
+            version: itinerary.version ?? null,
+            status: itinerary.status ?? null,
+            change: "created"
+          }
+        });
+      }
+      return result;
     }
   };
 }
 
-export function createUpdateItineraryTool(options: { itineraryService: UpdateItineraryService }): AgentTool {
+export function createUpdateItineraryTool(options: {
+  itineraryService: UpdateItineraryService;
+  agentService?: AgentToolService;
+}): AgentTool {
   return {
     name: "update_itinerary",
     async execute(context, input) {
       const parsed = updateItineraryInputSchema.parse(input);
-      return options.itineraryService.replaceDraft(context.agencyId, parsed.itineraryId, parsed.itinerary);
+      const result = await options.itineraryService.replaceDraft(context.agencyId, parsed.itineraryId, parsed.itinerary);
+      const updated = result as { id?: string; version?: number; status?: string } | null;
+      if (options.agentService) {
+        await options.agentService.recordRunEvent(createRunRecord(context), {
+          type: "itinerary.updated",
+          payload: {
+            itineraryId: updated?.id ?? parsed.itineraryId,
+            version: updated?.version ?? null,
+            status: updated?.status ?? null,
+            change: "updated"
+          }
+        });
+      }
+      return result;
     }
   };
 }
@@ -308,7 +421,8 @@ export function createWebSearchTool(options: { webSearch: WebSearchProvider; age
       const results = await options.webSearch.search({
         query: parsed.query,
         num: parsed.maxResults,
-        hl: parsed.language
+        hl: parsed.language,
+        gl: parsed.region
       });
       await options.agentService.recordSources(
         createRunRecord(_context),

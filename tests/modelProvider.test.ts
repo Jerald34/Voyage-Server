@@ -57,4 +57,44 @@ describe("LM Studio model provider", () => {
       message: "Local model provider is unavailable. Start LM Studio and try again."
     } satisfies Partial<ApiError>);
   });
+
+  it("streams chat completion deltas when stream=true is enabled", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"choices":[{"delta":{"content":"Hello"}}]}\n\ndata: {"choices":[{"delta":{"content":" world"}}]}\n\ndata: [DONE]\n\n'
+          )
+        );
+        controller.close();
+      }
+    });
+
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(stream, { status: 200 });
+    };
+
+    const provider = createLmStudioModelProvider({
+      baseUrl: "http://localhost:1234/v1/",
+      model: "local-test",
+      fetchImpl
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of provider.completeStream!({
+      messages: [{ role: "user", content: "Stream this." }]
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(["Hello", " world"]);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      model: "local-test",
+      stream: true
+    });
+  });
 });

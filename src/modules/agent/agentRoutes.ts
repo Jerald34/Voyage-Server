@@ -26,14 +26,27 @@ import { lmStudioModelProvider } from "../../services/modelProvider";
 import type { AgentEvent } from "./agentSchemas";
 import type { AgentRunEventRecord } from "./agentService";
 
+// Extend Express Request to carry the resolved agency UUID
+declare global {
+  namespace Express {
+    interface Request {
+      resolvedAgencyId?: string;
+    }
+  }
+}
+
+function getAgencyId(request: Request): string {
+  return request.resolvedAgencyId ?? String((request.params as Record<string, string | undefined>).agencyId);
+}
+
 const GOOGLE_MAPS_TOOL_NAMES = ["search_google_places", "get_google_place_details", "estimate_route"] as const;
 const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
 
 function createAgencyAgentOrchestrator() {
   const tools = [
     createRecordAgentTaskTool({ agentService }),
-    createCreateItineraryTool({ itineraryService }),
-    createUpdateItineraryTool({ itineraryService })
+    createCreateItineraryTool({ itineraryService, agentService }),
+    createUpdateItineraryTool({ itineraryService, agentService })
   ];
 
   try {
@@ -57,6 +70,7 @@ function createAgencyAgentOrchestrator() {
   return createAgentOrchestrator({
     modelProvider: lmStudioModelProvider,
     agentService,
+    availableToolNames: tools.map((tool) => tool.name),
     toolRegistry: createAgentToolRegistry(tools, {
       maxCallsByGroup: {
         google_maps: env.GOOGLE_MAPS_MAX_CALLS_PER_RUN,
@@ -172,7 +186,7 @@ function writeAgentEvent(safeWrite: (chunk: string) => boolean, event: AgentEven
 }
 
 async function verifyAgencyAccess(requestAgencyId: string, user: NonNullable<Express.Request["authUser"]>) {
-  await agencyAccessService.requireVerifiedAgencyMember(user, requestAgencyId);
+  return agencyAccessService.requireVerifiedAgencyMember(user, requestAgencyId);
 }
 
 export async function startAgentRunInBackground(
@@ -228,7 +242,9 @@ agentRoutes.use(requireAuth);
 agentRoutes.use(async (request, _response, next) => {
   try {
     const params = request.params as Record<string, string | undefined>;
-    await verifyAgencyAccess(String(params.agencyId), request.authUser!);
+    const access = await verifyAgencyAccess(String(params.agencyId), request.authUser!);
+    // Store resolved UUID on request so all downstream handlers use the real ID
+    request.resolvedAgencyId = access.agency.id;
     next();
   } catch (error) {
     next(error);
@@ -237,9 +253,9 @@ agentRoutes.use(async (request, _response, next) => {
 
 agentRoutes.post("/threads", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const agencyId = getAgencyId(request);
     const input = createThreadSchema.parse(request.body);
-    const thread = await agentService.createThread(String(params.agencyId), request.authUser!.id, input);
+    const thread = await agentService.createThread(agencyId, request.authUser!.id, input);
     response.status(201).json({ thread });
   } catch (error) {
     next(error);
@@ -248,8 +264,8 @@ agentRoutes.post("/threads", async (request, response, next) => {
 
 agentRoutes.get("/threads", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const threads = await agentService.listThreads(String(params.agencyId));
+    const agencyId = getAgencyId(request);
+    const threads = await agentService.listThreads(agencyId);
     response.json({ threads });
   } catch (error) {
     next(error);
@@ -258,8 +274,8 @@ agentRoutes.get("/threads", async (request, response, next) => {
 
 agentRoutes.get("/threads/:threadId", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const thread = await agentService.getThread(String(params.agencyId), String(request.params.threadId));
+    const agencyId = getAgencyId(request);
+    const thread = await agentService.getThread(agencyId, String(request.params.threadId));
     response.json({ thread });
   } catch (error) {
     next(error);
@@ -268,19 +284,20 @@ agentRoutes.get("/threads/:threadId", async (request, response, next) => {
 
 agentRoutes.post("/threads/:threadId/messages", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const agencyId = getAgencyId(request);
+    const threadId = String(request.params.threadId);
     const input = createMessageSchema.parse(request.body);
     const { message, run } = await agentService.appendUserMessageAndCreateRun(
-      String(params.agencyId),
-      String(params.threadId),
+      agencyId,
+      threadId,
       request.authUser!.id,
       input.content
     );
 
     void Promise.resolve().then(() =>
       startAgentRunInBackground({
-        agencyId: String(params.agencyId),
-        threadId: String(params.threadId),
+        agencyId,
+        threadId,
         runId: run.id,
         userId: request.authUser!.id,
         userContent: input.content
@@ -290,7 +307,9 @@ agentRoutes.post("/threads/:threadId/messages", async (request, response, next) 
     response.status(201).json({
       message,
       run,
-      streamUrl: `/agencies/${String(params.agencyId)}/agent/runs/${run.id}/stream`
+      runId: run.id,
+      threadId,
+      streamUrl: `/agencies/${agencyId}/agent/runs/${run.id}/stream`
     });
   } catch (error) {
     next(error);
@@ -301,9 +320,8 @@ agentRoutes.get("/runs/:runId/stream", async (request, response, next) => {
   let cleanupStream = () => {};
 
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const agencyId = String(params.agencyId);
-    const runId = String(params.runId);
+    const agencyId = getAgencyId(request);
+    const runId = String(request.params.runId);
     const run = await prisma.agentRun.findFirst({
       where: { id: runId, agencyId },
       select: { id: true, status: true }

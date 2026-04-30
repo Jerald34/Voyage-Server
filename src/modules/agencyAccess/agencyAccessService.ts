@@ -63,9 +63,11 @@ export function createAgencyAccessService(options: { repository: AgencyAccessRep
 
 export function createPrismaAgencyAccessRepository(client: PrismaClient = prisma): AgencyAccessRepository {
   return {
-    async findAgencyAccess(userId, agencyId) {
+    async findAgencyAccess(userId, agencyIdOrSlug) {
+      const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agencyIdOrSlug);
+      
       const agency = await client.agency.findUnique({
-        where: { id: agencyId },
+        where: isUuid ? { id: agencyIdOrSlug } : { slug: agencyIdOrSlug },
         include: {
           memberships: {
             where: { userId },

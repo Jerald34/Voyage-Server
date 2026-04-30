@@ -18,6 +18,10 @@ export type AgentOrchestrator = {
 };
 
 export type AgentOrchestratorAgentService = {
+  getThread(
+    agencyId: string,
+    threadId: string
+  ): Promise<{ messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string }> }>;
   startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
   recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<AgentRunEventRecord>;
   recordToolCallStarted(
@@ -44,12 +48,56 @@ const modelJsonOutputSchema = z.object({
   toolCalls: z.array(modelToolCallSchema).default([])
 });
 
+type ParsedModelOutput =
+  | {
+      type: "text";
+      assistantMessage: string;
+    }
+  | {
+      type: "json";
+      assistantMessage: string;
+      toolCalls: Array<{ name: string; input: Record<string, unknown> }>;
+    };
+
 function isLikelyJson(content: string) {
   const trimmed = content.trim();
   return trimmed.startsWith("{") || trimmed.startsWith("[");
 }
 
-function parseModelOutput(content: string) {
+function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
+  const trimmed = content.trim();
+  const match = trimmed.match(/^<\|toolcall\|>\s*call:([a-zA-Z0-9_]+)\{([^}]*)\}<tool_call\|>$/);
+  if (!match) {
+    return null;
+  }
+
+  const toolName = match[1];
+  const inputPayload = match[2].trim();
+  const parsedInput: Record<string, unknown> = {};
+  if (inputPayload) {
+    for (const pair of inputPayload.split(",")) {
+      const [rawKey, ...valueParts] = pair.split(":");
+      const key = (rawKey ?? "").trim();
+      const value = valueParts.join(":").trim();
+      if (key) {
+        parsedInput[key] = value;
+      }
+    }
+  }
+
+  return {
+    type: "json",
+    assistantMessage: "Working on that now.",
+    toolCalls: [{ name: toolName, input: parsedInput }]
+  };
+}
+
+function parseModelOutput(content: string): ParsedModelOutput {
+  const taggedToolCall = parseToolCallTagOutput(content);
+  if (taggedToolCall) {
+    return taggedToolCall;
+  }
+
   if (!isLikelyJson(content)) {
     return {
       type: "text" as const,
@@ -89,15 +137,48 @@ function stringifyToolResults(toolResults: Array<{ name: string; output: unknown
   return `${text.slice(0, 11997)}...`;
 }
 
+async function streamModelCompletion(options: {
+  modelProvider: ModelProvider;
+  input: { messages: Array<{ role: "system" | "user" | "assistant"; content: string }>; temperature?: number };
+  onDelta: (delta: string) => Promise<void>;
+}) {
+  if (!options.modelProvider.completeStream) {
+    return null;
+  }
+
+  let content = "";
+  for await (const delta of options.modelProvider.completeStream(options.input)) {
+    if (!delta) {
+      continue;
+    }
+    content += delta;
+    await options.onDelta(delta);
+  }
+
+  return content;
+}
+
+function detectInitialOutputMode(content: string) {
+  const trimmed = content.trimStart();
+  if (!trimmed) {
+    return "text" as const;
+  }
+  return trimmed.startsWith("{") || trimmed.startsWith("[") ? ("json" as const) : ("text" as const);
+}
+
 export function createAgentOrchestrator(options: {
   modelProvider: ModelProvider;
   agentService: AgentOrchestratorAgentService;
   toolRegistry: AgentToolRegistry;
+  availableToolNames?: string[];
   now?: () => Date;
   maxToolCallsPerRun?: number;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
   const maxToolCallsPerRun = options.maxToolCallsPerRun ?? 20;
+  const historyMessageLimit = 30;
+  const availableToolNames = options.availableToolNames ?? [];
+  const toolListForPrompt = availableToolNames.length > 0 ? availableToolNames.join(", ") : "(none)";
 
   async function failRun(input: AgentOrchestratorRunInput, error: unknown) {
     const details = errorDetails(error);
@@ -121,25 +202,92 @@ export function createAgentOrchestrator(options: {
         payload: { runId: input.runId }
       });
 
-      let modelContent: string;
+      let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
       try {
-        const modelResult = await options.modelProvider.complete({
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are an agency itinerary planning assistant. Return helpful text, or JSON with assistantMessage and toolCalls when tools are needed."
-            },
-            {
-              role: "user",
-              content: input.userContent
+        const thread = await options.agentService.getThread(input.agencyId, input.threadId);
+        const recentMessages = thread.messages.slice(-historyMessageLimit);
+        conversationHistory = recentMessages
+          .map((message) => {
+            if (message.role === "USER") {
+              return { role: "user" as const, content: message.content };
             }
-          ],
-          temperature: 0.2
-        });
-        modelContent = modelResult.content;
+            if (message.role === "ASSISTANT") {
+              return { role: "assistant" as const, content: message.content };
+            }
+            return { role: "system" as const, content: message.content };
+          })
+          .filter((message) => message.content.trim().length > 0);
+      } catch {
+        // If history lookup fails, continue with the current message only.
+      }
+
+      let modelContent = "";
+      let initialMode: "text" | "json" = "text";
+      try {
+        const historyOrCurrent =
+          conversationHistory.length > 0
+            ? conversationHistory
+            : [
+                {
+                  role: "user" as const,
+                  content: input.userContent
+                }
+              ];
+
+        const initialMessages = [
+          {
+            role: "system" as const,
+            content:
+              [
+                "You are an agency itinerary planning assistant.",
+                `Available tools: ${toolListForPrompt}.`,
+                "When tools are needed, return ONLY strict JSON with this shape:",
+                '{"assistantMessage":"string","toolCalls":[{"name":"tool_name","input":{"key":"value"}}]}',
+                "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
+                "Never invent tool names not in the available tools list.",
+                "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call."
+              ].join(" ")
+          },
+          ...historyOrCurrent
+        ];
+        if (options.modelProvider.completeStream) {
+          const streamed = await streamModelCompletion({
+            modelProvider: options.modelProvider,
+            input: {
+              messages: initialMessages,
+              temperature: 0.2
+            },
+            onDelta: async (delta) => {
+              modelContent += delta;
+              initialMode = detectInitialOutputMode(modelContent);
+              if (initialMode === "text") {
+                await options.agentService.recordRunEvent(run, {
+                  type: "message.delta",
+                  payload: { delta }
+                });
+              }
+            }
+          });
+
+          if (typeof streamed === "string") {
+            modelContent = streamed;
+            initialMode = detectInitialOutputMode(modelContent);
+          }
+        } else {
+          const modelResult = await options.modelProvider.complete({
+            messages: initialMessages,
+            temperature: 0.2
+          });
+          modelContent = modelResult.content;
+          initialMode = detectInitialOutputMode(modelContent);
+        }
       } catch (error) {
         await failRun(input, error);
+        return;
+      }
+
+      if (initialMode === "text") {
+        await options.agentService.completeRun(run.id, modelContent);
         return;
       }
 
@@ -198,6 +346,20 @@ export function createAgentOrchestrator(options: {
             type: "tool.failed",
             payload: { name: toolCall.name, code: details.code, message: details.message }
           });
+
+          // Degrade gracefully when web search provider is unavailable instead of failing the whole run.
+          if (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") {
+            toolResults.push({
+              name: toolCall.name,
+              output: {
+                unavailable: true,
+                code: details.code,
+                message: details.message
+              }
+            });
+            continue;
+          }
+
           await failRun(input, error);
           return;
         }
@@ -210,34 +372,70 @@ export function createAgentOrchestrator(options: {
 
       let synthesizedMessage = parsedOutput.assistantMessage;
       try {
-        const synthesis = await options.modelProvider.complete({
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are an agency itinerary planning assistant. Write the final assistant response for agency staff using the tool results. Mention concrete itinerary, map, and search outcomes when available."
+        const synthesisMessages = [
+          {
+            role: "system" as const,
+            content:
+              [
+                "You are an agency itinerary planning assistant.",
+                "Write the final assistant response for agency staff using ONLY the provided tool results.",
+                "Mention concrete itinerary, map, and search outcomes when available.",
+                "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",
+                "Do not fabricate named sources, pages, routes, prices, schedules, or provider findings.",
+                "Return plain assistant text only."
+              ].join(" ")
+          },
+          {
+            role: "user" as const,
+            content: input.userContent
+          },
+          {
+            role: "assistant" as const,
+            content: parsedOutput.assistantMessage
+          },
+          {
+            role: "user" as const,
+            content: `Tool results JSON:\n${stringifyToolResults(toolResults)}`
+          }
+        ];
+
+        if (options.modelProvider.completeStream) {
+          synthesizedMessage = "";
+          const streamed = await streamModelCompletion({
+            modelProvider: options.modelProvider,
+            input: {
+              messages: synthesisMessages,
+              temperature: 0.2
             },
-            {
-              role: "user",
-              content: input.userContent
-            },
-            {
-              role: "assistant",
-              content: parsedOutput.assistantMessage
-            },
-            {
-              role: "user",
-              content: `Tool results JSON:\n${stringifyToolResults(toolResults)}`
+            onDelta: async (delta) => {
+              await options.agentService.recordRunEvent(run, {
+                type: "message.delta",
+                payload: { delta }
+              });
             }
-          ],
-          temperature: 0.2
-        });
-        synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
+          });
+
+          if (typeof streamed === "string") {
+            synthesizedMessage = streamed.trim() || parsedOutput.assistantMessage;
+          }
+        } else {
+          const synthesis = await options.modelProvider.complete({
+            messages: synthesisMessages,
+            temperature: 0.2
+          });
+          synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
+        }
       } catch {
         synthesizedMessage = parsedOutput.assistantMessage;
       }
 
-      await streamAndComplete(run, synthesizedMessage);
+      if (!options.modelProvider.completeStream) {
+        await options.agentService.recordRunEvent(run, {
+          type: "message.delta",
+          payload: { delta: synthesizedMessage }
+        });
+      }
+      await options.agentService.completeRun(run.id, synthesizedMessage);
     }
   };
 }

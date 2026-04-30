@@ -8,6 +8,7 @@ export type ModelMessage = {
 
 export type ModelProvider = {
   complete(input: { messages: ModelMessage[]; temperature?: number }): Promise<{ content: string }>;
+  completeStream?(input: { messages: ModelMessage[]; temperature?: number }): AsyncIterable<string>;
 };
 
 type LmStudioModelProviderOptions = {
@@ -71,6 +72,90 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
           throw error;
         }
 
+        throw unavailableModelError();
+      } finally {
+        clearTimeout(timeout);
+      }
+    },
+
+    async *completeStream(input) {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify({
+            model,
+            messages: input.messages,
+            temperature: input.temperature ?? 0.2,
+            stream: true
+          }),
+          signal: controller.signal
+        });
+
+        if (!response.ok || !response.body) {
+          throw unavailableModelError();
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+
+        while (true) {
+          const { value, done } = await reader.read();
+          if (done) {
+            break;
+          }
+
+          buffer += decoder.decode(value, { stream: true });
+          let lineBreakIndex = buffer.indexOf("\n");
+          while (lineBreakIndex >= 0) {
+            const rawLine = buffer.slice(0, lineBreakIndex);
+            buffer = buffer.slice(lineBreakIndex + 1);
+            lineBreakIndex = buffer.indexOf("\n");
+
+            const line = rawLine.trim();
+            if (!line || !line.startsWith("data:")) {
+              continue;
+            }
+
+            const payloadText = line.slice(5).trim();
+            if (!payloadText) {
+              continue;
+            }
+            if (payloadText === "[DONE]") {
+              return;
+            }
+
+            try {
+              const payload = JSON.parse(payloadText) as {
+                type?: string;
+                content?: unknown;
+                choices?: Array<{ delta?: { content?: unknown } }>;
+              };
+
+              const openAiDelta = payload.choices?.[0]?.delta?.content;
+              if (typeof openAiDelta === "string" && openAiDelta.length > 0) {
+                yield openAiDelta;
+                continue;
+              }
+
+              if (payload.type === "message.delta" && typeof payload.content === "string" && payload.content.length > 0) {
+                yield payload.content;
+              }
+            } catch {
+              // Ignore non-JSON or partial lines and continue consuming.
+            }
+          }
+        }
+      } catch (error) {
+        if (error instanceof ApiError) {
+          throw error;
+        }
         throw unavailableModelError();
       } finally {
         clearTimeout(timeout);

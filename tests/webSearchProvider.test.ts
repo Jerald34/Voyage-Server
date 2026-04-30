@@ -43,7 +43,7 @@ describe("Google Search provider", () => {
       fetchImpl
     });
 
-    const results = await provider.search({ query: "Cebu itinerary", num: 25, hl: "en" });
+    const results = await provider.search({ query: "Cebu itinerary", num: 25, hl: "en", gl: "ph" });
 
     expect(results).toEqual([
       {
@@ -60,6 +60,7 @@ describe("Google Search provider", () => {
     expect(requestUrl.searchParams.get("q")).toBe("Cebu itinerary");
     expect(requestUrl.searchParams.get("num")).toBe("10");
     expect(requestUrl.searchParams.get("hl")).toBe("en");
+    expect(requestUrl.searchParams.get("gl")).toBe("ph");
     expect(calls[0].init.signal).toBeInstanceOf(AbortSignal);
   });
 
