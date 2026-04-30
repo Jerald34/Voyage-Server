@@ -682,6 +682,68 @@ describe("agent orchestrator", () => {
     ]);
   });
 
+  it("record_agent_task accepts shorthand task and priority input", async () => {
+    const { service, events, tasks } = createFakeAgentService();
+    const registry = createAgentToolRegistry([
+      createRecordAgentTaskTool({
+        agentService: service
+      })
+    ]);
+
+    await registry.execute("record_agent_task", createRunInput(), {
+      task: "Create 1-day Olongapo City itinerary with nature and rest",
+      priority: "high"
+    });
+
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        label: "Create 1-day Olongapo City itinerary with nature and rest",
+        status: "RUNNING"
+      })
+    ]);
+    expect(events).toEqual([
+      {
+        type: "task.updated",
+        payload: expect.objectContaining({
+          label: "Create 1-day Olongapo City itinerary with nature and rest",
+          status: "RUNNING"
+        })
+      }
+    ]);
+  });
+
+  it("record_agent_task accepts task_name, description, and lowercase status", async () => {
+    const { service, events, tasks } = createFakeAgentService();
+    const registry = createAgentToolRegistry([
+      createRecordAgentTaskTool({
+        agentService: service
+      })
+    ]);
+
+    await registry.execute("record_agent_task", createRunInput(), {
+      task_name: "Test Task - Tool Verification",
+      description: "This is a test task to verify the record_agent_task tool.",
+      status: "pending",
+      priority: "medium"
+    });
+
+    expect(tasks).toEqual([
+      expect.objectContaining({
+        label: "Test Task - Tool Verification — This is a test task to verify the record_agent_task tool.",
+        status: "PENDING"
+      })
+    ]);
+    expect(events).toEqual([
+      {
+        type: "task.updated",
+        payload: expect.objectContaining({
+          label: "Test Task - Tool Verification — This is a test task to verify the record_agent_task tool.",
+          status: "PENDING"
+        })
+      }
+    ]);
+  });
+
   it("persists sources for web search", async () => {
     const { service, sources, events } = createFakeAgentService();
     const registry = createAgentToolRegistry([
