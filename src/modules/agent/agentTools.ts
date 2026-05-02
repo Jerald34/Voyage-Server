@@ -21,6 +21,7 @@ export type AgentTool = {
 
 export type AgentToolRegistry = {
   execute(name: string, context: AgentToolContext, input: unknown): Promise<unknown>;
+  clearRun?(runId: string): void;
 };
 
 type AgentToolRegistryOptions = {
@@ -195,13 +196,27 @@ function toTitleCase(value: string) {
     .join(" ");
 }
 
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
 function normalizeCreateItineraryInput(input: unknown): StructuredItineraryInput {
   const structured = structuredItineraryInputSchema.safeParse(input);
   if (structured.success) {
     return structured.data;
   }
 
-  const shorthand = createItineraryShorthandSchema.parse(input);
+  // If input looks structured (has trip + itinerary keys) but failed strict validation,
+  // do not fall through to shorthand which would fail on missing destination/location.
+  if (isRecordLike(input) && isRecordLike((input as Record<string, unknown>).trip) && isRecordLike((input as Record<string, unknown>).itinerary)) {
+    throw inputError();
+  }
+
+  const shorthandResult = createItineraryShorthandSchema.safeParse(input);
+  if (!shorthandResult.success) {
+    throw inputError();
+  }
+  const shorthand = shorthandResult.data;
   const destination = (shorthand.destination ?? shorthand.location ?? "").trim();
   const destinationTitle = toTitleCase(destination);
   const durationDays = shorthand.duration_days;
@@ -290,6 +305,15 @@ export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRe
           throw inputError();
         }
         throw error;
+      }
+    },
+
+    clearRun(runId) {
+      for (const key of callsByRunAndTool.keys()) {
+        if (key.startsWith(`${runId}:`)) callsByRunAndTool.delete(key);
+      }
+      for (const key of callsByRunAndGroup.keys()) {
+        if (key.startsWith(`${runId}:`)) callsByRunAndGroup.delete(key);
       }
     }
   };

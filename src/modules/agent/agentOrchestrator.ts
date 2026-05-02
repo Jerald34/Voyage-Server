@@ -519,11 +519,7 @@ async function customizeCreateItineraryInput(options: {
         },
         {
           role: "user",
-          content: `Original user request:\n${options.userContent}`
-        },
-        {
-          role: "assistant",
-          content: `Weak create_itinerary input proposed by model:\n${JSON.stringify(options.input)}`
+          content: `Original user request:\n${options.userContent}\n\nWeak create_itinerary input proposed by model:\n${JSON.stringify(options.input)}\n\nConvert this into a fully customized create_itinerary input JSON.`
         }
       ]
     });
@@ -688,6 +684,7 @@ export function createAgentOrchestrator(options: {
   return {
     async run(input) {
       const run = await options.agentService.startRun(input.runId, now());
+      try {
 
       await options.agentService.recordRunEvent(run, {
         type: "run.started",
@@ -715,6 +712,7 @@ export function createAgentOrchestrator(options: {
 
       let modelContent = "";
       let initialMode: "text" | "json" = "text";
+      let recoveryNotified = false;
       try {
         const historyOrCurrent =
           conversationHistory.length > 0
@@ -733,16 +731,25 @@ export function createAgentOrchestrator(options: {
               [
                 "You are an agency itinerary planning assistant.",
                 `Available tools: ${toolListForPrompt}.`,
-                "When tools are needed, return ONLY strict JSON with this shape:",
-                '{"assistantMessage":"string","toolCalls":[{"name":"tool_name","input":{"key":"value"}}]}',
-                "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
+                "",
+                "## Tool Response Format",
+                "When tools are needed, return ONLY strict JSON: {\"assistantMessage\":\"string\",\"toolCalls\":[{\"name\":\"tool_name\",\"input\":{...}}]}",
+                "When no tools are needed, respond with plain text only.",
+                "",
+                "## create_itinerary Input Schema",
+                'create_itinerary input MUST be: {"trip":{"title":"string required","destinationSummary":"string","clientName":"string","startDate":"ISO date","endDate":"ISO date","travelerCount":"number","budgetLevel":"string"},"itinerary":{"title":"string required","summary":"string","days":[{"dayNumber":"number required","title":"string required","summary":"string","items":[{"type":"ACTIVITY|MEAL|TRANSFER|CHECK_IN|CHECK_OUT|FREE_TIME|NOTE required","title":"string required","description":"string","startTime":"HH:MM AM/PM","endTime":"HH:MM AM/PM","staffNotes":"string","clientNotes":"string"}]}]}}',
+                "",
+                "## update_itinerary Input Schema",
+                'update_itinerary input MUST be: {"itineraryId":"string required","itinerary":{same shape as create_itinerary.itinerary above}}',
+                "",
+                "## Rules",
+                "Use snake_case tool names exactly as listed in Available tools.",
                 "Never invent tool names not in the available tools list.",
+                "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
                 "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call.",
-                "For trip planning requests, call create_itinerary (or update_itinerary if revising an existing draft) before writing a final narrative.",
-                "When calling create_itinerary, prefer a full structured input with trip.title, trip.destinationSummary, itinerary.title, itinerary.summary, and itinerary.days[].items[].",
-                "Preserve user constraints such as day count, start/end times, dates, budget, pace, traveler count, meals, must-see interests, accessibility needs, exclusions, and special requests.",
-                "Do not send destination-only create_itinerary input for a customized planning request.",
-                "Use snake_case tool names exactly as listed in Available tools."
+                "For trip planning requests, always call create_itinerary with a fully populated input including concrete day titles, item titles, and descriptions.",
+                "Never send placeholder or skeleton items — every day and item must have concrete titles and descriptions relevant to the destination.",
+                "Preserve user constraints: destination, day count, dates, start/end times, pace, budget, traveler count, interests, meals, accessibility needs, exclusions, and special requests."
               ].join(" ")
           },
           ...historyOrCurrent
@@ -757,17 +764,21 @@ export function createAgentOrchestrator(options: {
             onDelta: async (delta) => {
               modelContent += delta;
               initialMode = detectInitialOutputMode(modelContent);
-              if (
-                initialMode === "text" &&
-                !shouldRecoverPlainItinerary({
-                  tools,
-                  userContent: input.userContent,
-                  modelContent
-                })
-              ) {
+              const isRecoveryCandidate = initialMode === "text" && shouldRecoverPlainItinerary({
+                tools,
+                userContent: input.userContent,
+                modelContent
+              });
+              if (initialMode === "text" && !isRecoveryCandidate) {
                 await options.agentService.recordRunEvent(run, {
                   type: "message.delta",
                   payload: { delta }
+                });
+              } else if (isRecoveryCandidate && !recoveryNotified) {
+                recoveryNotified = true;
+                await options.agentService.recordRunEvent(run, {
+                  type: "message.delta",
+                  payload: { delta: "\n\n_Drafting your itinerary..._" }
                 });
               }
             }
@@ -890,8 +901,12 @@ export function createAgentOrchestrator(options: {
             payload: { name: toolCall.name, code: details.code, message: details.message }
           });
 
-          // Degrade gracefully when web search provider is unavailable instead of failing the whole run.
-          if (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") {
+          // Degrade gracefully when external providers are unavailable instead of failing the whole run.
+          const isRecoverableToolFailure =
+            (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
+            (["search_google_places", "get_google_place_details", "estimate_route"].includes(toolCall.name) &&
+              (details.code === "MAPS_PROVIDER_UNAVAILABLE" || details.code === "AGENT_TOOL_LIMIT_REACHED"));
+          if (isRecoverableToolFailure) {
             toolResults.push({
               name: toolCall.name,
               output: {
@@ -981,6 +996,10 @@ export function createAgentOrchestrator(options: {
         });
       }
       await options.agentService.completeRun(run.id, synthesizedMessage);
+
+      } finally {
+        options.toolRegistry.clearRun?.(input.runId);
+      }
     }
   };
 }

@@ -319,11 +319,11 @@ export function createAgentService(options: {
       return result;
     },
 
-    async startRun(runId: string) {
+    async startRun(runId: string, startedAtOverride?: Date) {
       const run = await getRun(runId);
       assertRunOpen(run);
 
-      const startedAt = now();
+      const startedAt = startedAtOverride ?? now();
       const startedRun = await options.repository.startRun(runId, startedAt);
       if (startedRun) {
         await touchThread(startedRun.threadId);
