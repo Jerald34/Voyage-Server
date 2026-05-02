@@ -214,14 +214,17 @@ function normalizeCreateItineraryInput(input: unknown): StructuredItineraryInput
 
   const dayItems = Array.from({ length: durationDays }, (_, index) => {
     const mappedHighlight = highlights[index];
-    if (!mappedHighlight) {
-      return [];
-    }
+    const fallbackTitle = activityType
+      ? `${destinationTitle} ${toTitleCase(activityType)} Stop`
+      : `${destinationTitle} Planning Stop`;
+
     return [
       {
         type: "ACTIVITY" as const,
-        title: mappedHighlight.trim(),
-        description: `Suggested highlight for Day ${index + 1} in ${destinationTitle}.`
+        title: mappedHighlight?.trim() || fallbackTitle,
+        description: mappedHighlight
+          ? `Requested highlight for Day ${index + 1} in ${destinationTitle}.`
+          : `A flexible Day ${index + 1} activity in ${destinationTitle} based on the agency request.`
       }
     ];
   });

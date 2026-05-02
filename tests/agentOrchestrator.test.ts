@@ -434,6 +434,120 @@ describe("agent orchestrator", () => {
     });
   });
 
+  it("enriches weak create_itinerary shorthand from the user request before executing the tool", async () => {
+    const { service, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-olongapo" }, itinerary: { id: "itinerary-olongapo" } };
+          }
+        }
+      })
+    ]);
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Creating your Olongapo itinerary now.",
+      toolCalls: [
+        {
+          name: "create_itinerary",
+          input: {
+            destination: "Olongapo City"
+          }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([
+      modelOutput,
+      JSON.stringify({
+        trip: {
+          title: "1-Day Olongapo Nature And Restaurant Trip",
+          destinationSummary: "Olongapo City"
+        },
+        itinerary: {
+          title: "Olongapo City Nature And Restaurant Day",
+          summary: "A one-day Olongapo City plan customized around nature, dining, and a 10:00 AM to 4:00 PM window.",
+          days: [
+            {
+              dayNumber: 1,
+              title: "Nature And Dining",
+              items: [
+                {
+                  type: "ACTIVITY",
+                  title: "Nature walk near Subic Bay",
+                  startTime: "10:00 AM",
+                  endTime: "12:15 PM"
+                },
+                {
+                  type: "MEAL",
+                  title: "Local restaurant lunch",
+                  startTime: "12:30 PM",
+                  endTime: "1:45 PM"
+                },
+                {
+                  type: "ACTIVITY",
+                  title: "Scenic afternoon stop",
+                  startTime: "2:00 PM",
+                  endTime: "4:00 PM"
+                }
+              ]
+            }
+          ]
+        }
+      }),
+      "Your one-day Olongapo itinerary has been created."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry,
+      availableToolNames: ["create_itinerary"]
+    });
+
+    await orchestrator.run({
+      ...createRunInput(),
+      userContent: "Create a one-day nature and restaurant itinerary in Olongapo City from 10:00 AM to 4:00 PM."
+    });
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(createdInputs[0]).toMatchObject({
+      trip: {
+        destinationSummary: "Olongapo City"
+      },
+      itinerary: {
+        days: [
+          {
+            dayNumber: 1,
+            items: [
+              expect.objectContaining({
+                type: "ACTIVITY",
+                startTime: "10:00 AM"
+              }),
+              expect.objectContaining({
+                type: "MEAL"
+              }),
+              expect.objectContaining({
+                endTime: "4:00 PM"
+              })
+            ]
+          }
+        ]
+      }
+    });
+    expect(modelProvider.calls).toHaveLength(3);
+    expect(modelProvider.calls[1].messages).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("10:00 AM to 4:00 PM")
+        })
+      ])
+    );
+  });
+
   it("accepts location and highlights shorthand in create_itinerary payload", async () => {
     const { service, run } = createFakeAgentService();
     const createdInputs: unknown[] = [];
