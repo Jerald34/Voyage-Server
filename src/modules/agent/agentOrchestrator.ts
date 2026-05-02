@@ -59,36 +59,177 @@ type ParsedModelOutput =
       toolCalls: Array<{ name: string; input: Record<string, unknown> }>;
     };
 
+function splitTopLevelPairs(text: string) {
+  const pairs: string[] = [];
+  let current = "";
+  let depthCurly = 0;
+  let depthSquare = 0;
+  let inQuotes = false;
+  let quoteChar = "";
+
+  for (let i = 0; i < text.length; i += 1) {
+    const ch = text[i];
+    const prev = i > 0 ? text[i - 1] : "";
+    if ((ch === '"' || ch === "'") && prev !== "\\") {
+      if (!inQuotes) {
+        inQuotes = true;
+        quoteChar = ch;
+      } else if (quoteChar === ch) {
+        inQuotes = false;
+        quoteChar = "";
+      }
+    } else if (!inQuotes) {
+      if (ch === "{") depthCurly += 1;
+      if (ch === "}") depthCurly -= 1;
+      if (ch === "[") depthSquare += 1;
+      if (ch === "]") depthSquare -= 1;
+    }
+
+    if (ch === "," && !inQuotes && depthCurly === 0 && depthSquare === 0) {
+      if (current.trim()) {
+        pairs.push(current.trim());
+      }
+      current = "";
+      continue;
+    }
+
+    current += ch;
+  }
+
+  if (current.trim()) {
+    pairs.push(current.trim());
+  }
+
+  return pairs;
+}
+
+function parseLooseObject(text: string): Record<string, unknown> | null {
+  const trimmed = text.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
+    return null;
+  }
+
+  const payload = trimmed.slice(1, -1).trim();
+  if (!payload) {
+    return {};
+  }
+
+  const result: Record<string, unknown> = {};
+  const pairs = splitTopLevelPairs(payload);
+  for (const pair of pairs) {
+    const colonIndex = pair.indexOf(":");
+    if (colonIndex < 0) {
+      continue;
+    }
+    const rawKey = pair.slice(0, colonIndex);
+    const value = pair.slice(colonIndex + 1).trim();
+    const key = rawKey.trim().replace(/^['"]|['"]$/g, "");
+    if (!key) {
+      continue;
+    }
+    result[key] = parseLooseValue(value);
+  }
+  return result;
+}
+
+function parseLooseValue(value: string): unknown {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return "";
+  }
+  if (/^-?\d+(\.\d+)?$/.test(trimmed)) {
+    return Number(trimmed);
+  }
+  if (/^(true|false)$/i.test(trimmed)) {
+    return trimmed.toLowerCase() === "true";
+  }
+  if (trimmed === "null") {
+    return null;
+  }
+  if ((trimmed.startsWith('"') && trimmed.endsWith('"')) || (trimmed.startsWith("'") && trimmed.endsWith("'"))) {
+    return trimmed.slice(1, -1);
+  }
+  if (trimmed.startsWith("[") || trimmed.startsWith("{")) {
+    try {
+      return JSON.parse(trimmed);
+    } catch {
+      if (trimmed.startsWith("{")) {
+        const looseObject = parseLooseObject(trimmed);
+        if (looseObject) {
+          return looseObject;
+        }
+      }
+      return trimmed;
+    }
+  }
+  return trimmed;
+}
+
+function canonicalToolName(name: string) {
+  const normalized = name.trim().toLowerCase().replace(/[\s\-]+/g, "_");
+  const aliases: Record<string, string> = {
+    createitinerary: "create_itinerary",
+    updateitinerary: "update_itinerary",
+    recordagenttask: "record_agent_task",
+    websearch: "web_search",
+    searchgoogleplaces: "search_google_places",
+    getgoogleplacedetails: "get_google_place_details",
+    estimateroute: "estimate_route"
+  };
+  return aliases[normalized] ?? normalized;
+}
+
 function isLikelyJson(content: string) {
   const trimmed = content.trim();
-  return trimmed.startsWith("{") || trimmed.startsWith("[");
+  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>");
 }
 
 function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
   const trimmed = content.trim();
-  const match = trimmed.match(/^<\|toolcall\|>\s*call:([a-zA-Z0-9_]+)\{([^}]*)\}<tool_call\|>$/);
-  if (!match) {
+  if (!trimmed.startsWith("<|toolcall|>")) {
+    return null;
+  }
+  const callPrefixMatch = trimmed.match(/^<\|toolcall\|>\s*call:([a-zA-Z0-9_]+)/);
+  if (!callPrefixMatch) {
     return null;
   }
 
-  const toolName = match[1];
-  const inputPayload = match[2].trim();
-  const parsedInput: Record<string, unknown> = {};
-  if (inputPayload) {
-    for (const pair of inputPayload.split(",")) {
-      const [rawKey, ...valueParts] = pair.split(":");
-      const key = (rawKey ?? "").trim();
-      const value = valueParts.join(":").trim();
-      if (key) {
-        parsedInput[key] = value;
-      }
+  const toolName = canonicalToolName(callPrefixMatch[1]);
+  const toolNameEnd = callPrefixMatch[0].length;
+  const objectStart = trimmed.indexOf("{", toolNameEnd);
+  const tailMarker = "<tool_call|>";
+  const tailIndex = trimmed.lastIndexOf(tailMarker);
+  if (objectStart < 0 || tailIndex < 0 || tailIndex <= objectStart) {
+    return null;
+  }
+
+  const objectText = trimmed.slice(objectStart, tailIndex).trim();
+  if (!objectText.startsWith("{") || !objectText.endsWith("}")) {
+    return null;
+  }
+
+  let braceDepth = 0;
+  for (const ch of objectText) {
+    if (ch === "{") braceDepth += 1;
+    if (ch === "}") braceDepth -= 1;
+    if (braceDepth < 0) {
+      return null;
     }
   }
+  if (braceDepth !== 0) {
+    return null;
+  }
+
+  const parsedInput = parseLooseObject(objectText) ?? {};
+  const unwrappedInput =
+    "input" in parsedInput && typeof parsedInput.input === "object" && parsedInput.input !== null
+      ? (parsedInput.input as Record<string, unknown>)
+      : parsedInput;
 
   return {
     type: "json",
     assistantMessage: "Working on that now.",
-    toolCalls: [{ name: toolName, input: parsedInput }]
+    toolCalls: [{ name: toolName, input: unwrappedInput }]
   };
 }
 
@@ -137,6 +278,30 @@ function stringifyToolResults(toolResults: Array<{ name: string; output: unknown
   return `${text.slice(0, 11997)}...`;
 }
 
+function availableToolSet(toolNames: string[]) {
+  return new Set(toolNames.map((name) => canonicalToolName(name)));
+}
+
+function looksLikeItineraryText(content: string) {
+  return /\bitinerary\b/i.test(content) || /\bday\s+\d+\b/i.test(content) || /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(content);
+}
+
+function looksLikeTripPlanningRequest(content: string) {
+  return /\b(itinerary|trip|travel|tour|plan|draft)\b/i.test(content);
+}
+
+function shouldRecoverPlainItinerary(options: {
+  tools: Set<string>;
+  userContent: string;
+  modelContent: string;
+}) {
+  return (
+    options.tools.has("create_itinerary") &&
+    looksLikeItineraryText(options.modelContent) &&
+    (looksLikeTripPlanningRequest(options.userContent) || looksLikeItineraryText(options.userContent))
+  );
+}
+
 async function streamModelCompletion(options: {
   modelProvider: ModelProvider;
   input: { messages: Array<{ role: "system" | "user" | "assistant"; content: string }>; temperature?: number };
@@ -163,7 +328,44 @@ function detectInitialOutputMode(content: string) {
   if (!trimmed) {
     return "text" as const;
   }
-  return trimmed.startsWith("{") || trimmed.startsWith("[") ? ("json" as const) : ("text" as const);
+  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>")
+    ? ("json" as const)
+    : ("text" as const);
+}
+
+async function recoverPlainItineraryToolOutput(options: {
+  modelProvider: ModelProvider;
+  userContent: string;
+  assistantContent: string;
+}) {
+  const recovery = await options.modelProvider.complete({
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content:
+          [
+            "Convert the assistant itinerary prose into a create_itinerary tool call.",
+            "Return ONLY strict JSON with this exact shape:",
+            '{"assistantMessage":"string","toolCalls":[{"name":"create_itinerary","input":{"trip":{"title":"string","destinationSummary":"string"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string","endTime":"string"}]}]}}}]}',
+            "Use only these item types: ACTIVITY, MEAL, TRANSFER, CHECK_IN, CHECK_OUT, FREE_TIME, NOTE.",
+            "Preserve concrete times, locations, meals, activities, and day structure from the prose.",
+            "Do not add web-search claims or external-source claims."
+          ].join(" ")
+      },
+      {
+        role: "user",
+        content: `Original user request:\n${options.userContent}`
+      },
+      {
+        role: "assistant",
+        content: options.assistantContent
+      }
+    ]
+  });
+
+  const parsed = parseModelOutput(recovery.content);
+  return parsed.type === "json" && parsed.toolCalls.length > 0 ? parsed : null;
 }
 
 export function createAgentOrchestrator(options: {
@@ -178,6 +380,7 @@ export function createAgentOrchestrator(options: {
   const maxToolCallsPerRun = options.maxToolCallsPerRun ?? 20;
   const historyMessageLimit = 30;
   const availableToolNames = options.availableToolNames ?? [];
+  const tools = availableToolSet(availableToolNames);
   const toolListForPrompt = availableToolNames.length > 0 ? availableToolNames.join(", ") : "(none)";
 
   async function failRun(input: AgentOrchestratorRunInput, error: unknown) {
@@ -245,7 +448,9 @@ export function createAgentOrchestrator(options: {
                 '{"assistantMessage":"string","toolCalls":[{"name":"tool_name","input":{"key":"value"}}]}',
                 "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
                 "Never invent tool names not in the available tools list.",
-                "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call."
+                "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call.",
+                "For trip planning requests, call create_itinerary (or update_itinerary if revising an existing draft) before writing a final narrative.",
+                "Use snake_case tool names exactly as listed in Available tools."
               ].join(" ")
           },
           ...historyOrCurrent
@@ -260,7 +465,14 @@ export function createAgentOrchestrator(options: {
             onDelta: async (delta) => {
               modelContent += delta;
               initialMode = detectInitialOutputMode(modelContent);
-              if (initialMode === "text") {
+              if (
+                initialMode === "text" &&
+                !shouldRecoverPlainItinerary({
+                  tools,
+                  userContent: input.userContent,
+                  modelContent
+                })
+              ) {
                 await options.agentService.recordRunEvent(run, {
                   type: "message.delta",
                   payload: { delta }
@@ -286,17 +498,39 @@ export function createAgentOrchestrator(options: {
         return;
       }
 
+      let parsedOutput: ReturnType<typeof parseModelOutput> | null = null;
       if (initialMode === "text") {
-        await options.agentService.completeRun(run.id, modelContent);
-        return;
+        if (
+          shouldRecoverPlainItinerary({
+            tools,
+            userContent: input.userContent,
+            modelContent
+          })
+        ) {
+          try {
+            parsedOutput = await recoverPlainItineraryToolOutput({
+              modelProvider: options.modelProvider,
+              userContent: input.userContent,
+              assistantContent: modelContent
+            });
+          } catch {
+            parsedOutput = null;
+          }
+        }
+
+        if (!parsedOutput) {
+          await streamAndComplete(run, modelContent);
+          return;
+        }
       }
 
-      let parsedOutput: ReturnType<typeof parseModelOutput>;
-      try {
-        parsedOutput = parseModelOutput(modelContent);
-      } catch (error) {
-        await failRun(input, error);
-        return;
+      if (!parsedOutput) {
+        try {
+          parsedOutput = parseModelOutput(modelContent);
+        } catch (error) {
+          await failRun(input, error);
+          return;
+        }
       }
 
       if (parsedOutput.type === "text") {

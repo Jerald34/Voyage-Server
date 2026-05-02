@@ -501,6 +501,178 @@ describe("agent orchestrator", () => {
     });
   });
 
+  it("converts plain itinerary prose into a draft itinerary tool call", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-prose" }, itinerary: { id: "itinerary-prose" } };
+          }
+        }
+      })
+    ]);
+    const proseItinerary = [
+      "**Olongapo City Nature & Dining Itinerary Plan**",
+      "Morning (10:00 AM - 12:30 PM): Nature Experience",
+      "- Activity: Visit Subic Bay Freeport Zone for beach, hiking, and scenic nature options.",
+      "Lunch (12:30 PM - 1:30 PM): Dining Experience",
+      "- Activity: Eat at a restaurant within or near the Subic Bay Freeport Zone."
+    ].join("\n");
+    const modelProvider = createModelProvider([
+      proseItinerary,
+      JSON.stringify({
+        assistantMessage: "Creating the Olongapo draft itinerary now.",
+        toolCalls: [
+          {
+            name: "create_itinerary",
+            input: {
+              trip: { title: "Olongapo City Nature & Dining Trip", destinationSummary: "Olongapo City" },
+              itinerary: {
+                title: "Olongapo City Nature & Dining Itinerary Plan",
+                summary: "A 1-day nature and dining itinerary in Olongapo City.",
+                days: [
+                  {
+                    dayNumber: 1,
+                    title: "Nature And Dining",
+                    items: [
+                      {
+                        type: "ACTIVITY",
+                        title: "Subic Bay Freeport Zone nature experience",
+                        startTime: "10:00 AM",
+                        endTime: "12:30 PM"
+                      },
+                      {
+                        type: "MEAL",
+                        title: "Dining near Subic Bay Freeport Zone",
+                        startTime: "12:30 PM",
+                        endTime: "1:30 PM"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        ]
+      }),
+      "Your Olongapo City draft itinerary has been created."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry,
+      availableToolNames: ["create_itinerary"]
+    });
+
+    await orchestrator.run({
+      ...createRunInput(),
+      userContent: "Create a proper itinerary plan for Olongapo City from 10am to 4pm."
+    });
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(modelProvider.calls).toHaveLength(3);
+    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain(proseItinerary);
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "itinerary.updated",
+      "tool.completed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
+    expect(events[2]).toMatchObject({
+      type: "itinerary.updated",
+      payload: { itineraryId: "itinerary-prose", change: "created" }
+    });
+  });
+
+  it("parses and executes <|toolcall|> tagged create_itinerary output", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-tag" }, itinerary: { id: "itinerary-tag" } };
+          }
+        }
+      })
+    ]);
+    const taggedOutput =
+      '<|toolcall|>call:create_itinerary{destination:"Osaka",duration_days:3,activity_type:"adventure"}<tool_call|>';
+    const modelProvider = createModelProvider([taggedOutput, "Draft created from tagged tool output."]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "itinerary.updated",
+      "tool.completed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
+  });
+
+  it("parses aliased tagged tool call with wrapped input object", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-tag-2" }, itinerary: { id: "itinerary-tag-2" } };
+          }
+        }
+      })
+    ]);
+    const taggedOutput =
+      '<|toolcall|>call:createitinerary{input:{location:"Hokkaido, Japan",duration_days:3,activity_type:"adventure"}}<tool_call|>';
+    const modelProvider = createModelProvider([taggedOutput, "Draft created from wrapped tagged tool output."]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(createdInputs[0]).toMatchObject({
+      trip: {
+        destinationSummary: "Hokkaido, Japan"
+      }
+    });
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "itinerary.updated",
+      "tool.completed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
+  });
+
   it("uses tool output in the second model pass before completing", async () => {
     const { service, events } = createFakeAgentService();
     const modelOutput = JSON.stringify({
