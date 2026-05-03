@@ -283,6 +283,7 @@ agentRoutes.get("/threads/:threadId", async (request, response, next) => {
 });
 
 agentRoutes.post("/threads/:threadId/messages", async (request, response, next) => {
+  console.log(`[Agent Route] POST /threads/${request.params.threadId}/messages hit`);
   try {
     const agencyId = getAgencyId(request);
     const threadId = String(request.params.threadId);

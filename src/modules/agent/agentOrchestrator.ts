@@ -3,6 +3,7 @@ import { ApiError } from "../../http/errors";
 import type { ModelProvider } from "../../services/modelProvider";
 import { structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
 import type { AgentRunEventRecord, AgentRunRecord, AgentMessageRecord } from "./agentService";
+import { agentLogger } from "./agentLogger";
 import type { AgentEvent } from "./agentSchemas";
 import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
 
@@ -51,14 +52,14 @@ const modelJsonOutputSchema = z.object({
 
 type ParsedModelOutput =
   | {
-      type: "text";
-      assistantMessage: string;
-    }
+    type: "text";
+    assistantMessage: string;
+  }
   | {
-      type: "json";
-      assistantMessage: string;
-      toolCalls: Array<{ name: string; input: Record<string, unknown> }>;
-    };
+    type: "json";
+    assistantMessage: string;
+    toolCalls: Array<{ name: string; input: Record<string, unknown> }>;
+  };
 
 function splitTopLevelPairs(text: string) {
   const pairs: string[] = [];
@@ -509,7 +510,6 @@ async function customizeCreateItineraryInput(options: {
               "Convert the agency staff request into one fully customized create_itinerary input.",
               "Return ONLY strict JSON with this exact top-level shape:",
               '{"trip":{"title":"string","destinationSummary":"string","clientName":"string optional","startDate":"date optional","endDate":"date optional","travelerCount":1,"budgetLevel":"string optional"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","summary":"string optional","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string optional","endTime":"string optional","staffNotes":"string optional","clientNotes":"string optional"}]}]}}',
-              "Allowed item types: ACTIVITY, MEAL, TRANSFER, CHECK_IN, CHECK_OUT, FREE_TIME, NOTE.",
               "Preserve every explicit user constraint: destination, dates, day count, start/end times, pace, budget, traveler count, interests, meals, accessibility, exclusions, must-see places, and special requests.",
               "The original user request overrides conflicting weak tool input values such as default duration_days.",
               "Do not invent live availability, prices, ratings, named sources, or map distances.",
@@ -670,6 +670,7 @@ export function createAgentOrchestrator(options: {
 
   async function failRun(input: AgentOrchestratorRunInput, error: unknown) {
     const details = errorDetails(error);
+    agentLogger.error("Agent Run Failed", input.runId, { code: details.code, message: details.message, error });
     await options.agentService.failRun(input.runId, details.code, details.message);
   }
 
@@ -683,319 +684,324 @@ export function createAgentOrchestrator(options: {
 
   return {
     async run(input) {
+      agentLogger.debug(input.runId, `Starting run for thread ${input.threadId}`);
       const run = await options.agentService.startRun(input.runId, now());
       try {
 
-      await options.agentService.recordRunEvent(run, {
-        type: "run.started",
-        payload: { runId: input.runId }
-      });
+        await options.agentService.recordRunEvent(run, {
+          type: "run.started",
+          payload: { runId: input.runId }
+        });
 
-      let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
-      try {
-        const thread = await options.agentService.getThread(input.agencyId, input.threadId);
-        const recentMessages = thread.messages.slice(-historyMessageLimit);
-        conversationHistory = recentMessages
-          .map((message) => {
-            if (message.role === "USER") {
-              return { role: "user" as const, content: message.content };
-            }
-            if (message.role === "ASSISTANT") {
-              return { role: "assistant" as const, content: message.content };
-            }
-            return { role: "system" as const, content: message.content };
-          })
-          .filter((message) => message.content.trim().length > 0);
-      } catch {
-        // If history lookup fails, continue with the current message only.
-      }
+        let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
+        try {
+          const thread = await options.agentService.getThread(input.agencyId, input.threadId);
+          const recentMessages = thread.messages.slice(-historyMessageLimit);
+          conversationHistory = recentMessages
+            .map((message) => {
+              if (message.role === "USER") {
+                return { role: "user" as const, content: message.content };
+              }
+              if (message.role === "ASSISTANT") {
+                return { role: "assistant" as const, content: message.content };
+              }
+              return { role: "system" as const, content: message.content };
+            })
+            .filter((message) => message.content.trim().length > 0);
+        } catch {
+          // If history lookup fails, continue with the current message only.
+        }
 
-      let modelContent = "";
-      let initialMode: "text" | "json" = "text";
-      let recoveryNotified = false;
-      try {
-        const historyOrCurrent =
-          conversationHistory.length > 0
-            ? conversationHistory
-            : [
+        let modelContent = "";
+        let initialMode: "text" | "json" = "text";
+        let recoveryNotified = false;
+        try {
+          const historyOrCurrent =
+            conversationHistory.length > 0
+              ? conversationHistory
+              : [
                 {
                   role: "user" as const,
                   content: input.userContent
                 }
               ];
 
-        const initialMessages = [
-          {
-            role: "system" as const,
-            content:
-              [
-                "You are an agency itinerary planning assistant.",
-                `Available tools: ${toolListForPrompt}.`,
-                "",
-                "## Tool Response Format",
-                "When tools are needed, return ONLY strict JSON: {\"assistantMessage\":\"string\",\"toolCalls\":[{\"name\":\"tool_name\",\"input\":{...}}]}",
-                "When no tools are needed, respond with plain text only.",
-                "",
-                "## create_itinerary Input Schema",
-                'create_itinerary input MUST be: {"trip":{"title":"string required","destinationSummary":"string","clientName":"string","startDate":"ISO date","endDate":"ISO date","travelerCount":"number","budgetLevel":"string"},"itinerary":{"title":"string required","summary":"string","days":[{"dayNumber":"number required","title":"string required","summary":"string","items":[{"type":"ACTIVITY|MEAL|TRANSFER|CHECK_IN|CHECK_OUT|FREE_TIME|NOTE required","title":"string required","description":"string","startTime":"HH:MM AM/PM","endTime":"HH:MM AM/PM","staffNotes":"string","clientNotes":"string"}]}]}}',
-                "",
-                "## update_itinerary Input Schema",
-                'update_itinerary input MUST be: {"itineraryId":"string required","itinerary":{same shape as create_itinerary.itinerary above}}',
-                "",
-                "## Rules",
-                "Use snake_case tool names exactly as listed in Available tools.",
-                "Never invent tool names not in the available tools list.",
-                "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
-                "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call.",
-                "For trip planning requests, always call create_itinerary with a fully populated input including concrete day titles, item titles, and descriptions.",
-                "Never send placeholder or skeleton items — every day and item must have concrete titles and descriptions relevant to the destination.",
-                "Preserve user constraints: destination, day count, dates, start/end times, pace, budget, traveler count, interests, meals, accessibility needs, exclusions, and special requests."
-              ].join(" ")
-          },
-          ...historyOrCurrent
-        ];
-        if (options.modelProvider.completeStream) {
-          const streamed = await streamModelCompletion({
-            modelProvider: options.modelProvider,
-            input: {
+          const initialMessages = [
+            {
+              role: "system" as const,
+              content:
+                [
+                  "You are an agency itinerary planning assistant.",
+                  `Available tools: ${toolListForPrompt}.`,
+                  "",
+                  "## Tool Response Format",
+                  "When tools are needed, return ONLY strict JSON: {\"assistantMessage\":\"string\",\"toolCalls\":[{\"name\":\"tool_name\",\"input\":{...}}]}",
+                  "When no tools are needed, respond with plain text only.",
+                  "",
+                  "## create_itinerary Input Schema",
+                  'create_itinerary input MUST be: {"trip":{"title":"string","destinationSummary":"string","clientName":"string optional","startDate":"date optional","endDate":"date optional","travelerCount":1,"budgetLevel":"string optional"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","summary":"string optional","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string optional","endTime":"string optional","staffNotes":"string optional","clientNotes":"string optional"}]}]}}',
+                  "",
+                  "## update_itinerary Input Schema",
+                  'update_itinerary input MUST be: {"itineraryId":"string required","itinerary":{same shape as create_itinerary.itinerary above}}',
+                  "",
+                  "## Rules",
+                  "Use snake_case tool names exactly as listed in Available tools.",
+                  "Never invent tool names not in the available tools list.",
+                  "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
+                  "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call.",
+                  "For trip planning requests, always call create_itinerary with a fully populated input including concrete day titles, item titles, and descriptions.",
+                  "Never send placeholder or skeleton items — every day and item must have concrete titles and descriptions relevant to the destination.",
+                  "Preserve user constraints: destination, day count, dates, start/end times, pace, budget, traveler count, interests, meals, accessibility needs, exclusions, and special requests."
+                ].join(" ")
+            },
+            ...historyOrCurrent
+          ];
+          if (options.modelProvider.completeStream) {
+            const streamed = await streamModelCompletion({
+              modelProvider: options.modelProvider,
+              input: {
+                messages: initialMessages,
+                temperature: 0.2
+              },
+              onDelta: async (delta) => {
+                modelContent += delta;
+                initialMode = detectInitialOutputMode(modelContent);
+                const isRecoveryCandidate = initialMode === "text" && shouldRecoverPlainItinerary({
+                  tools,
+                  userContent: input.userContent,
+                  modelContent
+                });
+                if (initialMode === "text" && !isRecoveryCandidate) {
+                  await options.agentService.recordRunEvent(run, {
+                    type: "message.delta",
+                    payload: { delta }
+                  });
+                } else if (isRecoveryCandidate && !recoveryNotified) {
+                  recoveryNotified = true;
+                  await options.agentService.recordRunEvent(run, {
+                    type: "message.delta",
+                    payload: { delta: "\n\n_Drafting your itinerary..._" }
+                  });
+                }
+              }
+            });
+
+            if (typeof streamed === "string") {
+              modelContent = streamed;
+              initialMode = detectInitialOutputMode(modelContent);
+            }
+          } else {
+            const modelResult = await options.modelProvider.complete({
               messages: initialMessages,
               temperature: 0.2
-            },
-            onDelta: async (delta) => {
-              modelContent += delta;
-              initialMode = detectInitialOutputMode(modelContent);
-              const isRecoveryCandidate = initialMode === "text" && shouldRecoverPlainItinerary({
-                tools,
-                userContent: input.userContent,
-                modelContent
-              });
-              if (initialMode === "text" && !isRecoveryCandidate) {
-                await options.agentService.recordRunEvent(run, {
-                  type: "message.delta",
-                  payload: { delta }
-                });
-              } else if (isRecoveryCandidate && !recoveryNotified) {
-                recoveryNotified = true;
-                await options.agentService.recordRunEvent(run, {
-                  type: "message.delta",
-                  payload: { delta: "\n\n_Drafting your itinerary..._" }
-                });
-              }
-            }
-          });
-
-          if (typeof streamed === "string") {
-            modelContent = streamed;
+            });
+            modelContent = modelResult.content;
             initialMode = detectInitialOutputMode(modelContent);
           }
-        } else {
-          const modelResult = await options.modelProvider.complete({
-            messages: initialMessages,
-            temperature: 0.2
-          });
-          modelContent = modelResult.content;
-          initialMode = detectInitialOutputMode(modelContent);
-        }
-      } catch (error) {
-        await failRun(input, error);
-        return;
-      }
 
-      let parsedOutput: ReturnType<typeof parseModelOutput> | null = null;
-      if (initialMode === "text") {
-        if (
-          shouldRecoverPlainItinerary({
-            tools,
-            userContent: input.userContent,
-            modelContent
-          })
-        ) {
-          try {
-            parsedOutput = await recoverPlainItineraryToolOutput({
-              modelProvider: options.modelProvider,
+          agentLogger.modelOutput(input.runId, modelContent);
+        } catch (error) {
+          await failRun(input, error);
+          return;
+        }
+
+        let parsedOutput: ReturnType<typeof parseModelOutput> | null = null;
+        if (initialMode === "text") {
+          if (
+            shouldRecoverPlainItinerary({
+              tools,
               userContent: input.userContent,
-              assistantContent: modelContent
-            });
-          } catch {
-            parsedOutput = null;
+              modelContent
+            })
+          ) {
+            try {
+              parsedOutput = await recoverPlainItineraryToolOutput({
+                modelProvider: options.modelProvider,
+                userContent: input.userContent,
+                assistantContent: modelContent
+              });
+            } catch {
+              parsedOutput = null;
+            }
+          }
+
+          if (!parsedOutput) {
+            await streamAndComplete(run, modelContent);
+            return;
           }
         }
 
         if (!parsedOutput) {
-          await streamAndComplete(run, modelContent);
+          try {
+            parsedOutput = parseModelOutput(modelContent);
+          } catch (error) {
+            if (
+              shouldCreateItineraryDirectlyFromUserRequest({
+                tools,
+                userContent: input.userContent
+              })
+            ) {
+              parsedOutput = createItineraryToolCallFromUserRequest(input.userContent);
+            }
+
+            if (!parsedOutput) {
+              await failRun(input, error);
+              return;
+            }
+          }
+        }
+
+        if (parsedOutput.type === "text") {
+          await streamAndComplete(run, parsedOutput.assistantMessage);
           return;
         }
-      }
 
-      if (!parsedOutput) {
-        try {
-          parsedOutput = parseModelOutput(modelContent);
-        } catch (error) {
-          if (
-            shouldCreateItineraryDirectlyFromUserRequest({
-              tools,
-              userContent: input.userContent
-            })
-          ) {
-            parsedOutput = createItineraryToolCallFromUserRequest(input.userContent);
+        const context: AgentToolContext = {
+          agencyId: input.agencyId,
+          threadId: input.threadId,
+          runId: input.runId,
+          userId: input.userId
+        };
+
+        let toolCallsExecuted = 0;
+        const toolResults: Array<{ name: string; output: unknown }> = [];
+        for (const toolCall of parsedOutput.toolCalls) {
+          if (toolCallsExecuted >= maxToolCallsPerRun) {
+            await failRun(input, new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached."));
+            return;
           }
 
-          if (!parsedOutput) {
+          const startedAt = now();
+          const toolInput = await enrichToolInputFromUserRequestForExecution({
+            modelProvider: options.modelProvider,
+            toolName: toolCall.name,
+            input: toolCall.input,
+            userContent: input.userContent
+          });
+          const persistedToolCall = await options.agentService.recordToolCallStarted(
+            run,
+            { toolName: toolCall.name, input: toolInput },
+            startedAt
+          );
+          await options.agentService.recordRunEvent(run, {
+            type: "tool.started",
+            payload: { name: toolCall.name, input: toolInput }
+          });
+          toolCallsExecuted += 1;
+
+          try {
+            const output = await options.toolRegistry.execute(toolCall.name, context, toolInput);
+            toolResults.push({ name: toolCall.name, output });
+            await options.agentService.completeToolCall(persistedToolCall.id, output, now());
+            await options.agentService.recordRunEvent(run, {
+              type: "tool.completed",
+              payload: { name: toolCall.name, output }
+            });
+          } catch (error) {
+            const details = errorDetails(error);
+            await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
+            await options.agentService.recordRunEvent(run, {
+              type: "tool.failed",
+              payload: { name: toolCall.name, code: details.code, message: details.message }
+            });
+
+            // Degrade gracefully when external providers are unavailable instead of failing the whole run.
+            const isRecoverableToolFailure =
+              (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
+              (["search_google_places", "get_google_place_details", "estimate_route"].includes(toolCall.name) &&
+                (details.code === "MAPS_PROVIDER_UNAVAILABLE" || details.code === "AGENT_TOOL_LIMIT_REACHED"));
+            if (isRecoverableToolFailure) {
+              toolResults.push({
+                name: toolCall.name,
+                output: {
+                  unavailable: true,
+                  code: details.code,
+                  message: details.message
+                }
+              });
+              continue;
+            }
+
             await failRun(input, error);
             return;
           }
         }
-      }
 
-      if (parsedOutput.type === "text") {
-        await streamAndComplete(run, parsedOutput.assistantMessage);
-        return;
-      }
-
-      const context: AgentToolContext = {
-        agencyId: input.agencyId,
-        threadId: input.threadId,
-        runId: input.runId,
-        userId: input.userId
-      };
-
-      let toolCallsExecuted = 0;
-      const toolResults: Array<{ name: string; output: unknown }> = [];
-      for (const toolCall of parsedOutput.toolCalls) {
-        if (toolCallsExecuted >= maxToolCallsPerRun) {
-          await failRun(input, new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached."));
+        if (toolResults.length === 0) {
+          await streamAndComplete(run, parsedOutput.assistantMessage);
           return;
         }
 
-        const startedAt = now();
-        const toolInput = await enrichToolInputFromUserRequestForExecution({
-          modelProvider: options.modelProvider,
-          toolName: toolCall.name,
-          input: toolCall.input,
-          userContent: input.userContent
-        });
-        const persistedToolCall = await options.agentService.recordToolCallStarted(
-          run,
-          { toolName: toolCall.name, input: toolInput },
-          startedAt
-        );
-        await options.agentService.recordRunEvent(run, {
-          type: "tool.started",
-          payload: { name: toolCall.name, input: toolInput }
-        });
-        toolCallsExecuted += 1;
-
+        let synthesizedMessage = parsedOutput.assistantMessage;
         try {
-          const output = await options.toolRegistry.execute(toolCall.name, context, toolInput);
-          toolResults.push({ name: toolCall.name, output });
-          await options.agentService.completeToolCall(persistedToolCall.id, output, now());
-          await options.agentService.recordRunEvent(run, {
-            type: "tool.completed",
-            payload: { name: toolCall.name, output }
-          });
-        } catch (error) {
-          const details = errorDetails(error);
-          await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
-          await options.agentService.recordRunEvent(run, {
-            type: "tool.failed",
-            payload: { name: toolCall.name, code: details.code, message: details.message }
-          });
+          const synthesisMessages = [
+            {
+              role: "system" as const,
+              content:
+                [
+                  "You are an agency itinerary planning assistant.",
+                  "Write the final assistant response for agency staff using ONLY the provided tool results.",
+                  "Prioritize concrete create_itinerary or update_itinerary outcomes, including itinerary titles, days, item titles, and start/end times when available.",
+                  "If create_itinerary or update_itinerary succeeded, clearly state that the itinerary draft was created or updated.",
+                  "Do not say you cannot provide a detailed itinerary when itinerary tool results include itinerary days or items; missing web_search evidence is only a caveat, not a blocker.",
+                  "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",
+                  "Do not fabricate named sources, pages, routes, prices, schedules, or provider findings.",
+                  "Return plain assistant text only."
+                ].join(" ")
+            },
+            {
+              role: "user" as const,
+              content: input.userContent
+            },
+            {
+              role: "assistant" as const,
+              content: parsedOutput.assistantMessage
+            },
+            {
+              role: "user" as const,
+              content: `Tool results JSON:\n${stringifyToolResults(toolResults)}`
+            }
+          ];
 
-          // Degrade gracefully when external providers are unavailable instead of failing the whole run.
-          const isRecoverableToolFailure =
-            (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
-            (["search_google_places", "get_google_place_details", "estimate_route"].includes(toolCall.name) &&
-              (details.code === "MAPS_PROVIDER_UNAVAILABLE" || details.code === "AGENT_TOOL_LIMIT_REACHED"));
-          if (isRecoverableToolFailure) {
-            toolResults.push({
-              name: toolCall.name,
-              output: {
-                unavailable: true,
-                code: details.code,
-                message: details.message
+          if (options.modelProvider.completeStream) {
+            synthesizedMessage = "";
+            const streamed = await streamModelCompletion({
+              modelProvider: options.modelProvider,
+              input: {
+                messages: synthesisMessages,
+                temperature: 0.2
+              },
+              onDelta: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "message.delta",
+                  payload: { delta }
+                });
               }
             });
-            continue;
-          }
 
-          await failRun(input, error);
-          return;
-        }
-      }
-
-      if (toolResults.length === 0) {
-        await streamAndComplete(run, parsedOutput.assistantMessage);
-        return;
-      }
-
-      let synthesizedMessage = parsedOutput.assistantMessage;
-      try {
-        const synthesisMessages = [
-          {
-            role: "system" as const,
-            content:
-              [
-                "You are an agency itinerary planning assistant.",
-                "Write the final assistant response for agency staff using ONLY the provided tool results.",
-                "Prioritize concrete create_itinerary or update_itinerary outcomes, including itinerary titles, days, item titles, and start/end times when available.",
-                "If create_itinerary or update_itinerary succeeded, clearly state that the itinerary draft was created or updated.",
-                "Do not say you cannot provide a detailed itinerary when itinerary tool results include itinerary days or items; missing web_search evidence is only a caveat, not a blocker.",
-                "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",
-                "Do not fabricate named sources, pages, routes, prices, schedules, or provider findings.",
-                "Return plain assistant text only."
-              ].join(" ")
-          },
-          {
-            role: "user" as const,
-            content: input.userContent
-          },
-          {
-            role: "assistant" as const,
-            content: parsedOutput.assistantMessage
-          },
-          {
-            role: "user" as const,
-            content: `Tool results JSON:\n${stringifyToolResults(toolResults)}`
-          }
-        ];
-
-        if (options.modelProvider.completeStream) {
-          synthesizedMessage = "";
-          const streamed = await streamModelCompletion({
-            modelProvider: options.modelProvider,
-            input: {
+            if (typeof streamed === "string") {
+              synthesizedMessage = streamed.trim() || parsedOutput.assistantMessage;
+            }
+          } else {
+            const synthesis = await options.modelProvider.complete({
               messages: synthesisMessages,
               temperature: 0.2
-            },
-            onDelta: async (delta) => {
-              await options.agentService.recordRunEvent(run, {
-                type: "message.delta",
-                payload: { delta }
-              });
-            }
-          });
-
-          if (typeof streamed === "string") {
-            synthesizedMessage = streamed.trim() || parsedOutput.assistantMessage;
+            });
+            synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
           }
-        } else {
-          const synthesis = await options.modelProvider.complete({
-            messages: synthesisMessages,
-            temperature: 0.2
-          });
-          synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
+          agentLogger.synthesisOutput(input.runId, synthesizedMessage);
+        } catch {
+          synthesizedMessage = parsedOutput.assistantMessage;
+          agentLogger.error("Synthesis Failed", input.runId, "Falling back to assistant message.");
         }
-      } catch {
-        synthesizedMessage = parsedOutput.assistantMessage;
-      }
 
-      if (!options.modelProvider.completeStream) {
-        await options.agentService.recordRunEvent(run, {
-          type: "message.delta",
-          payload: { delta: synthesizedMessage }
-        });
-      }
-      await options.agentService.completeRun(run.id, synthesizedMessage);
+        if (!options.modelProvider.completeStream) {
+          await options.agentService.recordRunEvent(run, {
+            type: "message.delta",
+            payload: { delta: synthesizedMessage }
+          });
+        }
+        await options.agentService.completeRun(run.id, synthesizedMessage);
 
       } finally {
         options.toolRegistry.clearRun?.(input.runId);

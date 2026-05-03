@@ -2,6 +2,7 @@ import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { publishAgentRunEvent } from "./agentEvents";
+import { agentLogger } from "./agentLogger";
 import { agentEventSchema, createMessageSchema, createThreadSchema, type AgentEvent } from "./agentSchemas";
 
 export type AgentThreadStatus = "ACTIVE" | "ARCHIVED";
@@ -358,6 +359,7 @@ export function createAgentService(options: {
     },
 
     async recordToolCallStarted(run: AgentRunRecord, input: AgentToolCallInput, startedAt = now()) {
+      agentLogger.toolStart(input.toolName, input.input);
       const toolCall = await options.repository.createToolCall({
         runId: run.id,
         threadId: run.threadId,
@@ -371,12 +373,14 @@ export function createAgentService(options: {
     },
 
     async completeToolCall(toolCallId: string, output: unknown, completedAt = now()) {
+      const summary = summarizeValue(output);
       const toolCall = await options.repository.updateToolCall(toolCallId, {
         status: "COMPLETED",
-        outputSummary: summarizeValue(output),
+        outputSummary: summary,
         completedAt
       });
       if (toolCall) {
+        agentLogger.toolSuccess(toolCallId, toolCall.toolName, summary);
         await touchThread(toolCall.threadId);
       }
       return toolCall;
@@ -390,6 +394,7 @@ export function createAgentService(options: {
         completedAt
       });
       if (toolCall) {
+        agentLogger.toolFail(toolCallId, toolCall.toolName, code, message);
         await touchThread(toolCall.threadId);
       }
       return toolCall;
@@ -425,6 +430,7 @@ export function createAgentService(options: {
     },
 
     async completeRun(runId: string, assistantContent: string) {
+      agentLogger.agentResponse(runId, assistantContent);
       const run = await getRun(runId);
       assertRunOpen(run);
       const completedAt = now();

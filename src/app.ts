@@ -14,6 +14,11 @@ import { itineraryRoutes } from "./modules/itineraries/itineraryRoutes";
 export function createApp() {
   const app = express();
 
+  app.use((req, res, next) => {
+    console.log(`[Request] ${req.method} ${req.url}`);
+    next();
+  });
+
   app.use(
     cors({
       origin: env.APP_ORIGIN,
