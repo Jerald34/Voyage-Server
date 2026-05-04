@@ -46,7 +46,7 @@ const modelToolCallSchema = z.object({
 });
 
 const modelJsonOutputSchema = z.object({
-  assistantMessage: z.string().min(1).max(12000),
+  assistantMessage: z.string().min(1).max(12000).optional(),
   toolCalls: z.array(modelToolCallSchema).default([])
 });
 
@@ -183,15 +183,12 @@ function canonicalToolName(name: string) {
 
 function isLikelyJson(content: string) {
   const trimmed = content.trim();
-  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>");
+  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>") || trimmed.startsWith('"');
 }
 
 function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
   const trimmed = content.trim();
-  if (!trimmed.startsWith("<|toolcall|>")) {
-    return null;
-  }
-  const callPrefixMatch = trimmed.match(/^<\|toolcall\|>\s*call:([a-zA-Z0-9_]+)/);
+  const callPrefixMatch = trimmed.match(/<\|toolcall\|>\s*call:([a-zA-Z0-9_]+)/);
   if (!callPrefixMatch) {
     return null;
   }
@@ -228,11 +225,32 @@ function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
       ? (parsedInput.input as Record<string, unknown>)
       : parsedInput;
 
+  const assistantMessage = trimmed.slice(0, callPrefixMatch.index).trim() || "Working on that now.";
+
   return {
     type: "json",
-    assistantMessage: "Working on that now.",
+    assistantMessage,
     toolCalls: [{ name: toolName, input: unwrappedInput }]
   };
+}
+
+function parsePotentiallyStringifiedJson(content: string): unknown {
+  const parsed = JSON.parse(content);
+  if (typeof parsed !== "string") {
+    return parsed;
+  }
+
+  const nested = parsed.trim();
+  if (
+    nested.startsWith("{") ||
+    nested.startsWith("[") ||
+    nested.startsWith("<|toolcall|>") ||
+    nested.startsWith('"')
+  ) {
+    return parsePotentiallyStringifiedJson(nested);
+  }
+
+  return parsed;
 }
 
 function parseModelOutput(content: string): ParsedModelOutput {
@@ -249,9 +267,19 @@ function parseModelOutput(content: string): ParsedModelOutput {
   }
 
   try {
+    const parsedJson = parsePotentiallyStringifiedJson(content);
+    if (typeof parsedJson === "string") {
+      return {
+        type: "text" as const,
+        assistantMessage: parsedJson
+      };
+    }
+
+    const parsed = modelJsonOutputSchema.parse(parsedJson);
     return {
       type: "json" as const,
-      ...modelJsonOutputSchema.parse(JSON.parse(content))
+      assistantMessage: parsed.assistantMessage ?? "Working on that now.",
+      toolCalls: parsed.toolCalls
     };
   } catch {
     throw new ApiError(500, "MODEL_OUTPUT_INVALID", "Model output was not valid agent JSON.");
@@ -313,6 +341,22 @@ function isStructuredCreateItineraryInput(input: unknown) {
     return false;
   }
   return isRecord(input.trip) && isRecord(input.itinerary);
+}
+
+function isWeakCreateItineraryShorthand(input: Record<string, unknown>) {
+  const hasDestination = getStringValue(input.destination) || getStringValue(input.location);
+  if (!hasDestination) {
+    return false;
+  }
+
+  const hasAdditionalSignals =
+    typeof input.duration_days === "number" ||
+    getStringValue(input.activity_type) ||
+    (Array.isArray(input.highlights) && input.highlights.length > 0) ||
+    typeof input.traveler_count === "number" ||
+    getStringValue(input.budget_level);
+
+  return !hasAdditionalSignals;
 }
 
 function getStringValue(value: unknown) {
@@ -392,7 +436,7 @@ function inferDestinationFromUserContent(userContent: string) {
 
 function isPlaceholderCreateItineraryInput(input: Record<string, unknown>, userContent: string) {
   if (!isStructuredCreateItineraryInput(input)) {
-    return true;
+    return isWeakCreateItineraryShorthand(input);
   }
 
   const requestedDurationDays = inferDurationDays(userContent);
@@ -403,10 +447,6 @@ function isPlaceholderCreateItineraryInput(input: Record<string, unknown>, userC
   }
 
   const items = days.flatMap((day) => (isRecord(day) && Array.isArray(day.items) ? day.items : []));
-  if (items.length === 0) {
-    return true;
-  }
-
   return items.some((item) => {
     if (!isRecord(item)) {
       return true;
@@ -613,7 +653,7 @@ function detectInitialOutputMode(content: string) {
   if (!trimmed) {
     return "text" as const;
   }
-  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>")
+  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>") || trimmed.startsWith('"')
     ? ("json" as const)
     : ("text" as const);
 }
@@ -735,7 +775,12 @@ export function createAgentOrchestrator(options: {
                   `Available tools: ${toolListForPrompt}.`,
                   "",
                   "## Tool Response Format",
-                  "When tools are needed, return ONLY strict JSON: {\"assistantMessage\":\"string\",\"toolCalls\":[{\"name\":\"tool_name\",\"input\":{...}}]}",
+                  "If you need to use a tool, you MUST output the tool call tag FIRST, at the very beginning of your response.",
+                  "Format:",
+                  "<|toolcall|> call:tool_name {",
+                  '  "argument_name": "value"',
+                  "} <tool_call|>",
+                  "",
                   "When no tools are needed, respond with plain text only.",
                   "",
                   "## create_itinerary Input Schema",
@@ -747,7 +792,6 @@ export function createAgentOrchestrator(options: {
                   "## Rules",
                   "Use snake_case tool names exactly as listed in Available tools.",
                   "Never invent tool names not in the available tools list.",
-                  "Do not output XML-like tags such as <|toolcall|> or <tool_call|>.",
                   "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call.",
                   "For trip planning requests, always call create_itinerary with a fully populated input including concrete day titles, item titles, and descriptions.",
                   "Never send placeholder or skeleton items — every day and item must have concrete titles and descriptions relevant to the destination.",
@@ -963,44 +1007,21 @@ export function createAgentOrchestrator(options: {
             }
           ];
 
-          if (options.modelProvider.completeStream) {
-            synthesizedMessage = "";
-            const streamed = await streamModelCompletion({
-              modelProvider: options.modelProvider,
-              input: {
-                messages: synthesisMessages,
-                temperature: 0.2
-              },
-              onDelta: async (delta) => {
-                await options.agentService.recordRunEvent(run, {
-                  type: "message.delta",
-                  payload: { delta }
-                });
-              }
-            });
-
-            if (typeof streamed === "string") {
-              synthesizedMessage = streamed.trim() || parsedOutput.assistantMessage;
-            }
-          } else {
-            const synthesis = await options.modelProvider.complete({
-              messages: synthesisMessages,
-              temperature: 0.2
-            });
-            synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
-          }
+          const synthesis = await options.modelProvider.complete({
+            messages: synthesisMessages,
+            temperature: 0.2
+          });
+          synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
           agentLogger.synthesisOutput(input.runId, synthesizedMessage);
         } catch {
           synthesizedMessage = parsedOutput.assistantMessage;
           agentLogger.error("Synthesis Failed", input.runId, "Falling back to assistant message.");
         }
 
-        if (!options.modelProvider.completeStream) {
-          await options.agentService.recordRunEvent(run, {
-            type: "message.delta",
-            payload: { delta: synthesizedMessage }
-          });
-        }
+        await options.agentService.recordRunEvent(run, {
+          type: "message.delta",
+          payload: { delta: synthesizedMessage }
+        });
         await options.agentService.completeRun(run.id, synthesizedMessage);
 
       } finally {

@@ -252,6 +252,27 @@ function createModelProvider(content: string | string[]): ModelProvider & { call
   };
 }
 
+function createStreamingModelProvider(
+  content: string | string[]
+): ModelProvider & { calls: Array<Parameters<ModelProvider["complete"]>[0]> } {
+  const contents = Array.isArray(content) ? [...content] : [content];
+  const calls: Array<Parameters<ModelProvider["complete"]>[0]> = [];
+  return {
+    calls,
+    async complete(input) {
+      calls.push(input);
+      return { content: contents.shift() ?? contents.at(-1) ?? "" };
+    },
+    async *completeStream(input) {
+      calls.push(input);
+      const next = contents.shift() ?? contents.at(-1) ?? "";
+      for (const char of next) {
+        yield char;
+      }
+    }
+  };
+}
+
 function createRunInput() {
   return {
     agencyId: "agency-1",
@@ -785,6 +806,65 @@ describe("agent orchestrator", () => {
       "message.completed",
       "run.completed"
     ]);
+  });
+
+  it("does not stream escaped tool JSON as assistant text", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-escaped" }, itinerary: { id: "itinerary-escaped" } };
+          }
+        }
+      })
+    ]);
+    const escapedJson = JSON.stringify(
+      JSON.stringify({
+        assistantMessage: "I will create the draft itinerary.",
+        toolCalls: [
+          {
+            name: "create_itinerary",
+            input: {
+              destination: "Olongapo City",
+              duration_days: 2,
+              highlights: ["Subic Bay nature stop", "Waterfront dinner"]
+            }
+          }
+        ]
+      })
+    );
+    const modelProvider = createStreamingModelProvider([
+      escapedJson,
+      "Your Olongapo City draft itinerary has been created."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry,
+      availableToolNames: ["create_itinerary"]
+    });
+
+    await orchestrator.run({
+      ...createRunInput(),
+      userContent: "Create a 2-day Olongapo City itinerary."
+    });
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "itinerary.updated",
+      "tool.completed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
+    expect(events.some((event) => event.type === "message.delta" && String(event.payload.delta).includes('\\"assistantMessage\\"'))).toBe(false);
   });
 
   it("uses tool output in the second model pass before completing", async () => {
