@@ -39,6 +39,15 @@ export type ItineraryItemRecord = {
   startTime: string | null;
   endTime: string | null;
   placeSnapshotId: string | null;
+  placeSnapshot: {
+    id: string;
+    provider: string;
+    providerPlaceId: string;
+    name: string;
+    formattedAddress: string | null;
+    latitude: number | null;
+    longitude: number | null;
+  } | null;
   routeFromPrevious: unknown;
   staffNotes: string | null;
   clientNotes: string | null;
@@ -136,7 +145,10 @@ function includeItineraryDetails() {
       orderBy: { dayNumber: "asc" as const },
       include: {
         items: {
-          orderBy: { sortOrder: "asc" as const }
+          orderBy: { sortOrder: "asc" as const },
+          include: {
+            placeSnapshot: true
+          }
         }
       }
     }

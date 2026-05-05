@@ -9,6 +9,7 @@ import {
   createCreateItineraryTool,
   createEstimateRouteTool,
   createGetGooglePlaceDetailsTool,
+  createMapPinpointTool,
   createRecordAgentTaskTool,
   createSearchGooglePlacesTool,
   createWebSearchTool
@@ -1354,5 +1355,104 @@ describe("agent orchestrator", () => {
         code: "AGENT_TOOL_INPUT_INVALID"
       }
     });
+  });
+
+  it("persists NOMINATIM snapshots with a DB-safe provider enum", async () => {
+    const captured: Array<{
+      provider: string;
+      providerPlaceId: string;
+      name: string;
+      formattedAddress: string | null;
+    }> = [];
+    const agentService = {
+      async recordRunEvent() {
+        return undefined;
+      },
+      async recordTask() {
+        return undefined;
+      },
+      async recordSources() {
+        return undefined;
+      }
+    };
+    const tool = createMapPinpointTool({
+      agentService,
+      maps: {
+        async searchPlaces() {
+          return [];
+        },
+        async getPlaceDetails() {
+          return {
+            id: "place-1",
+            name: "Olongapo City",
+            address: "Olongapo City, Zambales",
+            types: []
+          };
+        },
+        async estimateRoute() {
+          return {};
+        },
+        async resolvePlace() {
+          return {
+            provider: "NOMINATIM",
+            providerPlaceId: "nominatim:olongapo-city",
+            name: "Olongapo City",
+            formattedAddress: "Olongapo City, Zambales",
+            location: { latitude: 14.8363313, longitude: 120.2828655 }
+          };
+        }
+      },
+      placeSnapshotClient: {
+        placeSnapshot: {
+          async upsert(args: {
+            create: {
+              provider: string;
+              providerPlaceId: string;
+              name: string;
+              formattedAddress: string | null;
+              latitude: number;
+              longitude: number;
+              rating?: number | null;
+              websiteUrl?: string | null;
+              phoneNumber?: string | null;
+              metadata?: unknown;
+              fetchedAt: Date;
+            };
+            update: unknown;
+            where: unknown;
+          }) {
+            captured.push({
+              provider: args.create.provider,
+              providerPlaceId: args.create.providerPlaceId,
+              name: args.create.name,
+              formattedAddress: args.create.formattedAddress ?? null
+            });
+            return { id: "snapshot-1" };
+          }
+        }
+      } as never
+    });
+
+    const result = await tool.execute(createRunInput(), {
+      placeName: "Olongapo City",
+      cityContext: "Olongapo City"
+    });
+
+    expect(result).toEqual({
+      placeSnapshotId: "snapshot-1",
+      name: "Olongapo City",
+      formattedAddress: "Olongapo City, Zambales",
+      lat: 14.8363313,
+      lng: 120.2828655,
+      provider: "NOMINATIM"
+    });
+    expect(captured).toEqual([
+      {
+        provider: "GOOGLE_MAPS",
+        providerPlaceId: "nominatim:olongapo-city",
+        name: "Olongapo City",
+        formattedAddress: "Olongapo City, Zambales"
+      }
+    ]);
   });
 });

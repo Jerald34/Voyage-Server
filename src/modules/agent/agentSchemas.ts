@@ -19,6 +19,8 @@ export const agentEventSchema = z.object({
     "message.delta",
     "message.completed",
     "itinerary.updated",
+    "map.pinpointed",
+    "route.estimated",
     "source.added",
     "run.completed",
     "run.failed"

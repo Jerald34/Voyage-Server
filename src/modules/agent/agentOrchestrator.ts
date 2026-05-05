@@ -176,14 +176,72 @@ function canonicalToolName(name: string) {
     websearch: "web_search",
     searchgoogleplaces: "search_google_places",
     getgoogleplacedetails: "get_google_place_details",
-    estimateroute: "estimate_route"
+    estimateroute: "estimate_route",
+    mappinpoint: "map_pinpoint",
+    routelogistics: "route_logistics",
+    placeinsights: "place_insights",
+    map_pinpoint_tool: "map_pinpoint",
+    route_logistics_tool: "route_logistics",
+    place_insights_tool: "place_insights"
   };
   return aliases[normalized] ?? normalized;
 }
 
 function isLikelyJson(content: string) {
   const trimmed = content.trim();
-  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>") || trimmed.startsWith('"');
+  return (
+    trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    trimmed.startsWith("<|toolcall|>") ||
+    trimmed.startsWith("<tool_call>") ||
+    trimmed.startsWith('"')
+  );
+}
+
+function parseXmlArgs(argsText: string): Record<string, unknown> {
+  const trimmed = argsText.trim();
+  if (!trimmed) {
+    return {};
+  }
+
+  if (trimmed.startsWith("{")) {
+    const parsed = JSON.parse(trimmed);
+    if (!isRecord(parsed)) {
+      throw new ApiError(500, "MODEL_OUTPUT_INVALID", "Tool args must be an object.");
+    }
+    return parsed;
+  }
+
+  const input: Record<string, unknown> = {};
+  const fieldRegex = /<([a-zA-Z][a-zA-Z0-9_]*)>([\s\S]*?)<\/\1>/g;
+  let match: RegExpExecArray | null;
+  while ((match = fieldRegex.exec(trimmed)) !== null) {
+    input[match[1]] = match[2].trim();
+  }
+
+  if (Object.keys(input).length === 0) {
+    throw new ApiError(500, "MODEL_OUTPUT_INVALID", "Tool args were not valid JSON or XML fields.");
+  }
+  return input;
+}
+
+function parseXmlToolCallOutput(content: string): ParsedModelOutput | null {
+  const match = content.match(/<tool_call>[\s\S]*?<name>(.*?)<\/name>[\s\S]*?<args>([\s\S]*?)<\/args>[\s\S]*?<\/tool_call>/i);
+  if (!match) {
+    return null;
+  }
+
+  const assistantMessage = content.slice(0, match.index).trim() || "Working on that now.";
+  return {
+    type: "json",
+    assistantMessage,
+    toolCalls: [
+      {
+        name: canonicalToolName(match[1]),
+        input: parseXmlArgs(match[2])
+      }
+    ]
+  };
 }
 
 function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
@@ -254,6 +312,11 @@ function parsePotentiallyStringifiedJson(content: string): unknown {
 }
 
 function parseModelOutput(content: string): ParsedModelOutput {
+  const xmlToolCall = parseXmlToolCallOutput(content);
+  if (xmlToolCall) {
+    return xmlToolCall;
+  }
+
   const taggedToolCall = parseToolCallTagOutput(content);
   if (taggedToolCall) {
     return taggedToolCall;
@@ -334,6 +397,62 @@ function shouldRecoverPlainItinerary(options: {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function buildVoyageSystemPrompt(toolListForPrompt: string) {
+  return [
+    "Role & Identity",
+    "You are Voyage, a state-of-the-art, spatial-aware AI Travel Agent. You are not just a text-based assistant; you are a dynamic trip architect integrated with an interactive map and a real-time itinerary builder. Your primary goal is to create seamless, highly optimized, and visually engaging travel plans.",
+    "",
+    "Core Capabilities & Tool Usage",
+    "You have access to a suite of backend tools. You must use these tools to validate your suggestions, build the itinerary, and update the user's visual interface (the map).",
+    "",
+    "Current tools and their roles:",
+    "create_itinerary: create a fully populated itinerary draft from structured trip data.",
+    "update_itinerary: update an existing itinerary draft from structured trip data.",
+    "record_agent_task: create or update internal agent task tracking items.",
+    "search_google_places: search for places with Google Maps.",
+    "get_google_place_details: fetch detailed place information from Google Maps.",
+    "estimate_route: calculate travel distance and duration between coordinates.",
+    "map_pinpoint: resolve a place and pin it on the user's map.",
+    "route_logistics: resolve two places and draw the route between them.",
+    "place_insights: resolve a place and return richer map-backed details.",
+    "web_search: search the web for supporting evidence.",
+    "",
+    "Operational Guidelines (Your Rules)",
+    "Spatial Logic First: Never schedule two consecutive activities without calculating the travel time between them using estimate_route or route_logistics. Add realistic buffer times.",
+    "Interactive Presentation: When you add an item to the itinerary, immediately use map_pinpoint to drop a pin on the map. When scheduling a transition between two places, use route_logistics to draw the route.",
+    "Proactive Updates: If a user says, \"I don't want to go to the museum anymore, let's do lunch,\" you must use update_itinerary to DELETE the museum, UPDATE the schedule, and use map_pinpoint or route_logistics to update the map.",
+    "Detail-Oriented: Before suggesting a specific restaurant or monument, use get_google_place_details, place_insights, or search_google_places to ensure it fits the user's vibe and is open on that day/time.",
+    "Communication Style: Be inspiring, organized, and concise. Refer to the map visually (e.g., \"I've dropped a pin on the map for the Colosseum, and drawn a walking route to your next stop...\").",
+    "",
+    "Tool Policy",
+    "Use only tool names listed in the available tools list.",
+    "Call at most one tool per assistant response.",
+    "Put the tool call at the very beginning of the response.",
+    "Never provide lat, lng, latitude, or longitude unless a tool explicitly requires them.",
+    "For map or itinerary places, provide placeName and cityContext.",
+    "Do not claim live data, map details, routes, prices, or sources unless a corresponding tool result exists.",
+    "When no tool is needed, return plain assistant text only.",
+    "",
+    `Available tools: ${toolListForPrompt}.`
+  ].join(" ");
+}
+
+function buildVoyageSynthesisPrompt() {
+  return [
+    "Role & Identity",
+    "You are Voyage, a state-of-the-art, spatial-aware AI Travel Agent.",
+    "",
+    "Response Rules",
+    "Write the final assistant response for agency staff using ONLY the provided tool results.",
+    "Prioritize concrete create_itinerary or update_itinerary outcomes, including itinerary titles, days, item titles, and start/end times when available.",
+    "If create_itinerary or update_itinerary succeeded, clearly state that the itinerary draft was created or updated.",
+    "Do not say you cannot provide a detailed itinerary when itinerary tool results include itinerary days or items; missing web_search evidence is only a caveat, not a blocker.",
+    "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",
+    "Do not fabricate named sources, pages, routes, prices, schedules, or provider findings.",
+    "Return plain assistant text only."
+  ].join(" ");
 }
 
 function isStructuredCreateItineraryInput(input: unknown) {
@@ -463,51 +582,50 @@ function inferCreateItineraryInputFromRequest(input: Record<string, unknown>, us
   const durationDays = requestedDurationDays ?? (typeof input.duration_days === "number" ? input.duration_days : 1);
   const timeRange = inferTimeRange(userContent);
   const wantsNature = /\b(nature|park|forest|beach|hiking|outdoor|scenic)\b/i.test(userContent);
-  const wantsRestaurant = /\b(restaurant|dining|meal|lunch|food|cafe)\b/i.test(userContent);
-
+  const wantsRestaurant = /\b(restaurant|resto|dining|meal|lunch|food|cafe)\b/i.test(userContent);
   if (!destination) {
     return input;
   }
 
-  const activityTitle = wantsNature ? `${destination} nature experience` : `${destination} destination experience`;
-  const mealTitle = wantsRestaurant ? `${destination} restaurant stop` : `${destination} meal break`;
-  const wrapTitle = wantsNature ? `${destination} scenic wind-down` : `${destination} afternoon activity`;
   const dayCount = Math.max(1, Math.min(durationDays, 60));
   const days = Array.from({ length: dayCount }, (_, index) => {
     const dayNumber = index + 1;
-    const isFirstDay = dayNumber === 1;
-    const isLastDay = dayNumber === dayCount;
+    const items = [];
+
+    if (wantsNature || (!wantsNature && !wantsRestaurant)) {
+      items.push({
+        type: "ACTIVITY" as const,
+        title: wantsNature ? `${destination} nature activity` : `${destination} activity`,
+        description: wantsNature
+          ? `Plan a nature-focused activity in ${destination}.`
+          : `Plan an activity in ${destination} based on the agency request.`,
+        placeName: destination,
+        cityContext: destination,
+        ...(timeRange && dayNumber === 1 ? { startTime: timeRange.startTime } : {})
+      });
+    }
+
+    if (wantsRestaurant) {
+      items.push({
+        type: "MEAL" as const,
+        title: `${destination} restaurant stop`,
+        description: `Plan a restaurant stop in ${destination}.`,
+        placeName: destination,
+        cityContext: destination
+      });
+    }
+
+    if (timeRange && items.length > 0 && dayNumber === dayCount) {
+      items[items.length - 1] = {
+        ...items[items.length - 1],
+        endTime: timeRange.endTime
+      };
+    }
 
     return {
       dayNumber,
-      title:
-        dayCount === 1
-          ? wantsNature && wantsRestaurant
-            ? "Nature And Dining"
-            : `${destination} Day Plan`
-          : `Day ${dayNumber} In ${destination}`,
-      items: [
-        {
-          type: "ACTIVITY" as const,
-          title: dayCount === 1 ? activityTitle : `${destination} Day ${dayNumber} highlight`,
-          description:
-            dayCount === 1
-              ? `Start with a focused ${wantsNature ? "nature" : "destination"} stop in ${destination}.`
-              : `Plan a concrete activity in ${destination} that matches the agency request for Day ${dayNumber}.`,
-          ...(timeRange && isFirstDay ? { startTime: timeRange.startTime } : {})
-        },
-        {
-          type: "MEAL" as const,
-          title: dayCount === 1 ? mealTitle : `${destination} Day ${dayNumber} meal stop`,
-          description: `Plan a restaurant or dining break in ${destination}.`
-        },
-        {
-          type: "ACTIVITY" as const,
-          title: dayCount === 1 ? wrapTitle : `${destination} Day ${dayNumber} wrap-up`,
-          description: `Close the day with a nearby activity that keeps the itinerary aligned with the requested pace.`,
-          ...(timeRange && isLastDay ? { endTime: timeRange.endTime } : {})
-        }
-      ]
+      title: `Day ${dayNumber} In ${destination}`,
+      items
     };
   });
 
@@ -653,7 +771,11 @@ function detectInitialOutputMode(content: string) {
   if (!trimmed) {
     return "text" as const;
   }
-  return trimmed.startsWith("{") || trimmed.startsWith("[") || trimmed.startsWith("<|toolcall|>") || trimmed.startsWith('"')
+  return trimmed.startsWith("{") ||
+    trimmed.startsWith("[") ||
+    trimmed.startsWith("<|toolcall|>") ||
+    trimmed.startsWith("<tool_call>") ||
+    trimmed.startsWith('"')
     ? ("json" as const)
     : ("text" as const);
 }
@@ -769,34 +891,7 @@ export function createAgentOrchestrator(options: {
           const initialMessages = [
             {
               role: "system" as const,
-              content:
-                [
-                  "You are an agency itinerary planning assistant.",
-                  `Available tools: ${toolListForPrompt}.`,
-                  "",
-                  "## Tool Response Format",
-                  "If you need to use a tool, you MUST output the tool call tag FIRST, at the very beginning of your response.",
-                  "Format:",
-                  "<|toolcall|> call:tool_name {",
-                  '  "argument_name": "value"',
-                  "} <tool_call|>",
-                  "",
-                  "When no tools are needed, respond with plain text only.",
-                  "",
-                  "## create_itinerary Input Schema",
-                  'create_itinerary input MUST be: {"trip":{"title":"string","destinationSummary":"string","clientName":"string optional","startDate":"date optional","endDate":"date optional","travelerCount":1,"budgetLevel":"string optional"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","summary":"string optional","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string optional","endTime":"string optional","staffNotes":"string optional","clientNotes":"string optional"}]}]}}',
-                  "",
-                  "## update_itinerary Input Schema",
-                  'update_itinerary input MUST be: {"itineraryId":"string required","itinerary":{same shape as create_itinerary.itinerary above}}',
-                  "",
-                  "## Rules",
-                  "Use snake_case tool names exactly as listed in Available tools.",
-                  "Never invent tool names not in the available tools list.",
-                  "Do not claim that you searched the web, checked live prices, or reviewed external sources unless you actually include a matching tool call.",
-                  "For trip planning requests, always call create_itinerary with a fully populated input including concrete day titles, item titles, and descriptions.",
-                  "Never send placeholder or skeleton items — every day and item must have concrete titles and descriptions relevant to the destination.",
-                  "Preserve user constraints: destination, day count, dates, start/end times, pace, budget, traveler count, interests, meals, accessibility needs, exclusions, and special requests."
-                ].join(" ")
+              content: buildVoyageSystemPrompt(toolListForPrompt)
             },
             ...historyOrCurrent
           ];
@@ -952,7 +1047,14 @@ export function createAgentOrchestrator(options: {
             // Degrade gracefully when external providers are unavailable instead of failing the whole run.
             const isRecoverableToolFailure =
               (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
-              (["search_google_places", "get_google_place_details", "estimate_route"].includes(toolCall.name) &&
+              ([
+                "search_google_places",
+                "get_google_place_details",
+                "estimate_route",
+                "map_pinpoint",
+                "route_logistics",
+                "place_insights"
+              ].includes(toolCall.name) &&
                 (details.code === "MAPS_PROVIDER_UNAVAILABLE" || details.code === "AGENT_TOOL_LIMIT_REACHED"));
             if (isRecoverableToolFailure) {
               toolResults.push({
@@ -981,17 +1083,7 @@ export function createAgentOrchestrator(options: {
           const synthesisMessages = [
             {
               role: "system" as const,
-              content:
-                [
-                  "You are an agency itinerary planning assistant.",
-                  "Write the final assistant response for agency staff using ONLY the provided tool results.",
-                  "Prioritize concrete create_itinerary or update_itinerary outcomes, including itinerary titles, days, item titles, and start/end times when available.",
-                  "If create_itinerary or update_itinerary succeeded, clearly state that the itinerary draft was created or updated.",
-                  "Do not say you cannot provide a detailed itinerary when itinerary tool results include itinerary days or items; missing web_search evidence is only a caveat, not a blocker.",
-                  "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",
-                  "Do not fabricate named sources, pages, routes, prices, schedules, or provider findings.",
-                  "Return plain assistant text only."
-                ].join(" ")
+              content: buildVoyageSynthesisPrompt()
             },
             {
               role: "user" as const,

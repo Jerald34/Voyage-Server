@@ -57,6 +57,8 @@ export const structuredItineraryItemSchema = z.object({
   description: z.string().max(2000).optional(),
   startTime: z.string().max(20).optional(),
   endTime: z.string().max(20).optional(),
+  placeName: z.string().min(1).max(500).optional(),
+  cityContext: z.string().min(1).max(200).optional(),
   placeSnapshotId: z.string().uuid().optional(),
   routeFromPrevious: routeFromPreviousSchema.optional(),
   staffNotes: z.string().max(2000).optional(),

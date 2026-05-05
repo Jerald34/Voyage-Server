@@ -1,6 +1,8 @@
 import { ZodError, z } from "zod";
+import type { Prisma, PrismaClient } from "@prisma/client";
+import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
-import type { MapsProvider } from "../../services/maps";
+import type { MapsProvider, ResolvedPlace } from "../../services/maps";
 import type { WebSearchProvider } from "../../services/webSearch";
 import { replaceItinerarySchema, structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
 import type { StructuredItineraryInput } from "../itineraries/itineraryService";
@@ -101,6 +103,19 @@ const routeInputSchema = z.object({
   travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
 });
 
+const placeReferenceInputSchema = z.object({
+  placeName: z.string().min(1).max(500),
+  cityContext: z.string().min(1).max(200).optional(),
+  countryCode: z.string().min(2).max(10).optional()
+}).strict();
+
+const routeLogisticsInputSchema = z.object({
+  originPlaceName: z.string().min(1).max(500),
+  destinationPlaceName: z.string().min(1).max(500),
+  cityContext: z.string().min(1).max(200).optional(),
+  travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TRANSIT"]).default("DRIVE")
+}).strict();
+
 const webSearchInputSchema = z.object({
   query: z.string().min(1).max(500),
   maxResults: z.number().int().positive().max(10).default(5),
@@ -151,6 +166,62 @@ function inputError() {
 
 function toCompactMetadata(value: Record<string, unknown>) {
   return value;
+}
+
+function toProviderName(provider: ResolvedPlace["provider"]) {
+  return provider.toLowerCase();
+}
+
+function toPlaceSnapshotProvider(provider: ResolvedPlace["provider"]): Prisma.PlaceProvider {
+  // Older databases may not have the NOMINATIM enum value yet.
+  // Persist the snapshot with the supported enum value, while source records keep the original provider string.
+  return provider === "NOMINATIM" ? "GOOGLE_MAPS" : provider;
+}
+
+async function upsertPlaceSnapshot(client: PrismaClient, place: ResolvedPlace) {
+  return client.placeSnapshot.upsert({
+    where: {
+      provider_providerPlaceId: {
+        provider: toPlaceSnapshotProvider(place.provider),
+        providerPlaceId: place.providerPlaceId
+      }
+    },
+    create: {
+      provider: toPlaceSnapshotProvider(place.provider),
+      providerPlaceId: place.providerPlaceId,
+      name: place.name,
+      formattedAddress: place.formattedAddress,
+      latitude: place.location.latitude,
+      longitude: place.location.longitude,
+      rating: place.rating,
+      websiteUrl: place.websiteUrl,
+      phoneNumber: place.phoneNumber,
+      metadata: place.metadata as Prisma.InputJsonValue | undefined,
+      fetchedAt: new Date()
+    },
+    update: {
+      name: place.name,
+      formattedAddress: place.formattedAddress,
+      latitude: place.location.latitude,
+      longitude: place.location.longitude,
+      rating: place.rating,
+      websiteUrl: place.websiteUrl,
+      phoneNumber: place.phoneNumber,
+      metadata: place.metadata as Prisma.InputJsonValue | undefined,
+      fetchedAt: new Date()
+    }
+  });
+}
+
+function mapPinpointPayload(placeSnapshotId: string, place: ResolvedPlace) {
+  return {
+    placeSnapshotId,
+    name: place.name,
+    formattedAddress: place.formattedAddress ?? null,
+    lat: place.location.latitude,
+    lng: place.location.longitude,
+    provider: place.provider
+  };
 }
 
 function limitKey(runId: string, toolName: string) {
@@ -229,19 +300,16 @@ function normalizeCreateItineraryInput(input: unknown): StructuredItineraryInput
 
   const dayItems = Array.from({ length: durationDays }, (_, index) => {
     const mappedHighlight = highlights[index];
-    const fallbackTitle = activityType
-      ? `${destinationTitle} ${toTitleCase(activityType)} Stop`
-      : `${destinationTitle} Planning Stop`;
 
-    return [
-      {
-        type: "ACTIVITY" as const,
-        title: mappedHighlight?.trim() || fallbackTitle,
-        description: mappedHighlight
-          ? `Requested highlight for Day ${index + 1} in ${destinationTitle}.`
-          : `A flexible Day ${index + 1} activity in ${destinationTitle} based on the agency request.`
-      }
-    ];
+    return mappedHighlight
+      ? [
+        {
+          type: "ACTIVITY" as const,
+          title: mappedHighlight.trim(),
+          description: `Requested highlight for Day ${index + 1} in ${destinationTitle}.`
+        }
+      ]
+      : [];
   });
 
   return structuredItineraryInputSchema.parse({
@@ -258,7 +326,7 @@ function normalizeCreateItineraryInput(input: unknown): StructuredItineraryInput
         : `A ${durationDays}-day itinerary in ${destinationTitle}.`,
       days: Array.from({ length: durationDays }, (_, index) => ({
         dayNumber: index + 1,
-        title: index === 0 ? "Arrival And Orientation" : `Day ${index + 1} Plan`,
+        title: `Day ${index + 1}`,
         items: dayItems[index]
       }))
     }
@@ -337,20 +405,32 @@ export function createRecordAgentTaskTool(options: { agentService: AgentToolServ
 export function createCreateItineraryTool(options: {
   itineraryService: CreateItineraryService;
   agentService?: AgentToolService;
+  maps?: MapsProvider;
+  placeSnapshotClient?: PrismaClient;
 }): AgentTool {
   return {
     name: "create_itinerary",
     async execute(context, input) {
       const parsed = normalizeCreateItineraryInput(input);
-      const result = await options.itineraryService.createDraftFromStructuredInput(context.agencyId, context.userId, parsed);
-      const itinerary = (result as { itinerary?: { id?: string; version?: number; status?: string } } | null)?.itinerary;
-      if (itinerary?.id && options.agentService) {
+      const resolvedItinerary = options.maps
+        ? await resolveItineraryItemPlaces({
+          input: parsed.itinerary,
+          maps: options.maps,
+          client: options.placeSnapshotClient ?? prisma
+        })
+        : parsed.itinerary;
+      const result = await options.itineraryService.createDraftFromStructuredInput(context.agencyId, context.userId, {
+        ...parsed,
+        itinerary: resolvedItinerary
+      });
+      const createdItinerary = (result as { itinerary?: { id?: string; version?: number; status?: string } } | null)?.itinerary;
+      if (createdItinerary?.id && options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
           type: "itinerary.updated",
           payload: {
-            itineraryId: itinerary.id,
-            version: itinerary.version ?? null,
-            status: itinerary.status ?? null,
+            itineraryId: createdItinerary.id,
+            version: createdItinerary.version ?? null,
+            status: createdItinerary.status ?? null,
             change: "created"
           }
         });
@@ -363,12 +443,21 @@ export function createCreateItineraryTool(options: {
 export function createUpdateItineraryTool(options: {
   itineraryService: UpdateItineraryService;
   agentService?: AgentToolService;
+  maps?: MapsProvider;
+  placeSnapshotClient?: PrismaClient;
 }): AgentTool {
   return {
     name: "update_itinerary",
     async execute(context, input) {
       const parsed = updateItineraryInputSchema.parse(input);
-      const result = await options.itineraryService.replaceDraft(context.agencyId, parsed.itineraryId, parsed.itinerary);
+      const itinerary = options.maps
+        ? await resolveItineraryItemPlaces({
+          input: parsed.itinerary,
+          maps: options.maps,
+          client: options.placeSnapshotClient ?? prisma
+        })
+        : parsed.itinerary;
+      const result = await options.itineraryService.replaceDraft(context.agencyId, parsed.itineraryId, itinerary);
       const updated = result as { id?: string; version?: number; status?: string } | null;
       if (options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
@@ -382,6 +471,194 @@ export function createUpdateItineraryTool(options: {
         });
       }
       return result;
+    }
+  };
+}
+
+async function resolveItineraryItemPlaces<T extends StructuredItineraryInput["itinerary"]>(options: {
+  input: T;
+  maps: MapsProvider;
+  client: PrismaClient;
+}): Promise<T> {
+  const days = await Promise.all(
+    options.input.days.map(async (day) => ({
+      ...day,
+      items: await Promise.all(
+        day.items.map(async (item) => {
+          if (item.placeSnapshotId || !item.placeName) {
+            return item;
+          }
+
+          try {
+            console.log(`[Maps] Resolving place: "${item.placeName}" in context: "${item.cityContext ?? options.input.title}"`);
+            const resolved = await options.maps.resolvePlace({
+              placeName: item.placeName,
+              cityContext: item.cityContext ?? options.input.title
+            });
+            console.log(`[Maps] Successfully resolved "${item.placeName}" to ${resolved.location.latitude}, ${resolved.location.longitude}`);
+            const snapshot = await upsertPlaceSnapshot(options.client, resolved);
+            return {
+              ...item,
+              placeSnapshotId: snapshot.id
+            };
+          } catch (error) {
+            console.error(`[Maps] Failed to resolve place: "${item.placeName}"`, error);
+            return item;
+          }
+        })
+      )
+    }))
+  );
+
+  return {
+    ...options.input,
+    days
+  };
+}
+
+export function createMapPinpointTool(options: {
+  maps: MapsProvider;
+  agentService: AgentToolService;
+  placeSnapshotClient?: PrismaClient;
+}): AgentTool {
+  return {
+    name: "map_pinpoint",
+    async execute(context, input) {
+      const parsed = placeReferenceInputSchema.parse(input);
+      const resolved = await options.maps.resolvePlace(parsed);
+      const snapshot = await upsertPlaceSnapshot(options.placeSnapshotClient ?? prisma, resolved);
+      const run = createRunRecord(context);
+      const payload = mapPinpointPayload(snapshot.id, resolved);
+
+      await options.agentService.recordSources(run, [
+        {
+          sourceType: "MAP_PLACE",
+          title: resolved.name,
+          url: resolved.websiteUrl ?? null,
+          snippet: resolved.formattedAddress ?? null,
+          provider: toProviderName(resolved.provider),
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            placeSnapshotId: snapshot.id,
+            providerPlaceId: resolved.providerPlaceId,
+            input: parsed,
+            rating: resolved.rating ?? null
+          })
+        }
+      ]);
+      await options.agentService.recordRunEvent(run, {
+        type: "map.pinpointed",
+        payload
+      });
+
+      return payload;
+    }
+  };
+}
+
+export function createRouteLogisticsTool(options: {
+  maps: MapsProvider;
+  agentService: AgentToolService;
+  placeSnapshotClient?: PrismaClient;
+}): AgentTool {
+  return {
+    name: "route_logistics",
+    async execute(context, input) {
+      const parsed = routeLogisticsInputSchema.parse(input);
+      const [originPlace, destinationPlace] = await Promise.all([
+        options.maps.resolvePlace({
+          placeName: parsed.originPlaceName,
+          cityContext: parsed.cityContext
+        }),
+        options.maps.resolvePlace({
+          placeName: parsed.destinationPlaceName,
+          cityContext: parsed.cityContext
+        })
+      ]);
+      const client = options.placeSnapshotClient ?? prisma;
+      const [originSnapshot, destinationSnapshot] = await Promise.all([
+        upsertPlaceSnapshot(client, originPlace),
+        upsertPlaceSnapshot(client, destinationPlace)
+      ]);
+      const route = await options.maps.estimateRoute({
+        origin: originPlace.location,
+        destination: destinationPlace.location,
+        travelMode: parsed.travelMode
+      });
+      const run = createRunRecord(context);
+      const payload = {
+        origin: mapPinpointPayload(originSnapshot.id, originPlace),
+        destination: mapPinpointPayload(destinationSnapshot.id, destinationPlace),
+        distanceMeters: route.distanceMeters ?? null,
+        durationSeconds: route.durationSeconds ?? null,
+        polyline: route.polyline ?? null
+      };
+
+      await options.agentService.recordSources(run, [
+        {
+          sourceType: "MAP_ROUTE",
+          title: `${originPlace.name} to ${destinationPlace.name}`,
+          url: null,
+          snippet:
+            route.distanceMeters !== undefined || route.durationSeconds !== undefined
+              ? `distance=${route.distanceMeters ?? "unknown"} duration=${route.durationSeconds ?? "unknown"}`
+              : null,
+          provider: toProviderName(originPlace.provider),
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            input: parsed,
+            originPlaceSnapshotId: originSnapshot.id,
+            destinationPlaceSnapshotId: destinationSnapshot.id,
+            distanceMeters: route.distanceMeters ?? null,
+            durationSeconds: route.durationSeconds ?? null
+          })
+        }
+      ]);
+      await options.agentService.recordRunEvent(run, {
+        type: "route.estimated",
+        payload
+      });
+
+      return payload;
+    }
+  };
+}
+
+export function createPlaceInsightsTool(options: {
+  maps: MapsProvider;
+  agentService: AgentToolService;
+  placeSnapshotClient?: PrismaClient;
+}): AgentTool {
+  return {
+    name: "place_insights",
+    async execute(context, input) {
+      const parsed = placeReferenceInputSchema.parse(input);
+      const resolved = await options.maps.resolvePlace(parsed);
+      const snapshot = await upsertPlaceSnapshot(options.placeSnapshotClient ?? prisma, resolved);
+      const run = createRunRecord(context);
+      await options.agentService.recordSources(run, [
+        {
+          sourceType: "MAP_PLACE",
+          title: resolved.name,
+          url: resolved.websiteUrl ?? null,
+          snippet: resolved.formattedAddress ?? null,
+          provider: toProviderName(resolved.provider),
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            placeSnapshotId: snapshot.id,
+            providerPlaceId: resolved.providerPlaceId,
+            input: parsed,
+            rating: resolved.rating ?? null
+          })
+        }
+      ]);
+
+      return {
+        ...mapPinpointPayload(snapshot.id, resolved),
+        rating: resolved.rating ?? null,
+        websiteUrl: resolved.websiteUrl ?? null,
+        phoneNumber: resolved.phoneNumber ?? null
+      };
     }
   };
 }

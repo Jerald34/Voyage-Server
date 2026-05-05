@@ -87,6 +87,7 @@ enum ItineraryItemType {
 
 enum PlaceProvider {
   GOOGLE_MAPS
+  NOMINATIM
 }
 
 enum AgentThreadStatus {

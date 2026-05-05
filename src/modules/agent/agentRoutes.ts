@@ -15,12 +15,15 @@ import {
   createCreateItineraryTool,
   createEstimateRouteTool,
   createGetGooglePlaceDetailsTool,
+  createMapPinpointTool,
+  createPlaceInsightsTool,
   createRecordAgentTaskTool,
+  createRouteLogisticsTool,
   createSearchGooglePlacesTool,
   createUpdateItineraryTool,
   createWebSearchTool
 } from "./agentTools";
-import { createGoogleMapsProvider } from "../../services/maps";
+import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../services/maps";
 import { createGoogleSearchProvider } from "../../services/webSearch";
 import { lmStudioModelProvider } from "../../services/modelProvider";
 import type { AgentEvent } from "./agentSchemas";
@@ -39,7 +42,14 @@ function getAgencyId(request: Request): string {
   return request.resolvedAgencyId ?? String((request.params as Record<string, string | undefined>).agencyId);
 }
 
-const GOOGLE_MAPS_TOOL_NAMES = ["search_google_places", "get_google_place_details", "estimate_route"] as const;
+const GOOGLE_MAPS_TOOL_NAMES = [
+  "search_google_places",
+  "get_google_place_details",
+  "estimate_route",
+  "map_pinpoint",
+  "route_logistics",
+  "place_insights"
+] as const;
 const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
 
 function createAgencyAgentOrchestrator() {
@@ -50,14 +60,27 @@ function createAgencyAgentOrchestrator() {
   ];
 
   try {
-    const maps = createGoogleMapsProvider();
+    const maps = createNominatimMapsProvider();
+    tools[1] = createCreateItineraryTool({ itineraryService, agentService, maps });
+    tools[2] = createUpdateItineraryTool({ itineraryService, agentService, maps });
     tools.push(
-      createSearchGooglePlacesTool({ maps, agentService }),
-      createGetGooglePlaceDetailsTool({ maps, agentService }),
-      createEstimateRouteTool({ maps, agentService })
+      createMapPinpointTool({ maps, agentService }),
+      createPlaceInsightsTool({ maps, agentService })
     );
   } catch {
-    // Keep the agent route import-safe when Maps is not configured.
+    // Keep the agent route import-safe when geocoding is not configured.
+  }
+
+  try {
+    const googleMaps = createGoogleMapsProvider();
+    tools.push(
+      createSearchGooglePlacesTool({ maps: googleMaps, agentService }),
+      createGetGooglePlaceDetailsTool({ maps: googleMaps, agentService }),
+      createEstimateRouteTool({ maps: googleMaps, agentService }),
+      createRouteLogisticsTool({ maps: googleMaps, agentService })
+    );
+  } catch {
+    // Keep Google-specific routes optional. Nominatim still handles geocoding above.
   }
 
   try {
