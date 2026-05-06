@@ -24,7 +24,12 @@ function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
     role: user.role,
     status: user.status,
     emailVerifiedAt: user.emailVerifiedAt,
-    capabilities: getUserCapabilities(user)
+    capabilities: getUserCapabilities(user),
+    memberships: user.memberships.map(m => ({
+      agencyId: m.agencyId,
+      role: m.role,
+      status: m.status
+    }))
   };
 }
 

@@ -24,7 +24,16 @@ const envSchema = z.object({
   APPLE_TEAM_ID: z.string().default(""),
   APPLE_KEY_ID: z.string().default(""),
   APPLE_PRIVATE_KEY: z.string().default(""),
-  APPLE_REDIRECT_URI: z.string().default("http://localhost:4000/auth/apple/callback")
+  APPLE_REDIRECT_URI: z.string().default("http://localhost:4000/auth/apple/callback"),
+  LM_STUDIO_BASE_URL: z.string().default("http://localhost:1234/v1"),
+  LM_STUDIO_MODEL: z.string().default("local-model"),
+  LM_STUDIO_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  GOOGLE_MAPS_API_KEY: z.string().default(""),
+  GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(20),
+  NOMINATIM_BASE_URL: z.string().default("https://nominatim.openstreetmap.org"),
+  NOMINATIM_USER_AGENT: z.string().default("Voyage-Travel-Agent/1.0"),
+  SERPER_API_KEY: z.string().default(""),
+  WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5)
 });
 
 export const env = envSchema.parse(process.env);
