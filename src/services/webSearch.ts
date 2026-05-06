@@ -5,93 +5,89 @@ export type WebSearchResult = {
   title: string;
   url: string;
   snippet: string;
-  provider: "google_custom_search";
+  provider: "serper";
 };
 
 export type WebSearchProvider = {
-  search(input: { query: string; num?: number; hl?: string; gl?: string }): Promise<WebSearchResult[]>;
+  search(input: { query: string; num?: number }): Promise<WebSearchResult[]>;
 };
 
-type GoogleSearchProviderOptions = {
+type SerperProviderOptions = {
   apiKey?: string;
-  searchEngineId?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
 };
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
-function webSearchUnavailable(message = "Google Search provider is unavailable.") {
+function webSearchUnavailable(message = "Web Search provider is unavailable.") {
   return new ApiError(503, "WEB_SEARCH_PROVIDER_UNAVAILABLE", message);
 }
 
-function clampResultCount(num: number | undefined) {
-  return Math.min(Math.max(num ?? 10, 1), 10);
-}
-
-export function createGoogleSearchProvider(options: GoogleSearchProviderOptions = {}): WebSearchProvider {
-  const apiKey = (options.apiKey ?? env.GOOGLE_SEARCH_API_KEY).trim();
-  const searchEngineId = (options.searchEngineId ?? env.GOOGLE_SEARCH_ENGINE_ID).trim();
+export function createSerperSearchProvider(options: SerperProviderOptions = {}): WebSearchProvider {
+  const apiKey = (options.apiKey ?? env.SERPER_API_KEY).trim();
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
 
-  if (!apiKey || !searchEngineId) {
-    throw webSearchUnavailable("Google Search provider is not configured.");
+  if (!apiKey) {
+    throw webSearchUnavailable("Serper API key is not configured.");
   }
 
   return {
     async search(input) {
-      const url = new URL("https://www.googleapis.com/customsearch/v1");
-      url.searchParams.set("key", apiKey);
-      url.searchParams.set("cx", searchEngineId);
-      url.searchParams.set("q", input.query);
-      url.searchParams.set("num", String(clampResultCount(input.num)));
-
-      if (input.hl) {
-        url.searchParams.set("hl", input.hl);
-      }
-      if (input.gl) {
-        url.searchParams.set("gl", input.gl);
-      }
+      const url = "https://google.serper.dev/search";
+      const body = {
+        q: input.query,
+        num: Math.min(Math.max(input.num ?? 10, 1), 20)
+      };
 
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
       try {
-        const response = await fetchImpl(url, { signal: controller.signal });
+        console.log(`[WebSearch] Fetching from Serper: ${input.query}`);
+        const response = await fetchImpl(url, {
+          method: "POST",
+          headers: {
+            "X-API-KEY": apiKey,
+            "Content-Type": "application/json"
+          },
+          body: JSON.stringify(body),
+          signal: controller.signal
+        });
 
         if (!response.ok) {
-          let detail = "";
-          try {
-            detail = (await response.text()).slice(0, 300);
-          } catch {
-            detail = "";
-          }
-          const suffix = detail ? ` Detail: ${detail}` : "";
+          const errorBody = await response.text().catch(() => "Unknown error");
+          console.error(`[WebSearch] Serper API Error:`, errorBody);
           throw webSearchUnavailable(
-            `Google Search provider is unavailable (HTTP ${response.status}).${suffix}`
+            `Serper provider returned ${response.status}. Detail: ${errorBody.slice(0, 500)}`
           );
         }
 
-        const body = (await response.json()) as {
-          items?: Array<{ title?: unknown; link?: unknown; snippet?: unknown }>;
+        const data = (await response.json()) as {
+          organic?: Array<{ title?: string; link?: string; snippet?: string }>;
         };
 
-        return (body.items ?? []).map((item) => ({
-          title: typeof item.title === "string" ? item.title : "",
-          url: typeof item.link === "string" ? item.link : "",
-          snippet: typeof item.snippet === "string" ? item.snippet : "",
-          provider: "google_custom_search" as const
+        return (data.organic ?? []).map((item) => ({
+          title: item.title ?? "",
+          url: item.link ?? "",
+          snippet: item.snippet ?? "",
+          provider: "serper" as const
         }));
       } catch (error) {
         if (error instanceof ApiError) {
           throw error;
         }
-
+        console.error(`[WebSearch] Request failed:`, error);
         throw webSearchUnavailable();
       } finally {
         clearTimeout(timeout);
       }
     }
   };
+}
+
+// Keep the factory name similar for easier migration in agentRoutes
+export function createWebSearchProvider() {
+  return createSerperSearchProvider();
 }

@@ -49,7 +49,15 @@ export type MapsProvider = {
     locationBias?: GeoPoint;
   }): Promise<ResolvedPlace>;
   searchPlaces(input: { query: string; languageCode?: string; maxResultCount?: number }): Promise<PlaceSearchResult[]>;
+  searchNearby(input: {
+    location: GeoPoint;
+    radius: number;
+    includedTypes?: string[];
+    maxResultCount?: number;
+    languageCode?: string;
+  }): Promise<PlaceSearchResult[]>;
   getPlaceDetails(placeId: string): Promise<PlaceDetailsResult>;
+  getPlacePhotos(placeId: string, maxResults?: number): Promise<{ name: string; photoUri: string }[]>;
   estimateRoute(input: {
     origin: GeoPoint;
     destination: GeoPoint;
@@ -367,6 +375,46 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
       return parseResponseArray(response, "places").map(parsePlace);
     },
 
+    async searchNearby(input) {
+      const body: Record<string, unknown> = {
+        locationRestriction: {
+          circle: {
+            center: { latitude: input.location.latitude, longitude: input.location.longitude },
+            radius: input.radius
+          }
+        }
+      };
+
+      if (input.includedTypes && input.includedTypes.length > 0) {
+        body.includedTypes = input.includedTypes;
+      }
+
+      if (input.maxResultCount !== undefined) {
+        body.maxResultCount = input.maxResultCount;
+      }
+
+      if (input.languageCode) {
+        body.languageCode = input.languageCode;
+      }
+
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        "https://places.googleapis.com/v1/places:searchNearby",
+        {
+          method: "POST",
+          headers: providerHeaders(
+            apiKey,
+            "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types"
+          ),
+          body: JSON.stringify(body)
+        },
+        timeoutMs,
+        "Google Maps API"
+      );
+
+      return parseResponseArray(response, "places").map(parsePlace);
+    },
+
     async getPlaceDetails(placeId) {
       const response = await readJsonResponse<unknown>(
         fetchImpl,
@@ -389,6 +437,33 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         phoneNumber: parseString(details.nationalPhoneNumber) ?? parseString(details.internationalPhoneNumber),
         websiteUri: parseString(details.websiteUri)
       };
+    },
+
+    async getPlacePhotos(placeId, maxResults = 5) {
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+        {
+          method: "GET",
+          headers: providerHeaders(apiKey, "photos"),
+        },
+        timeoutMs,
+        "Google Maps API"
+      );
+
+      if (!isRecord(response) || !Array.isArray(response.photos)) {
+        return [];
+      }
+
+      const photos = response.photos.slice(0, maxResults);
+      return photos.map((photo: any) => {
+        const name = photo.name; // e.g. "places/PLACE_ID/photos/PHOTO_ID"
+        // New API uses photo names directly for media requests
+        return {
+          name,
+          photoUri: `https://places.googleapis.com/v1/${name}/media?key=${apiKey}&maxHeightPx=1000&maxWidthPx=1000`
+        };
+      });
     },
 
     async estimateRoute(input) {
@@ -501,6 +576,8 @@ export function createNominatimMapsProvider(options: NominatimMapsProviderOption
     },
 
     getPlaceDetails: createUnsupportedMapsProviderMethod("place details"),
+    getPlacePhotos: createUnsupportedMapsProviderMethod("place photos"),
+    searchNearby: createUnsupportedMapsProviderMethod("nearby search"),
     estimateRoute: createUnsupportedMapsProviderMethod("route estimates")
   };
 }

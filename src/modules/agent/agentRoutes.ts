@@ -20,11 +20,13 @@ import {
   createRecordAgentTaskTool,
   createRouteLogisticsTool,
   createSearchGooglePlacesTool,
+  createSearchNearbyGooglePlacesTool,
+  createGetGooglePlacePhotosTool,
   createUpdateItineraryTool,
   createWebSearchTool
 } from "./agentTools";
 import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../services/maps";
-import { createGoogleSearchProvider } from "../../services/webSearch";
+import { createWebSearchProvider } from "../../services/webSearch";
 import { lmStudioModelProvider } from "../../services/modelProvider";
 import type { AgentEvent } from "./agentSchemas";
 import type { AgentRunEventRecord } from "./agentService";
@@ -44,7 +46,9 @@ function getAgencyId(request: Request): string {
 
 const GOOGLE_MAPS_TOOL_NAMES = [
   "search_google_places",
+  "search_nearby_google_places",
   "get_google_place_details",
+  "get_google_place_photos",
   "estimate_route",
   "map_pinpoint",
   "route_logistics",
@@ -73,18 +77,46 @@ function createAgencyAgentOrchestrator() {
 
   try {
     const googleMaps = createGoogleMapsProvider();
-    tools.push(
+    const googleMapsTools = [
       createSearchGooglePlacesTool({ maps: googleMaps, agentService }),
+      createSearchNearbyGooglePlacesTool({ maps: googleMaps, agentService }),
       createGetGooglePlaceDetailsTool({ maps: googleMaps, agentService }),
+      createGetGooglePlacePhotosTool({ maps: googleMaps, agentService }),
       createEstimateRouteTool({ maps: googleMaps, agentService }),
-      createRouteLogisticsTool({ maps: googleMaps, agentService })
-    );
+      createRouteLogisticsTool({ maps: googleMaps, agentService }),
+      createMapPinpointTool({ maps: googleMaps, agentService }),
+      createPlaceInsightsTool({ maps: googleMaps, agentService })
+    ];
+
+    // Replace Nominatim versions with Google versions if they exist in the initial tools
+    tools.push(...googleMapsTools.filter(t => !tools.some(existing => existing.name === t.name)));
+    
+    // Update tools[1] and tools[2] (itinerary tools) to use Google if available
+    tools[1] = createCreateItineraryTool({ itineraryService, agentService, maps: googleMaps });
+    tools[2] = createUpdateItineraryTool({ itineraryService, agentService, maps: googleMaps });
+    
+    // Explicitly override any Nominatim map tools with Google versions
+    const pinpointIdx = tools.findIndex(t => t.name === "map_pinpoint");
+    if (pinpointIdx !== -1) tools[pinpointIdx] = googleMapsTools.find(t => t.name === "map_pinpoint")!;
+    
+    const insightsIdx = tools.findIndex(t => t.name === "place_insights");
+    if (insightsIdx !== -1) tools[insightsIdx] = googleMapsTools.find(t => t.name === "place_insights")!;
+
   } catch {
-    // Keep Google-specific routes optional. Nominatim still handles geocoding above.
+    // Fallback to Nominatim for basic geocoding if Google is not configured.
+    try {
+      const maps = createNominatimMapsProvider();
+      tools.push(
+        createMapPinpointTool({ maps, agentService }),
+        createPlaceInsightsTool({ maps, agentService })
+      );
+    } catch {
+      // Keep agent route import-safe.
+    }
   }
 
   try {
-    const webSearch = createGoogleSearchProvider();
+    const webSearch = createWebSearchProvider();
     tools.push(createWebSearchTool({ webSearch, agentService }));
   } catch {
     // Keep the agent route import-safe when Search is not configured.

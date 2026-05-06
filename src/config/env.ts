@@ -32,8 +32,7 @@ const envSchema = z.object({
   GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(20),
   NOMINATIM_BASE_URL: z.string().default("https://nominatim.openstreetmap.org"),
   NOMINATIM_USER_AGENT: z.string().default("Voyage-Travel-Agent/1.0"),
-  GOOGLE_SEARCH_API_KEY: z.string().default(""),
-  GOOGLE_SEARCH_ENGINE_ID: z.string().default(""),
+  SERPER_API_KEY: z.string().default(""),
   WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5)
 });
 

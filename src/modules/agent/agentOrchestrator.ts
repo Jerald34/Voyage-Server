@@ -180,6 +180,8 @@ function canonicalToolName(name: string) {
     mappinpoint: "map_pinpoint",
     routelogistics: "route_logistics",
     placeinsights: "place_insights",
+    searchnearbygoogleplaces: "search_nearby_google_places",
+    getgoogleplacephotos: "get_google_place_photos",
     map_pinpoint_tool: "map_pinpoint",
     route_logistics_tool: "route_logistics",
     place_insights_tool: "place_insights"
@@ -193,7 +195,9 @@ function isLikelyJson(content: string) {
     trimmed.startsWith("{") ||
     trimmed.startsWith("[") ||
     trimmed.startsWith("<|toolcall|>") ||
+    trimmed.startsWith("<|tool_call>") ||
     trimmed.startsWith("<tool_call>") ||
+    trimmed.startsWith("<tool_call|>") ||
     trimmed.startsWith('"')
   );
 }
@@ -246,16 +250,17 @@ function parseXmlToolCallOutput(content: string): ParsedModelOutput | null {
 
 function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
   const trimmed = content.trim();
-  const callPrefixMatch = trimmed.match(/<\|toolcall\|>\s*call:([a-zA-Z0-9_]+)/);
+  const callPrefixMatch = trimmed.match(/<\|?tool_?call\|?>\s*call:([a-zA-Z0-9_]+)/i);
   if (!callPrefixMatch) {
     return null;
   }
 
   const toolName = canonicalToolName(callPrefixMatch[1]);
-  const toolNameEnd = callPrefixMatch[0].length;
+  const toolNameEnd = (callPrefixMatch.index ?? 0) + callPrefixMatch[0].length;
   const objectStart = trimmed.indexOf("{", toolNameEnd);
-  const tailMarker = "<tool_call|>";
-  const tailIndex = trimmed.lastIndexOf(tailMarker);
+  const tailMatch = trimmed.match(/<\|?tool_?call\|?>/g);
+  const lastTail = tailMatch ? tailMatch[tailMatch.length - 1] : null;
+  const tailIndex = lastTail ? trimmed.lastIndexOf(lastTail) : -1;
   if (objectStart < 0 || tailIndex < 0 || tailIndex <= objectStart) {
     return null;
   }
@@ -311,18 +316,95 @@ function parsePotentiallyStringifiedJson(content: string): unknown {
   return parsed;
 }
 
+/**
+ * Attempt to extract a JSON object from a markdown code fence.
+ * Models sometimes wrap tool calls in ```json ... ``` blocks.
+ */
+function extractJsonFromCodeFence(content: string): string | null {
+  const match = content.match(/```(?:json)?\s*\n?([\s\S]*?)```/);
+  return match ? match[1].trim() : null;
+}
+
+/**
+ * Parse a flat JSON tool call where the model outputs something like:
+ * { "tool": "map_pinpoint", "placeName": "Baguio", "cityContext": "Philippines" }
+ * This extracts the tool name from the "tool" key and treats everything else as input.
+ */
+function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
+  // Try to find a JSON object in the content (might be inside a code fence or inline)
+  let jsonText = extractJsonFromCodeFence(content);
+  if (!jsonText) {
+    // Try to find a bare JSON object in the content
+    const braceStart = content.indexOf("{");
+    const braceEnd = content.lastIndexOf("}");
+    if (braceStart >= 0 && braceEnd > braceStart) {
+      jsonText = content.slice(braceStart, braceEnd + 1);
+    }
+  }
+  if (!jsonText) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(jsonText);
+  } catch {
+    return null;
+  }
+
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const obj = parsed as Record<string, unknown>;
+
+  // Must have a "tool" or "name" key that resolves to a known tool
+  const rawToolName = (obj.tool ?? obj.name ?? obj.toolName ?? obj.tool_name) as string | undefined;
+  if (!rawToolName || typeof rawToolName !== "string") return null;
+
+  const toolName = canonicalToolName(rawToolName);
+
+  // Extract tool input: everything except the tool name key
+  const toolInput: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(obj)) {
+    if (["tool", "name", "toolName", "tool_name"].includes(key)) continue;
+    toolInput[key] = value;
+  }
+
+  // Build the assistant message from any text before/after the JSON block
+  const jsonStart = content.indexOf(jsonText);
+  const textBefore = content.slice(0, jsonStart).replace(/```json\s*/g, "").replace(/```/g, "").trim();
+  const textAfter = content.slice(jsonStart + jsonText.length).replace(/```/g, "").trim();
+  const assistantMessage = [textBefore, textAfter].filter(Boolean).join("\n\n") || "Working on that now.";
+
+  console.log(`[Agent] Recovered flat JSON tool call: ${toolName}`, { toolInput, assistantMessage });
+
+  return {
+    type: "json" as const,
+    assistantMessage,
+    toolCalls: [{ name: toolName, input: toolInput }]
+  };
+}
+
 function parseModelOutput(content: string): ParsedModelOutput {
+  console.log(`[Agent] Parsing model output (${content.length} chars)`);
+  
   const xmlToolCall = parseXmlToolCallOutput(content);
-  if (xmlToolCall) {
+  if (xmlToolCall && xmlToolCall.type === "json") {
+    console.log(`[Agent] Detected XML tool call: ${xmlToolCall.toolCalls[0].name}`);
     return xmlToolCall;
   }
 
   const taggedToolCall = parseToolCallTagOutput(content);
-  if (taggedToolCall) {
+  if (taggedToolCall && taggedToolCall.type === "json") {
+    console.log(`[Agent] Detected Tagged tool call: ${taggedToolCall.toolCalls[0].name}`);
     return taggedToolCall;
   }
 
+  // Try flat JSON tool call (e.g. {"tool": "map_pinpoint", "placeName": "Baguio"})
+  const flatToolCall = parseFlatToolCallJson(content);
+  if (flatToolCall && flatToolCall.type === "json") {
+    console.log(`[Agent] Detected Flat JSON tool call: ${flatToolCall.toolCalls[0].name}`);
+    return flatToolCall;
+  }
+
   if (!isLikelyJson(content)) {
+    console.log(`[Agent] No tool call detected (isLikelyJson = false). Content: ${content.slice(0, 100)}...`);
     return {
       type: "text" as const,
       assistantMessage: content
@@ -339,12 +421,14 @@ function parseModelOutput(content: string): ParsedModelOutput {
     }
 
     const parsed = modelJsonOutputSchema.parse(parsedJson);
+    console.log(`[Agent] Detected Standard JSON output with ${parsed.toolCalls.length} tool calls`);
     return {
       type: "json" as const,
       assistantMessage: parsed.assistantMessage ?? "Working on that now.",
       toolCalls: parsed.toolCalls
     };
-  } catch {
+  } catch (error) {
+    console.error(`[Agent] JSON parsing/validation failed`, error);
     throw new ApiError(500, "MODEL_OUTPUT_INVALID", "Model output was not valid agent JSON.");
   }
 }
@@ -412,7 +496,9 @@ function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "update_itinerary: update an existing itinerary draft from structured trip data.",
     "record_agent_task: create or update internal agent task tracking items.",
     "search_google_places: search for places with Google Maps.",
+    "search_nearby_google_places: find restaurants, attractions, or amenities near a specific location.",
     "get_google_place_details: fetch detailed place information from Google Maps.",
+    "get_google_place_photos: retrieve photo URLs for a specific Google Place.",
     "estimate_route: calculate travel distance and duration between coordinates.",
     "map_pinpoint: resolve a place and pin it on the user's map.",
     "route_logistics: resolve two places and draw the route between them.",
@@ -423,7 +509,7 @@ function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "Spatial Logic First: Never schedule two consecutive activities without calculating the travel time between them using estimate_route or route_logistics. Add realistic buffer times.",
     "Interactive Presentation: When you add an item to the itinerary, immediately use map_pinpoint to drop a pin on the map. When scheduling a transition between two places, use route_logistics to draw the route.",
     "Proactive Updates: If a user says, \"I don't want to go to the museum anymore, let's do lunch,\" you must use update_itinerary to DELETE the museum, UPDATE the schedule, and use map_pinpoint or route_logistics to update the map.",
-    "Detail-Oriented: Before suggesting a specific restaurant or monument, use get_google_place_details, place_insights, or search_google_places to ensure it fits the user's vibe and is open on that day/time.",
+    "Detail-Oriented: Before suggesting a specific restaurant or monument, use get_google_place_details, place_insights, or search_google_places to ensure it fits the user's vibe and is open on that day/time. Use get_google_place_photos to show the user what they can expect.",
     "Communication Style: Be inspiring, organized, and concise. Refer to the map visually (e.g., \"I've dropped a pin on the map for the Colosseum, and drawn a walking route to your next stop...\").",
     "",
     "Tool Policy",
@@ -434,6 +520,15 @@ function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "For map or itinerary places, provide placeName and cityContext.",
     "Do not claim live data, map details, routes, prices, or sources unless a corresponding tool result exists.",
     "When no tool is needed, return plain assistant text only.",
+    "",
+    "Tool Call Format",
+    'To call a tool, output a JSON object at the very start of your message in this exact format:',
+    '{"tool": "<tool_name>", ...arguments}',
+    'Example: {"tool": "map_pinpoint", "placeName": "Eiffel Tower", "cityContext": "Paris, France"}',
+    'Example: {"tool": "search_google_places", "query": "best restaurants in Rome"}',
+    'Example: {"tool": "create_itinerary", "destination": "Paris, France", "duration_days": 3, "activity_type": "luxury shopping"}',
+    'After the JSON object, include your conversational explanation of what you are doing.',
+    'Do NOT wrap the tool call in markdown code fences like ```json```. Output the raw JSON directly.',
     "",
     `Available tools: ${toolListForPrompt}.`
   ].join(" ");
@@ -771,10 +866,15 @@ function detectInitialOutputMode(content: string) {
   if (!trimmed) {
     return "text" as const;
   }
+  // If it starts with a JSON-like or Tag-like character, it's likely a tool call.
+  // We keep it as "text" if it doesn't start with these, but we no longer return early in run()
+  // just because it's "text" mode, allowing the parser to find embedded tool calls later.
   return trimmed.startsWith("{") ||
     trimmed.startsWith("[") ||
     trimmed.startsWith("<|toolcall|>") ||
+    trimmed.startsWith("<|tool_call>") ||
     trimmed.startsWith("<tool_call>") ||
+    trimmed.startsWith("<tool_call|>") ||
     trimmed.startsWith('"')
     ? ("json" as const)
     : ("text" as const);
@@ -964,10 +1064,8 @@ export function createAgentOrchestrator(options: {
             }
           }
 
-          if (!parsedOutput) {
-            await streamAndComplete(run, modelContent);
-            return;
-          }
+          // We used to return early here if (!parsedOutput), but that prevented us from finding
+          // tool calls embedded later in the text response. We now fall through to parseModelOutput().
         }
 
         if (!parsedOutput) {
@@ -1037,6 +1135,7 @@ export function createAgentOrchestrator(options: {
               payload: { name: toolCall.name, output }
             });
           } catch (error) {
+            agentLogger.error(`Tool Execution Failed: ${toolCall.name}`, input.runId, error);
             const details = errorDetails(error);
             await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
             await options.agentService.recordRunEvent(run, {

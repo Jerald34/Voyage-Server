@@ -103,6 +103,19 @@ const routeInputSchema = z.object({
   travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
 });
 
+const searchNearbyInputSchema = z.object({
+  location: geoPointSchema,
+  radius: z.number().int().positive().max(50000).default(1000),
+  includedTypes: z.array(z.string()).optional(),
+  maxResults: z.number().int().positive().max(20).default(5),
+  languageCode: z.string().min(2).max(20).optional()
+});
+
+const placePhotosInputSchema = z.object({
+  placeId: z.string().min(1).max(500),
+  maxResults: z.number().int().positive().max(10).default(5)
+});
+
 const placeReferenceInputSchema = z.object({
   placeName: z.string().min(1).max(500),
   cityContext: z.string().min(1).max(200).optional(),
@@ -172,7 +185,7 @@ function toProviderName(provider: ResolvedPlace["provider"]) {
   return provider.toLowerCase();
 }
 
-function toPlaceSnapshotProvider(provider: ResolvedPlace["provider"]): Prisma.PlaceProvider {
+function toPlaceSnapshotProvider(provider: ResolvedPlace["provider"]): any {
   // Older databases may not have the NOMINATIM enum value yet.
   // Persist the snapshot with the supported enum value, while source records keep the original provider string.
   return provider === "NOMINATIM" ? "GOOGLE_MAPS" : provider;
@@ -271,8 +284,11 @@ function isRecordLike(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
-function normalizeCreateItineraryInput(input: unknown): StructuredItineraryInput {
-  const structured = structuredItineraryInputSchema.safeParse(input);
+function normalizeCreateItineraryInput(input: any): StructuredItineraryInput {
+  // If the model wrapped everything in 'tripData', unwrap it
+  const data = (input && typeof input === 'object' && 'tripData' in input) ? input.tripData : input;
+  
+  const structured = structuredItineraryInputSchema.safeParse(data);
   if (structured.success) {
     return structured.data;
   }
@@ -525,6 +541,7 @@ export function createMapPinpointTool(options: {
     name: "map_pinpoint",
     async execute(context, input) {
       const parsed = placeReferenceInputSchema.parse(input);
+      console.log(`[Maps] map_pinpoint resolving place: "${parsed.placeName}" in context: "${parsed.cityContext}"`);
       const resolved = await options.maps.resolvePlace(parsed);
       const snapshot = await upsertPlaceSnapshot(options.placeSnapshotClient ?? prisma, resolved);
       const run = createRunRecord(context);
@@ -565,6 +582,7 @@ export function createRouteLogisticsTool(options: {
     name: "route_logistics",
     async execute(context, input) {
       const parsed = routeLogisticsInputSchema.parse(input);
+      console.log(`[Maps] route_logistics resolving origin: "${parsed.originPlaceName}" and destination: "${parsed.destinationPlaceName}"`);
       const [originPlace, destinationPlace] = await Promise.all([
         options.maps.resolvePlace({
           placeName: parsed.originPlaceName,
@@ -633,6 +651,7 @@ export function createPlaceInsightsTool(options: {
     name: "place_insights",
     async execute(context, input) {
       const parsed = placeReferenceInputSchema.parse(input);
+      console.log(`[Maps] place_insights resolving place: "${parsed.placeName}" in context: "${parsed.cityContext}"`);
       const resolved = await options.maps.resolvePlace(parsed);
       const snapshot = await upsertPlaceSnapshot(options.placeSnapshotClient ?? prisma, resolved);
       const run = createRunRecord(context);
@@ -668,10 +687,11 @@ export function createSearchGooglePlacesTool(options: { maps: MapsProvider; agen
     name: "search_google_places",
     async execute(_context, input) {
       const parsed = searchPlacesInputSchema.parse(input);
+      console.log(`[Maps] searchPlaces query: "${parsed.query}"`);
       const results = await options.maps.searchPlaces({
         query: parsed.query,
         languageCode: parsed.languageCode,
-        maxResultCount: parsed.maxResults
+        maxResultCount: Math.min(parsed.maxResults || 5, 5)
       });
       await options.agentService.recordSources(
         createRunRecord(_context),
@@ -704,6 +724,7 @@ export function createGetGooglePlaceDetailsTool(options: { maps: MapsProvider; a
     name: "get_google_place_details",
     async execute(_context, input) {
       const parsed = placeDetailsInputSchema.parse(input);
+      console.log(`[Maps] getPlaceDetails for: "${parsed.placeId}"`);
       const result = await options.maps.getPlaceDetails(parsed.placeId);
       await options.agentService.recordSources(createRunRecord(_context), [
         {
@@ -733,6 +754,7 @@ export function createEstimateRouteTool(options: { maps: MapsProvider; agentServ
     name: "estimate_route",
     async execute(_context, input) {
       const parsed = routeInputSchema.parse(input);
+      console.log(`[Maps] estimateRoute via ${parsed.travelMode}`);
       const result = await options.maps.estimateRoute({
         origin: parsed.origin,
         destination: parsed.destination,
@@ -764,6 +786,73 @@ export function createEstimateRouteTool(options: { maps: MapsProvider; agentServ
   };
 }
 
+export function createSearchNearbyGooglePlacesTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
+  return {
+    name: "search_nearby_google_places",
+    async execute(_context, input) {
+      const parsed = searchNearbyInputSchema.parse(input);
+      console.log(`[Maps] searchNearby radius ${parsed.radius}`);
+      const results = await options.maps.searchNearby({
+        location: parsed.location,
+        radius: parsed.radius,
+        includedTypes: parsed.includedTypes,
+        maxResultCount: Math.min(parsed.maxResults || 5, 5),
+        languageCode: parsed.languageCode
+      });
+      await options.agentService.recordSources(
+        createRunRecord(_context),
+        results.map((result, index) => ({
+          sourceType: "MAP_PLACE",
+          title: result.name,
+          url: null,
+          snippet: result.address ?? null,
+          provider: "google_maps",
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            location: parsed.location,
+            radius: parsed.radius,
+            includedTypes: parsed.includedTypes ?? null,
+            index,
+            placeId: result.id,
+            rating: result.rating ?? null,
+            userRatingCount: result.userRatingCount ?? null,
+            types: result.types
+          })
+        }))
+      );
+      return results;
+    }
+  };
+}
+
+export function createGetGooglePlacePhotosTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
+  return {
+    name: "get_google_place_photos",
+    async execute(_context, input) {
+      const parsed = placePhotosInputSchema.parse(input);
+      console.log(`[Maps] getPlacePhotos for: "${parsed.placeId}" max: ${parsed.maxResults}`);
+      const results = await options.maps.getPlacePhotos(parsed.placeId, parsed.maxResults);
+      await options.agentService.recordSources(
+        createRunRecord(_context),
+        results.map((result, index) => ({
+          sourceType: "WEB",
+          title: `Photo ${index + 1} for ${parsed.placeId}`,
+          url: result.photoUri,
+          snippet: null,
+          provider: "google_maps",
+          retrievedAt: new Date(),
+          metadata: toCompactMetadata({
+            placeId: parsed.placeId,
+            photoName: result.name,
+            index
+          })
+        }))
+      );
+      return results;
+    }
+  };
+}
+
 export function createWebSearchTool(options: { webSearch: WebSearchProvider; agentService: AgentToolService }): AgentTool {
   return {
     name: "web_search",
@@ -771,7 +860,7 @@ export function createWebSearchTool(options: { webSearch: WebSearchProvider; age
       const parsed = webSearchInputSchema.parse(input);
       const results = await options.webSearch.search({
         query: parsed.query,
-        num: parsed.maxResults,
+        num: Math.min(parsed.maxResults || 5, 5),
         hl: parsed.language,
         gl: parsed.region
       });
