@@ -1,0 +1,561 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum UserRole {
+  USER
+  ADMIN
+}
+
+enum UserStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum AuthProvider {
+  GOOGLE
+  APPLE
+}
+
+enum AgencyStatus {
+  PENDING_REVIEW
+  VERIFIED
+  REJECTED
+  SUSPENDED
+}
+
+enum MembershipRole {
+  OWNER
+  ADMIN
+  STAFF
+}
+
+enum MembershipStatus {
+  ACTIVE
+  DISABLED
+}
+
+enum ImagePurpose {
+  PROFILE_AVATAR
+  AGENCY_LOGO
+  TRIP_ITINERARY_IMAGE
+  CLIENT_ITINERARY_IMAGE
+}
+
+enum ImageStatus {
+  PENDING_UPLOAD
+  READY
+  DELETED
+  REPLACED
+}
+
+enum AdminAuditAction {
+  AGENCY_APPROVED
+  AGENCY_REJECTED
+  AGENCY_SUSPENDED
+  AGENCY_UNSUSPENDED
+  USER_PROMOTED_TO_ADMIN
+  USER_DISABLED
+}
+
+enum ClientTripStatus {
+  DRAFT
+  IN_REVIEW
+  APPROVED_INTERNAL
+  ARCHIVED
+}
+
+enum ItineraryStatus {
+  DRAFT
+  NEEDS_REVIEW
+  APPROVED_INTERNAL
+}
+
+enum ItineraryItemType {
+  ACTIVITY
+  MEAL
+  TRANSFER
+  CHECK_IN
+  CHECK_OUT
+  FREE_TIME
+  NOTE
+}
+
+enum PlaceProvider {
+  GOOGLE_MAPS
+  NOMINATIM
+}
+
+enum AgentThreadStatus {
+  ACTIVE
+  ARCHIVED
+}
+
+enum AgentMessageRole {
+  USER
+  ASSISTANT
+  SYSTEM_VISIBLE
+}
+
+enum AgentRunStatus {
+  QUEUED
+  RUNNING
+  COMPLETED
+  FAILED
+  CANCELLED
+}
+
+enum AgentToolCallStatus {
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AgentTaskStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum AgentSourceType {
+  WEB
+  MAP_PLACE
+  MAP_ROUTE
+}
+
+model User {
+  id                 String                   @id @default(uuid()) @db.Uuid
+  email              String
+  emailNormalized    String                   @unique
+  passwordHash       String?
+  displayName        String
+  role               UserRole                 @default(USER)
+  status             UserStatus               @default(ACTIVE)
+  emailVerifiedAt    DateTime?
+  avatarImageId      String?                  @unique @db.Uuid
+  avatarImage        ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
+  sessions           Session[]
+  providerAccounts   AuthProviderAccount[]
+  verificationTokens EmailVerificationToken[]
+  memberships        AgencyMembership[]
+  ownedAgencies      Agency[]                 @relation("AgencyOwner")
+  verifiedAgencies   Agency[]                 @relation("AgencyVerifiedBy")
+  rejectedAgencies   Agency[]                 @relation("AgencyRejectedBy")
+  suspendedAgencies  Agency[]                 @relation("AgencySuspendedBy")
+  imageAssets        ImageAsset[]             @relation("UserImageAssets")
+  adminAuditEvents   AdminAuditEvent[]        @relation("AdminAuditActor")
+  createdClientTrips ClientTrip[]             @relation("ClientTripCreator")
+  assignedClientTrips ClientTrip[]            @relation("ClientTripOrganizer")
+  createdItineraries Itinerary[]              @relation("ItineraryCreator")
+  createdAgentThreads AgentThread[]           @relation("AgentThreadCreator")
+  agentMessages      AgentMessage[]           @relation("AgentMessageAuthor")
+  createdAt          DateTime                 @default(now())
+  updatedAt          DateTime                 @updatedAt
+
+  @@index([emailNormalized])
+}
+
+model Session {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String   @db.Uuid
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String   @unique
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model AuthProviderAccount {
+  id                    String       @id @default(uuid()) @db.Uuid
+  userId                String       @db.Uuid
+  user                  User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  provider              AuthProvider
+  providerAccountId     String
+  providerEmail         String?
+  providerEmailVerified Boolean      @default(false)
+  createdAt             DateTime     @default(now())
+  updatedAt             DateTime     @updatedAt
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model EmailVerificationToken {
+  id        String    @id @default(uuid()) @db.Uuid
+  userId    String    @db.Uuid
+  user      User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  tokenHash String    @unique
+  expiresAt DateTime
+  usedAt    DateTime?
+  createdAt DateTime  @default(now())
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Agency {
+  id                     String             @id @default(uuid()) @db.Uuid
+  name                   String
+  slug                   String             @unique
+  status                 AgencyStatus       @default(PENDING_REVIEW)
+  ownerUserId            String             @db.Uuid
+  ownerUser              User               @relation("AgencyOwner", fields: [ownerUserId], references: [id])
+  logoImageId            String?            @unique @db.Uuid
+  logoImage              ImageAsset?         @relation("AgencyLogo", fields: [logoImageId], references: [id], onDelete: SetNull)
+  submittedAt            DateTime           @default(now())
+  verifiedAt             DateTime?
+  verifiedByAdminUserId  String?            @db.Uuid
+  verifiedByAdminUser    User?              @relation("AgencyVerifiedBy", fields: [verifiedByAdminUserId], references: [id])
+  rejectedAt             DateTime?
+  rejectedByAdminUserId  String?            @db.Uuid
+  rejectedByAdminUser    User?              @relation("AgencyRejectedBy", fields: [rejectedByAdminUserId], references: [id])
+  rejectionReason        String?
+  suspendedAt            DateTime?
+  suspendedByAdminUserId String?            @db.Uuid
+  suspendedByAdminUser   User?              @relation("AgencySuspendedBy", fields: [suspendedByAdminUserId], references: [id])
+  suspensionReason       String?
+  memberships            AgencyMembership[]
+  imageAssets            ImageAsset[]        @relation("AgencyImageAssets")
+  clientTrips            ClientTrip[]
+  itineraries            Itinerary[]
+  agentThreads           AgentThread[]
+  agentRuns              AgentRun[]
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+
+  @@index([ownerUserId])
+  @@index([status])
+}
+
+model AgencyMembership {
+  id        String           @id @default(uuid()) @db.Uuid
+  agencyId  String           @db.Uuid
+  agency    Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  userId    String           @db.Uuid
+  user      User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role      MembershipRole
+  status    MembershipStatus @default(ACTIVE)
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  @@unique([agencyId, userId])
+  @@index([userId])
+}
+
+model ImageAsset {
+  id              String        @id @default(uuid()) @db.Uuid
+  ownerUserId     String?       @db.Uuid
+  ownerUser       User?         @relation("UserImageAssets", fields: [ownerUserId], references: [id], onDelete: SetNull)
+  avatarForUser   User?         @relation("UserAvatar")
+  agencyId        String?       @db.Uuid
+  agency          Agency?       @relation("AgencyImageAssets", fields: [agencyId], references: [id], onDelete: SetNull)
+  logoForAgency   Agency?       @relation("AgencyLogo")
+  tripId          String?       @db.Uuid
+  purpose         ImagePurpose
+  bucket          String
+  objectKey       String        @unique
+  mimeType        String
+  sizeBytes       Int
+  width           Int?
+  height          Int?
+  checksum        String?
+  status          ImageStatus   @default(PENDING_UPLOAD)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+
+  @@index([ownerUserId])
+  @@index([agencyId])
+  @@index([tripId])
+  @@index([purpose])
+  @@index([status])
+}
+
+model AdminAuditEvent {
+  id          String           @id @default(uuid()) @db.Uuid
+  adminUserId String           @db.Uuid
+  adminUser   User             @relation("AdminAuditActor", fields: [adminUserId], references: [id])
+  action      AdminAuditAction
+  targetType  String
+  targetId    String
+  reason      String?
+  metadata    Json?
+  createdAt   DateTime         @default(now())
+
+  @@index([adminUserId])
+  @@index([targetType, targetId])
+  @@index([action])
+}
+
+model ClientTrip {
+  id                      String           @id @default(uuid()) @db.Uuid
+  agencyId                String           @db.Uuid
+  agency                  Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  createdByUserId         String           @db.Uuid
+  createdByUser           User             @relation("ClientTripCreator", fields: [createdByUserId], references: [id])
+  assignedOrganizerUserId String?          @db.Uuid
+  assignedOrganizerUser   User?            @relation("ClientTripOrganizer", fields: [assignedOrganizerUserId], references: [id])
+  title                   String
+  destinationSummary      String?
+  clientName              String?
+  startDate               DateTime?
+  endDate                 DateTime?
+  travelerCount           Int?
+  budgetLevel             String?
+  status                  ClientTripStatus @default(DRAFT)
+  itineraries             Itinerary[]
+  agentThreads            AgentThread[]
+  createdAt               DateTime         @default(now())
+  updatedAt               DateTime         @updatedAt
+
+  @@index([agencyId])
+  @@unique([id, agencyId])
+  @@index([createdByUserId])
+  @@index([assignedOrganizerUserId])
+  @@index([status])
+}
+
+model Itinerary {
+  id              String          @id @default(uuid()) @db.Uuid
+  agencyId        String          @db.Uuid
+  agency          Agency          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  tripId          String          @db.Uuid
+  trip            ClientTrip      @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
+  createdByUserId String          @db.Uuid
+  createdByUser   User            @relation("ItineraryCreator", fields: [createdByUserId], references: [id])
+  title           String
+  summary         String?
+  status          ItineraryStatus @default(DRAFT)
+  version         Int             @default(1)
+  days            ItineraryDay[]
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+
+  @@index([agencyId])
+  @@index([tripId])
+  @@index([createdByUserId])
+  @@index([status])
+}
+
+model ItineraryDay {
+  id          String          @id @default(uuid()) @db.Uuid
+  itineraryId String          @db.Uuid
+  itinerary   Itinerary       @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  dayNumber   Int
+  date        DateTime?
+  title       String
+  summary     String?
+  items       ItineraryItem[]
+  createdAt   DateTime        @default(now())
+  updatedAt   DateTime        @updatedAt
+
+  @@unique([itineraryId, dayNumber])
+  @@index([itineraryId])
+}
+
+model ItineraryItem {
+  id                String         @id @default(uuid()) @db.Uuid
+  itineraryDayId    String         @db.Uuid
+  itineraryDay      ItineraryDay   @relation(fields: [itineraryDayId], references: [id], onDelete: Cascade)
+  sortOrder         Int
+  type              ItineraryItemType
+  title             String
+  description       String?
+  startTime         String?
+  endTime           String?
+  placeSnapshotId   String?        @db.Uuid
+  placeSnapshot     PlaceSnapshot? @relation(fields: [placeSnapshotId], references: [id], onDelete: SetNull)
+  routeFromPrevious Json?
+  staffNotes        String?
+  clientNotes       String?
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+
+  @@index([itineraryDayId])
+  @@unique([itineraryDayId, sortOrder])
+  @@index([placeSnapshotId])
+  @@index([sortOrder])
+}
+
+model PlaceSnapshot {
+  id               String          @id @default(uuid()) @db.Uuid
+  provider         PlaceProvider
+  providerPlaceId  String
+  name             String
+  formattedAddress String?
+  latitude         Float?
+  longitude        Float?
+  rating           Float?
+  websiteUrl       String?
+  phoneNumber      String?
+  metadata         Json?
+  fetchedAt        DateTime
+  itineraryItems   ItineraryItem[]
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+
+  @@unique([provider, providerPlaceId])
+  @@index([providerPlaceId])
+}
+
+model AgentThread {
+  id              String            @id @default(uuid()) @db.Uuid
+  agencyId        String            @db.Uuid
+  agency          Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  tripId          String?           @db.Uuid
+  trip            ClientTrip?       @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: NoAction)
+  createdByUserId String            @db.Uuid
+  createdByUser   User              @relation("AgentThreadCreator", fields: [createdByUserId], references: [id])
+  title           String
+  status          AgentThreadStatus @default(ACTIVE)
+  messages        AgentMessage[]
+  runs            AgentRun[]
+  toolCalls       AgentToolCall[]
+  tasks           AgentTask[]
+  sources         AgentSource[]
+  events          AgentRunEvent[]
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+
+  @@index([agencyId])
+  @@unique([id, agencyId])
+  @@index([tripId])
+  @@index([createdByUserId])
+  @@index([status])
+}
+
+model AgentMessage {
+  id           String           @id @default(uuid()) @db.Uuid
+  threadId     String           @db.Uuid
+  thread       AgentThread      @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  runId        String?          @db.Uuid
+  run          AgentRun?        @relation(fields: [runId, threadId], references: [id, threadId], onDelete: NoAction)
+  triggeredRuns AgentRun[]      @relation("AgentRunTriggerMessage")
+  authorUserId String?          @db.Uuid
+  authorUser   User?            @relation("AgentMessageAuthor", fields: [authorUserId], references: [id], onDelete: SetNull)
+  role         AgentMessageRole
+  content      String
+  metadata     Json?
+  createdAt    DateTime         @default(now())
+
+  @@index([threadId])
+  @@index([runId])
+  @@index([authorUserId])
+  @@index([role])
+  @@unique([id, threadId])
+}
+
+model AgentRun {
+  id               String           @id @default(uuid()) @db.Uuid
+  threadId         String           @db.Uuid
+  thread           AgentThread      @relation(fields: [threadId, agencyId], references: [id, agencyId], onDelete: Cascade)
+  agencyId         String           @db.Uuid
+  agency           Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  triggerMessageId String?          @db.Uuid
+  triggerMessage   AgentMessage?    @relation("AgentRunTriggerMessage", fields: [triggerMessageId, threadId], references: [id, threadId], onDelete: NoAction)
+  status           AgentRunStatus   @default(QUEUED)
+  modelProvider    String
+  modelName        String
+  startedAt        DateTime?
+  completedAt      DateTime?
+  failedAt         DateTime?
+  errorCode        String?
+  errorMessage     String?
+  messages         AgentMessage[]
+  toolCalls        AgentToolCall[]
+  tasks            AgentTask[]
+  sources          AgentSource[]
+  events           AgentRunEvent[]
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  @@index([threadId])
+  @@index([agencyId])
+  @@index([triggerMessageId])
+  @@index([status])
+  @@unique([id, threadId])
+}
+
+model AgentToolCall {
+  id            String              @id @default(uuid()) @db.Uuid
+  runId         String              @db.Uuid
+  run           AgentRun            @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
+  threadId      String              @db.Uuid
+  thread        AgentThread         @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  toolName      String
+  status        AgentToolCallStatus
+  input         Json?
+  outputSummary String?
+  errorCode     String?
+  errorMessage  String?
+  startedAt     DateTime?
+  completedAt   DateTime?
+  createdAt     DateTime            @default(now())
+
+  @@index([runId])
+  @@index([threadId])
+  @@index([toolName])
+  @@index([status])
+}
+
+model AgentTask {
+  id        String          @id @default(uuid()) @db.Uuid
+  runId     String          @db.Uuid
+  run       AgentRun        @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
+  threadId  String          @db.Uuid
+  thread    AgentThread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  label     String
+  status    AgentTaskStatus
+  sortOrder Int
+  createdAt DateTime        @default(now())
+  updatedAt DateTime        @updatedAt
+
+  @@index([runId])
+  @@unique([runId, sortOrder])
+  @@index([threadId])
+  @@index([status])
+}
+
+model AgentSource {
+  id          String          @id @default(uuid()) @db.Uuid
+  runId       String          @db.Uuid
+  run         AgentRun        @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
+  threadId    String          @db.Uuid
+  thread      AgentThread     @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  sourceType  AgentSourceType
+  title       String
+  url         String?
+  snippet     String?
+  provider    String
+  retrievedAt DateTime
+  metadata    Json?
+  createdAt   DateTime        @default(now())
+
+  @@index([runId])
+  @@index([threadId])
+  @@index([sourceType])
+}
+
+model AgentRunEvent {
+  id        String      @id @default(uuid()) @db.Uuid
+  runId     String      @db.Uuid
+  run       AgentRun    @relation(fields: [runId, threadId], references: [id, threadId], onDelete: Cascade)
+  threadId  String      @db.Uuid
+  thread    AgentThread @relation(fields: [threadId], references: [id], onDelete: Cascade)
+  type      String
+  payload   Json
+  sequence  Int         @default(0)
+  createdAt DateTime    @default(now())
+
+  @@index([runId, createdAt])
+  @@index([runId, sequence])
+  @@index([threadId])
+  @@index([type])
+}
