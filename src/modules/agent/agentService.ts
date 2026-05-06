@@ -626,6 +626,29 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           throw new ApiError(409, "DRAFT_ITINERARY_REQUIRED", "Generate an itinerary before saving this draft.");
         }
 
+        const itineraryEvents = await tx.agentRunEvent.findMany({
+          where: {
+            threadId: data.threadId,
+            type: "itinerary.updated"
+          },
+          select: {
+            payload: true
+          }
+        });
+        const itineraryWasGeneratedByThread = itineraryEvents.some((event) => {
+          const payload = event.payload;
+          return (
+            typeof payload === "object" &&
+            payload !== null &&
+            !Array.isArray(payload) &&
+            "itineraryId" in payload &&
+            payload.itineraryId === data.input.itineraryId
+          );
+        });
+        if (!itineraryWasGeneratedByThread) {
+          throw new ApiError(409, "DRAFT_ITINERARY_REQUIRED", "Generate an itinerary before saving this draft.");
+        }
+
         const trip = await tx.clientTrip.update({
           where: {
             id_agencyId: {
@@ -655,16 +678,25 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           }
         });
 
-        const updatedThread = (await tx.agentThread.update({
+        const bindThread = await tx.agentThread.updateMany({
           where: {
-            id_agencyId: {
-              id: data.threadId,
-              agencyId: data.agencyId
-            }
+            id: data.threadId,
+            agencyId: data.agencyId,
+            tripId: null
           },
           data: {
             title: data.input.clientName,
             tripId: trip.id
+          }
+        });
+        if (bindThread.count === 0) {
+          throw new ApiError(409, "THREAD_ALREADY_BOUND", "This thread is already attached to a trip.");
+        }
+
+        const updatedThread = (await tx.agentThread.findFirst({
+          where: {
+            id: data.threadId,
+            agencyId: data.agencyId
           },
           include: includeThreadDetails()
         })) as AgentThreadRecord;
