@@ -337,6 +337,17 @@ agentRoutes.get("/threads/:threadId", async (request, response, next) => {
   }
 });
 
+agentRoutes.post("/threads/:threadId/approve-itinerary", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const threadId = String(request.params.threadId);
+    const approved = await agentService.approveItineraryThread(agencyId, threadId, request.body);
+    response.status(200).json(approved);
+  } catch (error) {
+    next(error);
+  }
+});
+
 agentRoutes.post("/threads/:threadId/messages", async (request, response, next) => {
   console.log(`[Agent Route] POST /threads/${request.params.threadId}/messages hit`);
   try {
