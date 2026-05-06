@@ -1,0 +1,352 @@
+import { structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
+import type { ModelProvider } from "../../services/modelProvider";
+import { canonicalToolName, type ParsedModelOutput, parseModelOutput } from "./agentParser";
+
+export function looksLikeItineraryText(content: string) {
+  return /\bitinerary\b/i.test(content) || /\bday\s+\d+\b/i.test(content) || /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(content);
+}
+
+export function looksLikeTripPlanningRequest(content: string) {
+  return /\b(itinerary|trip|travel|tour|plan|draft)\b/i.test(content);
+}
+
+export function shouldRecoverPlainItinerary(options: {
+  tools: Set<string>;
+  userContent: string;
+  modelContent: string;
+}) {
+  return (
+    options.tools.has("create_itinerary") &&
+    looksLikeItineraryText(options.modelContent) &&
+    (looksLikeTripPlanningRequest(options.userContent) || looksLikeItineraryText(options.userContent))
+  );
+}
+
+export function isStructuredCreateItineraryInput(input: unknown) {
+  if (!isRecord(input)) {
+    return false;
+  }
+  return isRecord(input.trip) && isRecord(input.itinerary);
+}
+
+export function isWeakCreateItineraryShorthand(input: Record<string, unknown>) {
+  const hasDestination = getStringValue(input.destination) || getStringValue(input.location);
+  if (!hasDestination) {
+    return false;
+  }
+
+  const hasAdditionalSignals =
+    typeof input.duration_days === "number" ||
+    getStringValue(input.activity_type) ||
+    (Array.isArray(input.highlights) && input.highlights.length > 0) ||
+    typeof input.traveler_count === "number" ||
+    getStringValue(input.budget_level);
+
+  return !hasAdditionalSignals;
+}
+
+export function getStringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value.trim() : "";
+}
+
+export function getInputDestination(input: Record<string, unknown>) {
+  const shorthandDestination = getStringValue(input.destination) || getStringValue(input.location);
+  if (shorthandDestination) {
+    return shorthandDestination;
+  }
+
+  const trip = isRecord(input.trip) ? input.trip : null;
+  if (!trip) {
+    return "";
+  }
+
+  return getStringValue(trip.destinationSummary) || getStringValue(trip.title).replace(/^\d+[-\s]+day\s+/i, "").replace(/\s+trip$/i, "");
+}
+
+export function normalizeClockTime(value: string) {
+  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
+  if (!match) {
+    return value.trim();
+  }
+
+  const hour = Number(match[1]);
+  const minute = match[2] ?? "00";
+  const meridiem = match[3]?.toUpperCase();
+  return meridiem ? `${hour}:${minute} ${meridiem}` : `${hour}:${minute}`;
+}
+
+export function inferTimeRange(userContent: string) {
+  const match =
+    userContent.match(/\bfrom\s+(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\b/i) ??
+    userContent.match(/\bbetween\s+(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\s*(?:and|-)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\b/i) ??
+    userContent.match(/\bstart(?:s|ing)?\s+(?:at|in)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?).*?\bend(?:s|ing)?\s+(?:at|in)?\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\b/i);
+  if (!match) {
+    return null;
+  }
+
+  return {
+    startTime: normalizeClockTime(match[1]),
+    endTime: normalizeClockTime(match[2])
+  };
+}
+
+export function inferDurationDays(userContent: string) {
+  if (/\b(one|single)[-\s]+day\b/i.test(userContent)) {
+    return 1;
+  }
+
+  const dayCount = userContent.match(/\b(\d{1,2})[-\s]+day\b/i);
+  if (dayCount) {
+    return Number(dayCount[1]);
+  }
+
+  return null;
+}
+
+export function inferDestinationFromUserContent(userContent: string) {
+  const patterns = [
+    /\b(?:for|in|to)\s+([A-Z][a-zA-Z\s.'-]{2,80}?)(?:\s+(?:and|this|that|from|between|located|with|has|is|will|for)\b|[,.]|$)/,
+    /\b([A-Z][a-zA-Z\s.'-]{2,80}?)\s+(?:itinerary|trip|tour|travel plan)\b/i
+  ];
+
+  for (const pattern of patterns) {
+    const match = userContent.match(pattern);
+    const destination = match?.[1]?.trim();
+    if (destination) {
+      return destination.replace(/\s+(?:Philippines|the Philippines)$/i, "").trim();
+    }
+  }
+
+  return "";
+}
+
+export function isPlaceholderCreateItineraryInput(input: Record<string, unknown>, userContent: string) {
+  if (!isStructuredCreateItineraryInput(input)) {
+    return isWeakCreateItineraryShorthand(input);
+  }
+
+  const requestedDurationDays = inferDurationDays(userContent);
+  const itinerary = input.itinerary as Record<string, unknown>;
+  const days = Array.isArray(itinerary.days) ? itinerary.days : [];
+  if (requestedDurationDays && days.length !== requestedDurationDays) {
+    return true;
+  }
+
+  const items = days.flatMap((day) => (isRecord(day) && Array.isArray(day.items) ? day.items : []));
+  return items.some((item) => {
+    if (!isRecord(item)) {
+      return true;
+    }
+    const title = getStringValue(item.title);
+    const description = getStringValue(item.description);
+    return /\b(placeholder|suggested highlight|planned stop|day\s+\d+\s+plan)\b/i.test(`${title} ${description}`);
+  });
+}
+
+export function inferCreateItineraryInputFromRequest(input: Record<string, unknown>, userContent: string) {
+  const destination = getInputDestination(input) || inferDestinationFromUserContent(userContent);
+  const requestedDurationDays = inferDurationDays(userContent);
+  const durationDays = requestedDurationDays ?? (typeof input.duration_days === "number" ? input.duration_days : 1);
+  const timeRange = inferTimeRange(userContent);
+  const wantsNature = /\b(nature|park|forest|beach|hiking|outdoor|scenic)\b/i.test(userContent);
+  const wantsRestaurant = /\b(restaurant|resto|dining|meal|lunch|food|cafe)\b/i.test(userContent);
+  if (!destination) {
+    return input;
+  }
+
+  const dayCount = Math.max(1, Math.min(durationDays, 60));
+  const days = Array.from({ length: dayCount }, (_, index) => {
+    const dayNumber = index + 1;
+    const items = [];
+
+    if (wantsNature || (!wantsNature && !wantsRestaurant)) {
+      items.push({
+        type: "ACTIVITY" as const,
+        title: wantsNature ? `${destination} nature activity` : `${destination} activity`,
+        description: wantsNature
+          ? `Plan a nature-focused activity in ${destination}.`
+          : `Plan an activity in ${destination} based on the agency request.`,
+        placeName: destination,
+        cityContext: destination,
+        ...(timeRange && dayNumber === 1 ? { startTime: timeRange.startTime } : {})
+      });
+    }
+
+    if (wantsRestaurant) {
+      items.push({
+        type: "MEAL" as const,
+        title: `${destination} restaurant stop`,
+        description: `Plan a restaurant stop in ${destination}.`,
+        placeName: destination,
+        cityContext: destination
+      });
+    }
+
+    if (timeRange && items.length > 0 && dayNumber === dayCount) {
+      items[items.length - 1] = {
+        ...items[items.length - 1],
+        endTime: timeRange.endTime
+      };
+    }
+
+    return {
+      dayNumber,
+      title: `Day ${dayNumber} In ${destination}`,
+      items
+    };
+  });
+
+  return {
+    trip: {
+      title: `${dayCount}-Day ${destination} Trip`,
+      destinationSummary: destination,
+      travelerCount: input.traveler_count,
+      budgetLevel: input.budget_level
+    },
+    itinerary: {
+      title: `${dayCount}-Day ${destination} Itinerary`,
+      summary: `A ${dayCount}-day itinerary in ${destination} based on the requested timing and themes.`,
+      days
+    }
+  };
+}
+
+export function enrichToolInputFromUserRequest(toolName: string, input: Record<string, unknown>, userContent: string) {
+  if (canonicalToolName(toolName) !== "create_itinerary" || !isPlaceholderCreateItineraryInput(input, userContent)) {
+    return input;
+  }
+
+  return inferCreateItineraryInputFromRequest(input, userContent);
+}
+
+export async function customizeCreateItineraryInput(options: {
+  modelProvider: ModelProvider;
+  input: Record<string, unknown>;
+  userContent: string;
+}) {
+  try {
+    const completion = await options.modelProvider.complete({
+      temperature: 0,
+      messages: [
+        {
+          role: "system",
+          content:
+            [
+              "Convert the agency staff request into one fully customized create_itinerary input.",
+              "Return ONLY strict JSON with this exact top-level shape:",
+              '{"trip":{"title":"string","destinationSummary":"string","clientName":"string optional","startDate":"date optional","endDate":"date optional","travelerCount":1,"budgetLevel":"string optional"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","summary":"string optional","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string optional","endTime":"string optional","staffNotes":"string optional","clientNotes":"string optional"}]}]}}',
+              "Preserve every explicit user constraint: destination, dates, day count, start/end times, pace, budget, traveler count, interests, meals, accessibility, exclusions, must-see places, and special requests.",
+              "The original user request overrides conflicting weak tool input values such as default duration_days.",
+              "Do not invent live availability, prices, ratings, named sources, or map distances.",
+              "If exact places are not provided, create useful item titles that reflect the requested category and destination instead of leaving items empty.",
+              "Never return empty days, generic placeholder days, or placeholder item titles."
+            ].join(" ")
+        },
+        {
+          role: "user",
+          content: `Original user request:\n${options.userContent}\n\nWeak create_itinerary input proposed by model:\n${JSON.stringify(options.input)}\n\nConvert this into a fully customized create_itinerary input JSON.`
+        }
+      ]
+    });
+
+    const parsedJson = JSON.parse(completion.content);
+    const candidate =
+      isRecord(parsedJson) && isRecord(parsedJson.input)
+        ? parsedJson.input
+        : parsedJson;
+    const parsed = structuredItineraryInputSchema.safeParse(candidate);
+    if (parsed.success && !isPlaceholderCreateItineraryInput(parsed.data as unknown as Record<string, unknown>, options.userContent)) {
+      return parsed.data;
+    }
+  } catch {
+    // Fall back to deterministic request inference when model conversion fails.
+  }
+
+  return enrichToolInputFromUserRequest("create_itinerary", options.input, options.userContent);
+}
+
+export async function enrichToolInputFromUserRequestForExecution(options: {
+  modelProvider: ModelProvider;
+  toolName: string;
+  input: Record<string, unknown>;
+  userContent: string;
+}) {
+  if (canonicalToolName(options.toolName) !== "create_itinerary" || !isPlaceholderCreateItineraryInput(options.input, options.userContent)) {
+    return options.input;
+  }
+
+  return customizeCreateItineraryInput({
+    modelProvider: options.modelProvider,
+    input: options.input,
+    userContent: options.userContent
+  });
+}
+
+export function shouldCreateItineraryDirectlyFromUserRequest(options: {
+  tools: Set<string>;
+  userContent: string;
+}) {
+  return (
+    options.tools.has("create_itinerary") &&
+    /\b(create|make|build|draft|generate|prepare)\b/i.test(options.userContent) &&
+    (looksLikeTripPlanningRequest(options.userContent) || looksLikeItineraryText(options.userContent))
+  );
+}
+
+export function createItineraryToolCallFromUserRequest(userContent: string): ParsedModelOutput | null {
+  const input = inferCreateItineraryInputFromRequest({}, userContent);
+  const parsed = structuredItineraryInputSchema.safeParse(input);
+  if (!parsed.success) {
+    return null;
+  }
+
+  return {
+    type: "json",
+    assistantMessage: "I will create a customized itinerary draft from your request.",
+    toolCalls: [
+      {
+        name: "create_itinerary",
+        input: parsed.data as unknown as Record<string, unknown>
+      }
+    ]
+  };
+}
+
+export async function recoverPlainItineraryToolOutput(options: {
+  modelProvider: ModelProvider;
+  userContent: string;
+  assistantContent: string;
+}) {
+  const recovery = await options.modelProvider.complete({
+    temperature: 0,
+    messages: [
+      {
+        role: "system",
+        content:
+          [
+            "Convert the assistant itinerary prose into a create_itinerary tool call.",
+            "Return ONLY strict JSON with this exact shape:",
+            '{"assistantMessage":"string","toolCalls":[{"name":"create_itinerary","input":{"trip":{"title":"string","destinationSummary":"string"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string","endTime":"string"}]}]}}}]}',
+            "Use only these item types: ACTIVITY, MEAL, TRANSFER, CHECK_IN, CHECK_OUT, FREE_TIME, NOTE.",
+            "Preserve concrete times, locations, meals, activities, and day structure from the prose.",
+            "Do not add web-search claims or external-source claims."
+          ].join(" ")
+      },
+      {
+        role: "user",
+        content: `Original user request:\n${options.userContent}`
+      },
+      {
+        role: "assistant",
+        content: options.assistantContent
+      }
+    ]
+  });
+
+  const parsed = parseModelOutput(recovery.content);
+  return parsed.type === "json" && parsed.toolCalls.length > 0 ? parsed : null;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
