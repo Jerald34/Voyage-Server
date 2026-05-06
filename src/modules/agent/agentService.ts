@@ -3,7 +3,13 @@ import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { publishAgentRunEvent } from "./agentEvents";
 import { agentLogger } from "./agentLogger";
-import { agentEventSchema, createMessageSchema, createThreadSchema, type AgentEvent } from "./agentSchemas";
+import {
+  agentEventSchema,
+  approveItineraryThreadSchema,
+  createMessageSchema,
+  createThreadSchema,
+  type AgentEvent
+} from "./agentSchemas";
 
 export type AgentThreadStatus = "ACTIVE" | "ARCHIVED";
 export type AgentMessageRole = "USER" | "ASSISTANT" | "SYSTEM_VISIBLE";
@@ -128,6 +134,38 @@ export type AgentThreadRecord = {
   updatedAt: Date;
 };
 
+export type ApproveItineraryThreadInput = {
+  itineraryId: string;
+  clientName: string;
+  destination: string;
+  startDate?: Date | null;
+  endDate?: Date | null;
+  travelerCount?: number;
+  budgetLevel?: string;
+};
+
+export type ApprovedItineraryThreadRecord = {
+  thread: AgentThreadRecord;
+  trip: {
+    id: string;
+    agencyId: string;
+    clientName: string | null;
+    title: string;
+    destinationSummary: string | null;
+    startDate: Date | null;
+    endDate: Date | null;
+    travelerCount: number | null;
+    budgetLevel: string | null;
+  };
+  itinerary: {
+    id: string;
+    tripId: string;
+    agencyId: string;
+    version: number;
+    status: string;
+  };
+};
+
 const OPEN_RUN_STATUSES: AgentRunStatus[] = ["QUEUED", "RUNNING"];
 const TERMINAL_RUN_STATUSES: AgentRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
 
@@ -144,6 +182,11 @@ export interface AgentRepository {
   }): Promise<AgentThreadRecord>;
   listThreadsByAgency(agencyId: string): Promise<AgentThreadRecord[]>;
   findThreadByAgency(id: string, agencyId: string): Promise<AgentThreadRecord | null>;
+  approveItineraryThread(data: {
+    agencyId: string;
+    threadId: string;
+    input: ApproveItineraryThreadInput;
+  }): Promise<ApprovedItineraryThreadRecord | null>;
   createMessage(data: {
     threadId: string;
     runId?: string | null;
@@ -298,6 +341,26 @@ export function createAgentService(options: {
         throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
       }
       return thread;
+    },
+
+    async approveItineraryThread(agencyId: string, threadId: string, input: unknown) {
+      const parsed = approveItineraryThreadSchema.parse(input);
+      const thread = await this.getThread(agencyId, threadId);
+      if (thread.tripId) {
+        throw new ApiError(409, "THREAD_ALREADY_BOUND", "This thread is already attached to a trip.");
+      }
+
+      const approved = await options.repository.approveItineraryThread({
+        agencyId,
+        threadId,
+        input: parsed
+      });
+      if (!approved) {
+        throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
+      }
+
+      await touchThread(threadId);
+      return approved;
     },
 
     async appendUserMessageAndCreateRun(
@@ -524,6 +587,94 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         where: { id, agencyId },
         include: includeThreadDetails()
       }) as Promise<AgentThreadRecord | null>;
+    },
+
+    async approveItineraryThread(data) {
+      return client.$transaction(async (tx) => {
+        const thread = await tx.agentThread.findFirst({
+          where: {
+            id: data.threadId,
+            agencyId: data.agencyId
+          },
+          select: {
+            id: true,
+            tripId: true
+          }
+        });
+        if (!thread) {
+          return null;
+        }
+        if (thread.tripId) {
+          throw new ApiError(409, "THREAD_ALREADY_BOUND", "This thread is already attached to a trip.");
+        }
+
+        const itinerary = await tx.itinerary.findFirst({
+          where: {
+            id: data.input.itineraryId,
+            agencyId: data.agencyId,
+            status: "DRAFT"
+          },
+          select: {
+            id: true,
+            tripId: true,
+            agencyId: true,
+            version: true,
+            status: true
+          }
+        });
+        if (!itinerary) {
+          throw new ApiError(409, "DRAFT_ITINERARY_REQUIRED", "Generate an itinerary before saving this draft.");
+        }
+
+        const trip = await tx.clientTrip.update({
+          where: {
+            id_agencyId: {
+              id: itinerary.tripId,
+              agencyId: data.agencyId
+            }
+          },
+          data: {
+            clientName: data.input.clientName,
+            title: `${data.input.clientName} itinerary`,
+            destinationSummary: data.input.destination,
+            startDate: data.input.startDate ?? null,
+            endDate: data.input.endDate ?? null,
+            travelerCount: data.input.travelerCount ?? null,
+            budgetLevel: data.input.budgetLevel ?? null
+          },
+          select: {
+            id: true,
+            agencyId: true,
+            clientName: true,
+            title: true,
+            destinationSummary: true,
+            startDate: true,
+            endDate: true,
+            travelerCount: true,
+            budgetLevel: true
+          }
+        });
+
+        const updatedThread = (await tx.agentThread.update({
+          where: {
+            id_agencyId: {
+              id: data.threadId,
+              agencyId: data.agencyId
+            }
+          },
+          data: {
+            title: data.input.clientName,
+            tripId: trip.id
+          },
+          include: includeThreadDetails()
+        })) as AgentThreadRecord;
+
+        return {
+          thread: updatedThread,
+          trip,
+          itinerary
+        };
+      });
     },
 
     async createMessage(data) {
