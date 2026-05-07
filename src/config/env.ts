@@ -28,6 +28,8 @@ const envSchema = z.object({
   LM_STUDIO_BASE_URL: z.string().default("http://localhost:1234/v1"),
   LM_STUDIO_MODEL: z.string().default("local-model"),
   LM_STUDIO_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
+  GOOGLE_AI_API_KEY: z.string().default(""),
+  GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-1.5-flash"),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
   GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(20),
   NOMINATIM_BASE_URL: z.string().default("https://nominatim.openstreetmap.org"),

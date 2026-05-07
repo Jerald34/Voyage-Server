@@ -29,7 +29,12 @@ export function isStructuredCreateItineraryInput(input: unknown) {
   return isRecord(input.trip) && isRecord(input.itinerary);
 }
 
-export function isWeakCreateItineraryShorthand(input: Record<string, unknown>) {
+export function looksLikeDetailedScheduleRequest(userContent: string) {
+  return Boolean(inferTimeRange(userContent)) ||
+    /\b(proper|complete|fully|full|detailed|custom|customized|everyday|each day|all the tourist|all tourist|tourist spot|tourist spots)\b/i.test(userContent);
+}
+
+export function isWeakCreateItineraryShorthand(input: Record<string, unknown>, userContent = "") {
   const hasDestination = getStringValue(input.destination) || getStringValue(input.location);
   if (!hasDestination) {
     return false;
@@ -41,6 +46,10 @@ export function isWeakCreateItineraryShorthand(input: Record<string, unknown>) {
     (Array.isArray(input.highlights) && input.highlights.length > 0) ||
     typeof input.traveler_count === "number" ||
     getStringValue(input.budget_level);
+
+  if (hasAdditionalSignals && looksLikeDetailedScheduleRequest(userContent)) {
+    return true;
+  }
 
   return !hasAdditionalSignals;
 }
@@ -103,6 +112,73 @@ export function inferDurationDays(userContent: string) {
   return null;
 }
 
+function parseClockTimeToMinutes(value: string) {
+  const normalized = normalizeClockTime(value);
+  const match = normalized.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
+  if (!match) {
+    return null;
+  }
+
+  let hour = Number(match[1]);
+  const minute = Number(match[2]);
+  const meridiem = match[3]?.toUpperCase();
+  if (meridiem === "PM" && hour < 12) {
+    hour += 12;
+  }
+  if (meridiem === "AM" && hour === 12) {
+    hour = 0;
+  }
+  return hour * 60 + minute;
+}
+
+function formatClockTimeFromMinutes(value: number) {
+  const minutesInDay = 24 * 60;
+  const normalized = ((Math.round(value) % minutesInDay) + minutesInDay) % minutesInDay;
+  const hour24 = Math.floor(normalized / 60);
+  const minute = normalized % 60;
+  const meridiem = hour24 >= 12 ? "PM" : "AM";
+  const hour12 = hour24 % 12 || 12;
+  return `${hour12}:${String(minute).padStart(2, "0")} ${meridiem}`;
+}
+
+function withDistributedTimes<T extends Record<string, unknown>>(items: T[], timeRange: { startTime: string; endTime: string } | null) {
+  if (!timeRange || items.length === 0) {
+    return items;
+  }
+
+  const start = parseClockTimeToMinutes(timeRange.startTime);
+  const end = parseClockTimeToMinutes(timeRange.endTime);
+  if (start == null || end == null || end <= start) {
+    return items;
+  }
+
+  const gap = items.length > 1 ? 15 : 0;
+  const duration = Math.max(30, Math.floor((end - start - gap * (items.length - 1)) / items.length));
+  let cursor = start;
+  return items.map((item, index) => {
+    const itemEnd = index === items.length - 1 ? end : Math.min(end, cursor + duration);
+    const timed = {
+      ...item,
+      startTime: formatClockTimeFromMinutes(cursor),
+      endTime: formatClockTimeFromMinutes(itemEnd)
+    };
+    cursor = itemEnd + gap;
+    return timed;
+  });
+}
+
+function splitHighlightStops(value: unknown) {
+  if (typeof value !== "string") {
+    return [];
+  }
+
+  return value
+    .split(/\s+(?:and|&|\+|followed by|then)\s+/i)
+    .map((part) => part.trim())
+    .filter(Boolean)
+    .slice(0, 3);
+}
+
 export function inferDestinationFromUserContent(userContent: string) {
   const patterns = [
     /\b(?:for|in|to)\s+([A-Z][a-zA-Z\s.'-]{2,80}?)(?:\s+(?:and|this|that|from|between|located|with|has|is|will|for)\b|[,.]|$)/,
@@ -122,7 +198,7 @@ export function inferDestinationFromUserContent(userContent: string) {
 
 export function isPlaceholderCreateItineraryInput(input: Record<string, unknown>, userContent: string) {
   if (!isStructuredCreateItineraryInput(input)) {
-    return isWeakCreateItineraryShorthand(input);
+    return isWeakCreateItineraryShorthand(input, userContent);
   }
 
   const requestedDurationDays = inferDurationDays(userContent);
@@ -150,6 +226,8 @@ export function inferCreateItineraryInputFromRequest(input: Record<string, unkno
   const timeRange = inferTimeRange(userContent);
   const wantsNature = /\b(nature|park|forest|beach|hiking|outdoor|scenic)\b/i.test(userContent);
   const wantsRestaurant = /\b(restaurant|resto|dining|meal|lunch|food|cafe)\b/i.test(userContent);
+  const wantsDetailedSchedule = looksLikeDetailedScheduleRequest(userContent);
+  const highlights = Array.isArray(input.highlights) ? input.highlights : [];
   if (!destination) {
     return input;
   }
@@ -157,9 +235,20 @@ export function inferCreateItineraryInputFromRequest(input: Record<string, unkno
   const dayCount = Math.max(1, Math.min(durationDays, 60));
   const days = Array.from({ length: dayCount }, (_, index) => {
     const dayNumber = index + 1;
-    const items = [];
+    const highlightStops = splitHighlightStops(highlights[index]);
+    const items: Array<Record<string, unknown>> = [];
 
-    if (wantsNature || (!wantsNature && !wantsRestaurant)) {
+    for (const stop of highlightStops) {
+      items.push({
+        type: "ACTIVITY" as const,
+        title: stop,
+        description: `Visit ${stop} as part of Day ${dayNumber} in ${destination}.`,
+        placeName: stop,
+        cityContext: destination
+      });
+    }
+
+    if (items.length === 0 && (wantsNature || (!wantsNature && !wantsRestaurant))) {
       items.push({
         type: "ACTIVITY" as const,
         title: wantsNature ? `${destination} nature activity` : `${destination} activity`,
@@ -167,8 +256,7 @@ export function inferCreateItineraryInputFromRequest(input: Record<string, unkno
           ? `Plan a nature-focused activity in ${destination}.`
           : `Plan an activity in ${destination} based on the agency request.`,
         placeName: destination,
-        cityContext: destination,
-        ...(timeRange && dayNumber === 1 ? { startTime: timeRange.startTime } : {})
+        cityContext: destination
       });
     }
 
@@ -182,17 +270,30 @@ export function inferCreateItineraryInputFromRequest(input: Record<string, unkno
       });
     }
 
-    if (timeRange && items.length > 0 && dayNumber === dayCount) {
-      items[items.length - 1] = {
-        ...items[items.length - 1],
-        endTime: timeRange.endTime
-      };
+    if (wantsDetailedSchedule && items.length < 3) {
+      items.push({
+        type: "ACTIVITY" as const,
+        title: `${destination} scenic stop`,
+        description: `Add another stop in ${destination} so the day is fully planned instead of a single-location visit.`,
+        placeName: destination,
+        cityContext: destination
+      });
+    }
+
+    if (wantsDetailedSchedule && items.length < 3) {
+      items.push({
+        type: "ACTIVITY" as const,
+        title: `${destination} local experience`,
+        description: `Use the remaining time for a local experience that matches the requested trip theme.`,
+        placeName: destination,
+        cityContext: destination
+      });
     }
 
     return {
       dayNumber,
       title: `Day ${dayNumber} In ${destination}`,
-      items
+      items: withDistributedTimes(items, timeRange)
     };
   });
 
@@ -234,9 +335,13 @@ export async function customizeCreateItineraryInput(options: {
             [
               "Convert the agency staff request into one fully customized create_itinerary input.",
               "Return ONLY strict JSON with this exact top-level shape:",
-              '{"trip":{"title":"string","destinationSummary":"string","clientName":"string optional","startDate":"date optional","endDate":"date optional","travelerCount":1,"budgetLevel":"string optional"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","summary":"string optional","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string optional","endTime":"string optional","staffNotes":"string optional","clientNotes":"string optional"}]}]}}',
+              '{"trip":{"title":"string","destinationSummary":"string","clientName":"string optional","startDate":"date optional","endDate":"date optional","travelerCount":1,"budgetLevel":"string optional"},"itinerary":{"title":"string","summary":"string","days":[{"dayNumber":1,"title":"string","summary":"string optional","items":[{"type":"ACTIVITY","title":"string","description":"string","startTime":"string optional","endTime":"string optional","placeName":"string optional","cityContext":"string optional","staffNotes":"string optional","clientNotes":"string optional"}]}]}}',
               "Preserve every explicit user constraint: destination, dates, day count, start/end times, pace, budget, traveler count, interests, meals, accessibility, exclusions, must-see places, and special requests.",
               "The original user request overrides conflicting weak tool input values such as default duration_days.",
+              "A day is a time box, not one location. If a daily start/end window is present, fill that window with multiple timed items that fit the request.",
+              "For a proper itinerary, create at least three items per day when the time window allows: morning/first activity, meal/resto/cafe when requested or sensible, and afternoon/evening activity.",
+              "If the user asks for restaurants, resto, food, cafes, or dining, include at least one MEAL item per active day.",
+              "Split compound stops into separate items when they are separate places, each with its own placeName and cityContext.",
               "Do not invent live availability, prices, ratings, named sources, or map distances.",
               "If exact places are not provided, create useful item titles that reflect the requested category and destination instead of leaving items empty.",
               "Never return empty days, generic placeholder days, or placeholder item titles."

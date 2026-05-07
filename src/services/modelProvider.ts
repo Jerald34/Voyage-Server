@@ -11,28 +11,30 @@ export type ModelProvider = {
   completeStream?(input: { messages: ModelMessage[]; temperature?: number }): AsyncIterable<string>;
 };
 
-type LmStudioModelProviderOptions = {
-  baseUrl?: string;
-  model?: string;
+type OpenAiCompatibleProviderOptions = {
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  errorFactory?: (error?: unknown) => ApiError;
 };
 
-const LOCAL_MODEL_UNAVAILABLE = new ApiError(
-  503,
-  "LOCAL_MODEL_UNAVAILABLE",
-  "Local model provider is unavailable. Start LM Studio and try again."
-);
-
-function unavailableModelError() {
-  return new ApiError(LOCAL_MODEL_UNAVAILABLE.statusCode, LOCAL_MODEL_UNAVAILABLE.code, LOCAL_MODEL_UNAVAILABLE.message);
+function defaultErrorFactory() {
+  return new ApiError(503, "MODEL_PROVIDER_ERROR", "The model provider is currently unavailable.");
 }
 
-export function createLmStudioModelProvider(options: LmStudioModelProviderOptions = {}): ModelProvider {
-  const baseUrl = (options.baseUrl ?? env.LM_STUDIO_BASE_URL).replace(/\/+$/, "");
-  const model = options.model ?? env.LM_STUDIO_MODEL;
-  const timeoutMs = options.timeoutMs ?? env.LM_STUDIO_TIMEOUT_MS;
-  const fetchImpl = options.fetchImpl ?? fetch;
+export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProviderOptions): ModelProvider {
+  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const { model, apiKey, timeoutMs = 120000, fetchImpl = fetch, errorFactory = defaultErrorFactory } = options;
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
 
   return {
     async complete(input) {
@@ -42,9 +44,7 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
       try {
         const response = await fetchImpl(`${baseUrl}/chat/completions`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers,
           body: JSON.stringify({
             model,
             messages: input.messages,
@@ -54,7 +54,9 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
         });
 
         if (!response.ok) {
-          throw unavailableModelError();
+          const errorBody = await response.text().catch(() => "Could not read error body");
+          console.error(`Model provider error (${response.status}):`, errorBody);
+          throw errorFactory();
         }
 
         const body = (await response.json()) as {
@@ -63,7 +65,7 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
         const content = body.choices?.[0]?.message?.content;
 
         if (typeof content !== "string") {
-          throw unavailableModelError();
+          throw errorFactory();
         }
 
         return { content };
@@ -72,7 +74,7 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
           throw error;
         }
 
-        throw unavailableModelError();
+        throw errorFactory(error);
       } finally {
         clearTimeout(timeout);
       }
@@ -85,9 +87,7 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
       try {
         const response = await fetchImpl(`${baseUrl}/chat/completions`, {
           method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
+          headers,
           body: JSON.stringify({
             model,
             messages: input.messages,
@@ -98,7 +98,9 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
         });
 
         if (!response.ok || !response.body) {
-          throw unavailableModelError();
+          const errorBody = await response.text().catch(() => "Could not read error body");
+          console.error(`Model provider error (${response.status}):`, errorBody);
+          throw errorFactory();
         }
 
         const reader = response.body.getReader();
@@ -156,7 +158,7 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
         if (error instanceof ApiError) {
           throw error;
         }
-        throw unavailableModelError();
+        throw errorFactory(error);
       } finally {
         clearTimeout(timeout);
       }
@@ -164,4 +166,47 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
   };
 }
 
+type LmStudioModelProviderOptions = {
+  baseUrl?: string;
+  model?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export function createLmStudioModelProvider(options: LmStudioModelProviderOptions = {}): ModelProvider {
+  return createOpenAiCompatibleProvider({
+    baseUrl: options.baseUrl ?? env.LM_STUDIO_BASE_URL,
+    model: options.model ?? env.LM_STUDIO_MODEL,
+    timeoutMs: options.timeoutMs ?? env.LM_STUDIO_TIMEOUT_MS,
+    fetchImpl: options.fetchImpl,
+    errorFactory: () => new ApiError(503, "LOCAL_MODEL_UNAVAILABLE", "Local model provider is unavailable. Start LM Studio and try again.")
+  });
+}
+
+type GoogleModelProviderOptions = {
+  apiKey?: string;
+  model?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export function createGoogleModelProvider(options: GoogleModelProviderOptions = {}): ModelProvider {
+  return createOpenAiCompatibleProvider({
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: options.model ?? env.GOOGLE_AI_MODEL,
+    apiKey: options.apiKey ?? env.GOOGLE_AI_API_KEY,
+    timeoutMs: options.timeoutMs,
+    fetchImpl: options.fetchImpl,
+    errorFactory: () => new ApiError(503, "GOOGLE_AI_UNAVAILABLE", "Google AI provider is unavailable. Check your API key and try again.")
+  });
+}
+
 export const lmStudioModelProvider = createLmStudioModelProvider();
+export const googleModelProvider = createGoogleModelProvider();
+
+export function getModelProvider(): ModelProvider {
+  if (env.GOOGLE_AI_API_KEY) {
+    return googleModelProvider;
+  }
+  return lmStudioModelProvider;
+}

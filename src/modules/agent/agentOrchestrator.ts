@@ -26,6 +26,7 @@ import {
 } from "./agentInference";
 import { 
   errorDetails, 
+  recoverSynthesizedMessage,
   stringifyToolResults 
 } from "./agentUtils";
 
@@ -64,6 +65,56 @@ function detectInitialOutputMode(content: string) {
     trimmed.startsWith('"')
     ? ("json" as const)
     : ("text" as const);
+}
+
+function isRecordLike(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function extractItineraryFromToolOutput(output: unknown) {
+  if (!isRecordLike(output)) {
+    return null;
+  }
+
+  const itinerary = isRecordLike(output.itinerary) ? output.itinerary : output;
+  if (typeof itinerary.id !== "string" || !Array.isArray(itinerary.days)) {
+    return null;
+  }
+
+  return itinerary;
+}
+
+function buildActiveItineraryContext(thread: unknown) {
+  if (!isRecordLike(thread) || !Array.isArray(thread.events)) {
+    return null;
+  }
+
+  for (const event of [...thread.events].reverse()) {
+    if (!isRecordLike(event) || !isRecordLike(event.payload)) {
+      continue;
+    }
+
+    const payload = event.payload;
+    const isItineraryTool =
+      event.type === "tool.completed" &&
+      (payload.name === "create_itinerary" || payload.name === "update_itinerary");
+    if (!isItineraryTool) {
+      continue;
+    }
+
+    const itinerary = extractItineraryFromToolOutput(payload.output);
+    if (!itinerary) {
+      continue;
+    }
+
+    return [
+      "Active itinerary draft context",
+      "The user may ask to modify this draft. For add, remove, replace, shorten, extend, reorder, or revise requests, call update_itinerary with this itinerary id and a full replacement itinerary that preserves unchanged days/items.",
+      JSON.stringify({ itinerary })
+    ].join("\n");
+  }
+
+  return null;
 }
 
 function availableToolSet(toolNames: string[]) {
@@ -111,8 +162,10 @@ export function createAgentOrchestrator(options: {
         });
 
         let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
+        let activeItineraryContext: string | null = null;
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
+          activeItineraryContext = buildActiveItineraryContext(thread);
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
           conversationHistory = recentMessages
             .map((message: any) => {
@@ -148,6 +201,14 @@ export function createAgentOrchestrator(options: {
               role: "system" as const,
               content: buildVoyageSystemPrompt(toolListForPrompt)
             },
+            ...(activeItineraryContext
+              ? [
+                {
+                  role: "system" as const,
+                  content: activeItineraryContext
+                }
+              ]
+              : []),
             ...historyOrCurrent
           ];
           if (options.modelProvider.completeStream) {
@@ -353,7 +414,11 @@ export function createAgentOrchestrator(options: {
             messages: synthesisMessages,
             temperature: 0.2
           });
-          synthesizedMessage = synthesis.content.trim() || parsedOutput.assistantMessage;
+          synthesizedMessage = recoverSynthesizedMessage(
+            synthesis.content.trim() || parsedOutput.assistantMessage,
+            toolResults,
+            parsedOutput.assistantMessage
+          );
           agentLogger.synthesisOutput(input.runId, synthesizedMessage);
         } catch {
           synthesizedMessage = parsedOutput.assistantMessage;

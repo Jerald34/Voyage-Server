@@ -20,7 +20,7 @@ import {
 } from "./agentTools";
 import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../services/maps";
 import { createWebSearchProvider } from "../../services/webSearch";
-import { lmStudioModelProvider } from "../../services/modelProvider";
+import { getModelProvider } from "../../services/modelProvider";
 
 const GOOGLE_MAPS_TOOL_NAMES = [
   "search_google_places",
@@ -98,7 +98,7 @@ function createAgencyAgentOrchestrator() {
   }
 
   return createAgentOrchestrator({
-    modelProvider: lmStudioModelProvider,
+    modelProvider: getModelProvider(),
     agentService,
     availableToolNames: tools.map((tool) => tool.name),
     toolRegistry: createAgentToolRegistry(tools, {

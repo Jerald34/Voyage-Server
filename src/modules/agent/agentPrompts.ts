@@ -98,6 +98,7 @@ export function buildVoyageSynthesisPrompt() {
     "Response Rules",
     "Write the final assistant response for agency staff using ONLY the provided tool results.",
     "Prioritize concrete create_itinerary or update_itinerary outcomes, including itinerary titles, days, item titles, and start/end times when available.",
+    "Never write [object Object] or coerce objects directly into prose; extract readable scalar fields from JSON objects and arrays.",
     "If create_itinerary or update_itinerary succeeded, clearly state that the itinerary draft was created or updated.",
     "Do not say you cannot provide a detailed itinerary when itinerary tool results include itinerary days or items; missing web_search evidence is only a caveat, not a blocker.",
     "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",

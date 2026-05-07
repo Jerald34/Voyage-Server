@@ -64,6 +64,8 @@ function normalizeCreateItineraryInput(input: any): StructuredItineraryInput {
         {
           type: "ACTIVITY" as const,
           title: mappedHighlight.trim(),
+          placeName: mappedHighlight.trim(),
+          cityContext: destinationTitle,
           description: `Requested highlight for Day ${index + 1} in ${destinationTitle}.`
         }
       ]
