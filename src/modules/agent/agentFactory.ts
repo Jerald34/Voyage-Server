@@ -1,4 +1,5 @@
 import { env } from "../../config/env";
+import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { agentService } from "./agentService";
 import { itineraryService } from "../itineraries/itineraryService";
@@ -47,8 +48,8 @@ function createAgencyAgentOrchestrator() {
     tools[1] = createCreateItineraryTool({ itineraryService, agentService, maps });
     tools[2] = createUpdateItineraryTool({ itineraryService, agentService, maps });
     tools.push(
-      createMapPinpointTool({ maps, agentService }),
-      createPlaceInsightsTool({ maps, agentService })
+      createMapPinpointTool({ maps, agentService, placeSnapshotClient: prisma }),
+      createPlaceInsightsTool({ maps, agentService, placeSnapshotClient: prisma })
     );
   } catch {
     // Keep the agent route import-safe when geocoding is not configured.
@@ -61,10 +62,10 @@ function createAgencyAgentOrchestrator() {
       createSearchNearbyGooglePlacesTool({ maps: googleMaps, agentService }),
       createGetGooglePlaceDetailsTool({ maps: googleMaps, agentService }),
       createGetGooglePlacePhotosTool({ maps: googleMaps, agentService }),
-      createEstimateRouteTool({ maps: googleMaps, agentService }),
-      createRouteLogisticsTool({ maps: googleMaps, agentService }),
-      createMapPinpointTool({ maps: googleMaps, agentService }),
-      createPlaceInsightsTool({ maps: googleMaps, agentService })
+      createEstimateRouteTool({ maps: googleMaps, agentService, placeSnapshotClient: prisma }),
+      createRouteLogisticsTool({ maps: googleMaps, agentService, placeSnapshotClient: prisma }),
+      createMapPinpointTool({ maps: googleMaps, agentService, placeSnapshotClient: prisma }),
+      createPlaceInsightsTool({ maps: googleMaps, agentService, placeSnapshotClient: prisma })
     ];
 
     tools.push(...googleMapsTools.filter(t => !tools.some(existing => existing.name === t.name)));
@@ -82,8 +83,8 @@ function createAgencyAgentOrchestrator() {
     try {
       const maps = createNominatimMapsProvider();
       tools.push(
-        createMapPinpointTool({ maps, agentService }),
-        createPlaceInsightsTool({ maps, agentService })
+        createMapPinpointTool({ maps, agentService, placeSnapshotClient: prisma }),
+        createPlaceInsightsTool({ maps, agentService, placeSnapshotClient: prisma })
       );
     } catch {
       // Keep agent route import-safe.

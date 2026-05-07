@@ -17,7 +17,7 @@ export function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "search_nearby_google_places: find restaurants, attractions, or amenities near a specific location.",
     "get_google_place_details: fetch detailed place information from Google Maps.",
     "get_google_place_photos: retrieve photo URLs for a specific Google Place.",
-    "estimate_route: calculate travel distance and duration between coordinates.",
+    "estimate_route: calculate travel distance and duration between coordinates or place names.",
     "map_pinpoint: resolve a place and pin it on the user's map.",
     "route_logistics: resolve two places and draw the route between them.",
     "place_insights: resolve a place and return richer map-backed details.",

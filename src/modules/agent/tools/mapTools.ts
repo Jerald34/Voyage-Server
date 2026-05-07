@@ -27,11 +27,20 @@ const placeDetailsInputSchema = z.object({
   placeId: z.string().min(1).max(500)
 });
 
-const routeInputSchema = z.object({
-  origin: geoPointSchema,
-  destination: geoPointSchema,
-  travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
-});
+const routeInputSchema = z.union([
+  z.object({
+    origin: geoPointSchema,
+    destination: geoPointSchema,
+    travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
+  }),
+  z.object({
+    originPlaceName: z.string().min(1).max(500),
+    destinationPlaceName: z.string().min(1).max(500),
+    cityContext: z.string().min(1).max(200).optional(),
+    travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
+  })
+]);
+
 
 const searchNearbyInputSchema = z.object({
   location: geoPointSchema,
@@ -56,7 +65,7 @@ const routeLogisticsInputSchema = z.object({
   originPlaceName: z.string().min(1).max(500),
   destinationPlaceName: z.string().min(1).max(500),
   cityContext: z.string().min(1).max(200).optional(),
-  travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TRANSIT"]).default("DRIVE")
+  travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
 }).strict();
 
 export function createMapPinpointTool(options: {
@@ -276,17 +285,53 @@ export function createGetGooglePlaceDetailsTool(options: { maps: MapsProvider; a
   };
 }
 
-export function createEstimateRouteTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
+export function createEstimateRouteTool(options: {
+  maps: MapsProvider;
+  agentService: AgentToolService;
+  placeSnapshotClient?: PrismaClient;
+}): AgentTool {
   return {
     name: "estimate_route",
     async execute(_context, input) {
       const parsed = routeInputSchema.parse(input);
-      console.log(`[Maps] estimateRoute via ${parsed.travelMode}`);
+      let origin: { latitude: number; longitude: number };
+      let destination: { latitude: number; longitude: number };
+      let travelMode: "DRIVE" | "BICYCLE" | "WALK" | "TWO_WHEELER" | "TRANSIT";
+
+      if ("origin" in parsed) {
+        origin = parsed.origin;
+        destination = parsed.destination;
+        travelMode = parsed.travelMode;
+      } else {
+        console.log(
+          `[Maps] estimate_route resolving origin: "${parsed.originPlaceName}" and destination: "${parsed.destinationPlaceName}"`
+        );
+        const [originPlace, destinationPlace] = await Promise.all([
+          options.maps.resolvePlace({
+            placeName: parsed.originPlaceName,
+            cityContext: parsed.cityContext
+          }),
+          options.maps.resolvePlace({
+            placeName: parsed.destinationPlaceName,
+            cityContext: parsed.cityContext
+          })
+        ]);
+
+        const client = options.placeSnapshotClient ?? prisma;
+        await Promise.all([upsertPlaceSnapshot(client, originPlace), upsertPlaceSnapshot(client, destinationPlace)]);
+
+        origin = originPlace.location;
+        destination = destinationPlace.location;
+        travelMode = parsed.travelMode;
+      }
+
+      console.log(`[Maps] estimateRoute via ${travelMode}`);
       const result = await options.maps.estimateRoute({
-        origin: parsed.origin,
-        destination: parsed.destination,
-        travelMode: parsed.travelMode
+        origin,
+        destination,
+        travelMode
       });
+
       await options.agentService.recordSources(createRunRecord(_context), [
         {
           sourceType: "MAP_ROUTE",
@@ -299,12 +344,13 @@ export function createEstimateRouteTool(options: { maps: MapsProvider; agentServ
           provider: "google_maps",
           retrievedAt: new Date(),
           metadata: toCompactMetadata({
-            origin: parsed.origin,
-            destination: parsed.destination,
-            travelMode: parsed.travelMode,
+            origin,
+            destination,
+            travelMode,
             distanceMeters: result.distanceMeters ?? null,
             durationSeconds: result.durationSeconds ?? null,
-            staticDurationSeconds: result.staticDurationSeconds ?? null
+            staticDurationSeconds: result.staticDurationSeconds ?? null,
+            input: parsed
           })
         }
       ]);
@@ -312,6 +358,7 @@ export function createEstimateRouteTool(options: { maps: MapsProvider; agentServ
     }
   };
 }
+
 
 export function createSearchNearbyGooglePlacesTool(options: { maps: MapsProvider; agentService: AgentToolService }): AgentTool {
   return {
