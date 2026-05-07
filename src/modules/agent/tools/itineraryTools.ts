@@ -94,6 +94,44 @@ function normalizeCreateItineraryInput(input: any): StructuredItineraryInput {
   });
 }
 
+function normalizeUpdateItineraryInput(input: any) {
+  if (!isRecordLike(input)) {
+    throw inputError();
+  }
+
+  // Standard format: { itineraryId: string, itinerary: { title, days, ... } }
+  if ("itineraryId" in input && isRecordLike(input.itinerary)) {
+    return updateItineraryInputSchema.parse(input);
+  }
+
+  // Flat format: { itineraryId: string, title: string, days: [], ... }
+  // This happens when the model extracts the fields to the top level.
+  if ("itineraryId" in input && Array.isArray(input.days)) {
+    const { itineraryId, ...itineraryData } = input;
+    try {
+      return {
+        itineraryId: String(itineraryId),
+        itinerary: replaceItinerarySchema.parse(itineraryData)
+      };
+    } catch (error) {
+      if (error instanceof z.ZodError) {
+        console.error("[Agent] normalizeUpdateItineraryInput Flat format Zod Error:", error.issues);
+      }
+      throw error;
+    }
+  }
+
+  // Attempt to parse directly if it matches the schema but is missing the wrapper
+  try {
+    return updateItineraryInputSchema.parse(input);
+  } catch (error) {
+    if (error instanceof z.ZodError) {
+      console.error("[Agent] normalizeUpdateItineraryInput Zod Error:", error.issues);
+    }
+    throw error;
+  }
+}
+
 async function resolveItineraryItemPlaces<T extends StructuredItineraryInput["itinerary"]>(options: {
   input: T;
   maps: MapsProvider;
@@ -183,7 +221,7 @@ export function createUpdateItineraryTool(options: {
   return {
     name: "update_itinerary",
     async execute(context, input) {
-      const parsed = updateItineraryInputSchema.parse(input);
+      const parsed = normalizeUpdateItineraryInput(input);
       const itinerary = options.maps
         ? await resolveItineraryItemPlaces({
           input: parsed.itinerary,

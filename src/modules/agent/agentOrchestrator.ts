@@ -22,7 +22,8 @@ import {
   recoverPlainItineraryToolOutput, 
   shouldCreateItineraryDirectlyFromUserRequest, 
   createItineraryToolCallFromUserRequest,
-  enrichToolInputFromUserRequestForExecution
+  enrichToolInputFromUserRequestForExecution,
+  mergeUpdateItineraryInputFromActiveItinerary
 } from "./agentInference";
 import { 
   errorDetails, 
@@ -107,11 +108,14 @@ function buildActiveItineraryContext(thread: unknown) {
       continue;
     }
 
-    return [
-      "Active itinerary draft context",
-      "The user may ask to modify this draft. For add, remove, replace, shorten, extend, reorder, or revise requests, call update_itinerary with this itinerary id and a full replacement itinerary that preserves unchanged days/items.",
-      JSON.stringify({ itinerary })
-    ].join("\n");
+    return {
+      prompt: [
+        "Active itinerary draft context",
+        "The user may ask to modify this draft. For add, remove, replace, shorten, extend, reorder, or revise requests, call update_itinerary with this itinerary id and a full replacement itinerary that preserves unchanged days/items.",
+        "For update_itinerary, include the itineraryId and a complete itinerary object with title, days, and every required day/item field. Do not omit item type or title."
+      ].join("\n"),
+      itinerary
+    };
   }
 
   return null;
@@ -162,7 +166,7 @@ export function createAgentOrchestrator(options: {
         });
 
         let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
-        let activeItineraryContext: string | null = null;
+        let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
           activeItineraryContext = buildActiveItineraryContext(thread);
@@ -205,7 +209,7 @@ export function createAgentOrchestrator(options: {
               ? [
                 {
                   role: "system" as const,
-                  content: activeItineraryContext
+                  content: activeItineraryContext.prompt
                 }
               ]
               : []),
@@ -328,19 +332,26 @@ export function createAgentOrchestrator(options: {
             input: toolCall.input,
             userContent: input.userContent
           });
+          const normalizedToolInput =
+            toolCall.name === "update_itinerary" && activeItineraryContext
+              ? mergeUpdateItineraryInputFromActiveItinerary({
+                input: toolInput,
+                activeItinerary: activeItineraryContext.itinerary
+              })
+              : toolInput;
           const persistedToolCall = await options.agentService.recordToolCallStarted(
             run,
-            { toolName: toolCall.name, input: toolInput },
+            { toolName: toolCall.name, input: normalizedToolInput },
             startedAt
           );
           await options.agentService.recordRunEvent(run, {
             type: "tool.started",
-            payload: { name: toolCall.name, input: toolInput }
+            payload: { name: toolCall.name, input: normalizedToolInput }
           });
           toolCallsExecuted += 1;
 
           try {
-            const output = await options.toolRegistry.execute(toolCall.name, context, toolInput);
+            const output = await options.toolRegistry.execute(toolCall.name, context, normalizedToolInput);
             toolResults.push({ name: toolCall.name, output });
             await options.agentService.completeToolCall(persistedToolCall.id, output, now());
             await options.agentService.recordRunEvent(run, {

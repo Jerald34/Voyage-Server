@@ -7,7 +7,7 @@ export const modelToolCallSchema = z.object({
 });
 
 export const modelJsonOutputSchema = z.object({
-  assistantMessage: z.string().min(1).max(12000).optional(),
+  assistantMessage: z.string().min(1).max(30000).optional(),
   toolCalls: z.array(modelToolCallSchema).default([])
 });
 
@@ -290,9 +290,39 @@ function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
   let jsonText = extractJsonFromCodeFence(content);
   if (!jsonText) {
     const braceStart = content.indexOf("{");
-    const braceEnd = content.lastIndexOf("}");
-    if (braceStart >= 0 && braceEnd > braceStart) {
-      jsonText = content.slice(braceStart, braceEnd + 1);
+    if (braceStart >= 0) {
+      // Find the balancing closing brace
+      let depth = 0;
+      let inQuotes = false;
+      let quoteChar = "";
+      let foundEnd = -1;
+
+      for (let i = braceStart; i < content.length; i++) {
+        const ch = content[i];
+        const prev = i > 0 ? content[i - 1] : "";
+
+        if ((ch === '"' || ch === "'") && prev !== "\\") {
+          if (!inQuotes) {
+            inQuotes = true;
+            quoteChar = ch;
+          } else if (quoteChar === ch) {
+            inQuotes = false;
+            quoteChar = "";
+          }
+        } else if (!inQuotes) {
+          if (ch === "{") depth++;
+          else if (ch === "}") depth--;
+        }
+
+        if (depth === 0 && !inQuotes) {
+          foundEnd = i;
+          break;
+        }
+      }
+      
+      if (foundEnd > braceStart) {
+        jsonText = content.slice(braceStart, foundEnd + 1);
+      }
     }
   }
   if (!jsonText) return null;

@@ -15,12 +15,26 @@ export function errorDetails(error: unknown) {
 }
 
 export function stringifyToolResults(toolResults: Array<{ name: string; output: unknown }>) {
-  const text = JSON.stringify(toolResults);
-  if (text.length <= 12000) {
+  // Map large or complex tool results to concise summaries before stringifying.
+  // This keeps the synthesis prompt context manageable and prevents truncation
+  // from creating invalid JSON.
+  const summarizedResults = toolResults.map(result => {
+    if (result.name === "create_itinerary" || result.name === "update_itinerary") {
+      const summary = getItinerarySummary(result.output);
+      if (summary) {
+        return { name: result.name, output: { success: true, summary } };
+      }
+    }
+    return result;
+  });
+
+  const text = JSON.stringify(summarizedResults);
+  if (text.length <= 16000) {
     return text;
   }
-  return `${text.slice(0, 11997)}...`;
+  return `${text.slice(0, 15997)}...`;
 }
+
 
 function isRecordLike(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);

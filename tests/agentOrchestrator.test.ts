@@ -405,7 +405,7 @@ describe("agent orchestrator", () => {
       payload: { delta: "Created a draft itinerary from the itinerary tool." }
     });
     expect(modelProvider.calls).toHaveLength(2);
-    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("itinerary-1");
+    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("create_itinerary");
   });
 
   it("accepts shorthand create_itinerary payloads from the model", async () => {
@@ -1337,36 +1337,35 @@ describe("agent orchestrator", () => {
         }
         if (this.sawActiveContext && input.messages[0].role === "system") {
           return {
-            content: JSON.stringify({
-              assistantMessage: "Updating Day 1 lunch.",
-              toolCalls: [
-                {
-                  name: "update_itinerary",
-                  input: {
-                    itineraryId: "itinerary-active",
-                    itinerary: {
-                      title: "Baguio Draft",
-                      days: [
-                        {
-                          dayNumber: 1,
-                          title: "Day 1",
-                          items: [
-                            {
-                              type: "ACTIVITY",
-                              title: "Burnham Park",
-                              startTime: "10:00 AM",
-                              endTime: "11:30 AM"
-                            },
-                            {
-                              type: "MEAL",
-                              title: "Budget lunch near Session Road",
-                              startTime: "12:00 PM",
-                              endTime: "1:00 PM",
-                              placeName: "Session Road",
-                              cityContext: "Baguio City, Philippines"
-                            }
-                          ]
-                        }
+              content: JSON.stringify({
+                assistantMessage: "Updating Day 1 lunch.",
+                toolCalls: [
+                  {
+                    name: "update_itinerary",
+                    input: {
+                      itineraryId: "itinerary-active",
+                      itinerary: {
+                        title: "Baguio Draft",
+                        days: [
+                          {
+                            dayNumber: 1,
+                            title: "Day 1",
+                            items: [
+                              {
+                                type: "ACTIVITY",
+                                title: "Burnham Park",
+                                startTime: "10:00 AM",
+                                endTime: "11:30 AM"
+                              },
+                              {
+                                title: "Budget lunch near Session Road",
+                                startTime: "12:00 PM",
+                                endTime: "1:00 PM",
+                                placeName: "Session Road",
+                                cityContext: "Baguio City, Philippines"
+                              }
+                            ]
+                          }
                       ]
                     }
                   }
@@ -1407,10 +1406,11 @@ describe("agent orchestrator", () => {
       expect.objectContaining({
         itineraryId: "itinerary-active",
         itinerary: expect.objectContaining({
+          title: "Baguio Draft",
           days: [
             expect.objectContaining({
               items: expect.arrayContaining([
-                expect.objectContaining({ title: "Budget lunch near Session Road" })
+                expect.objectContaining({ type: "MEAL", title: "Budget lunch near Session Road" })
               ])
             })
           ]

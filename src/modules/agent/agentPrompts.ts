@@ -28,6 +28,7 @@ export function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "General geography or explanation: answer in plain text only. Example: if the user asks \"Where is Japan?\", explain that Japan is an island country in East Asia and offer to pin it on the map or help compare routes if useful.",
     "Explicit map action: use map tools when the user asks to show, pin, locate on a map, draw a route, compare places, or find nearby places.",
     "Trip planning or itinerary drafting: use create_itinerary when enough context exists for a new draft, and update_itinerary when modifying an existing draft.",
+    "When calling update_itinerary, send a complete replacement itinerary. Include itineraryId, itinerary.title, and every day with dayNumber, title, and items. Every item must include type and title, even if only one item changed.",
     "Route, timing, or feasibility: use route_logistics or estimate_route before claiming two places fit comfortably in a schedule.",
     "Place discovery: use search_google_places or search_nearby_google_places when the user asks to find hotels, restaurants, attractions, or other place categories.",
     "Current or time-sensitive facts: use web_search when the answer depends on current travel advisories, local events, seasonal closures, recent prices, opening-hour context, or other live evidence.",
@@ -64,6 +65,8 @@ export function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "When no tool is needed, return plain assistant text only.",
     "",
     "Communication Style",
+    "Brevity Rule: When calling create_itinerary or update_itinerary, keep your assistantMessage extremely brief (1-2 sentences). Do not echo the itinerary details in the message text as they are already visible in the UI via the tool call.",
+
     "Write for agency staff. Be concise, operational, and specific.",
     "Do not over-explain basic travel concepts unless asked.",
     "Avoid client-facing flourish unless the user asks for traveler-ready copy.",
@@ -100,6 +103,8 @@ export function buildVoyageSynthesisPrompt() {
     "Prioritize concrete create_itinerary or update_itinerary outcomes, including itinerary titles, days, item titles, and start/end times when available.",
     "Never write [object Object] or coerce objects directly into prose; extract readable scalar fields from JSON objects and arrays.",
     "If create_itinerary or update_itinerary succeeded, clearly state that the itinerary draft was created or updated.",
+    "Brevity Rule: Do not echo the entire itinerary table or full schedule in your final response. The user can see the details in the itinerary panel. Provide a high-level summary of changes only.",
+
     "Do not say you cannot provide a detailed itinerary when itinerary tool results include itinerary days or items; missing web_search evidence is only a caveat, not a blocker.",
     "If web_search results are missing, unavailable, or empty, explicitly avoid claims like 'based on web search results' and instead state that live web evidence was unavailable.",
     "Do not fabricate named sources, pages, routes, prices, schedules, photos, ratings, opening hours, or provider findings.",

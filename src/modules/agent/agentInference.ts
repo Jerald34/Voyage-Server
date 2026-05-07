@@ -1,4 +1,4 @@
-import { structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
+import { replaceItinerarySchema, structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
 import type { ModelProvider } from "../../services/modelProvider";
 import { canonicalToolName, type ParsedModelOutput, parseModelOutput } from "./agentParser";
 
@@ -417,6 +417,112 @@ export function createItineraryToolCallFromUserRequest(userContent: string): Par
   };
 }
 
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function mergeObjectRecord(base: Record<string, unknown>, incoming: Record<string, unknown>) {
+  return {
+    ...base,
+    ...incoming
+  };
+}
+
+function mergeItineraryDay(baseDay: Record<string, unknown>, incomingDay: Record<string, unknown>) {
+  const baseItems = Array.isArray(baseDay.items) ? baseDay.items.filter(isRecord) : [];
+  const incomingItems = Array.isArray(incomingDay.items) ? incomingDay.items.filter(isRecord) : [];
+  const mergedItems = baseItems.map((baseItem, index) => {
+    const incomingItem = incomingItems[index];
+    return incomingItem ? mergeObjectRecord(baseItem, incomingItem) : baseItem;
+  });
+
+  for (let index = baseItems.length; index < incomingItems.length; index += 1) {
+    mergedItems.push(incomingItems[index]);
+  }
+
+  return {
+    ...baseDay,
+    ...incomingDay,
+    items: mergedItems
+  };
+}
+
+function mergeReplacementItinerary(baseItinerary: Record<string, unknown>, incomingItinerary: Record<string, unknown>) {
+  const baseDays = Array.isArray(baseItinerary.days) ? baseItinerary.days.filter(isRecord) : [];
+  const incomingDays = Array.isArray(incomingItinerary.days) ? incomingItinerary.days.filter(isRecord) : [];
+  const mergedDays = baseDays.map((baseDay) => {
+    const dayNumber = typeof baseDay.dayNumber === "number" ? baseDay.dayNumber : null;
+    const incomingDay = dayNumber === null
+      ? null
+      : incomingDays.find((day) => day.dayNumber === dayNumber);
+    return incomingDay ? mergeItineraryDay(baseDay, incomingDay) : baseDay;
+  });
+
+  for (const incomingDay of incomingDays) {
+    const dayNumber = typeof incomingDay.dayNumber === "number" ? incomingDay.dayNumber : null;
+    if (dayNumber === null) {
+      mergedDays.push(incomingDay);
+      continue;
+    }
+    if (!mergedDays.some((day) => day.dayNumber === dayNumber)) {
+      mergedDays.push(incomingDay);
+    }
+  }
+
+  return {
+    ...baseItinerary,
+    ...incomingItinerary,
+    days: mergedDays.sort((a, b) => {
+      const left = typeof a.dayNumber === "number" ? a.dayNumber : Number.MAX_SAFE_INTEGER;
+      const right = typeof b.dayNumber === "number" ? b.dayNumber : Number.MAX_SAFE_INTEGER;
+      return left - right;
+    })
+  };
+}
+
+export function mergeUpdateItineraryInputFromActiveItinerary(options: {
+  input: Record<string, unknown>;
+  activeItinerary: unknown;
+}) {
+  if (!isRecord(options.input) || !isRecord(options.activeItinerary)) {
+    return options.input;
+  }
+
+  const activeItineraryResult = replaceItinerarySchema.safeParse(options.activeItinerary);
+  if (!activeItineraryResult.success) {
+    return options.input;
+  }
+
+  const itineraryId = typeof options.input.itineraryId === "string" ? options.input.itineraryId.trim() : "";
+  const activeItineraryId = typeof options.activeItinerary.id === "string" ? options.activeItinerary.id.trim() : "";
+  if (itineraryId && activeItineraryId && itineraryId !== activeItineraryId) {
+    return options.input;
+  }
+
+  const nestedItinerary = isRecord(options.input.itinerary) ? options.input.itinerary : null;
+  const flatItinerary =
+    Array.isArray(options.input.days) || typeof options.input.title === "string"
+      ? Object.fromEntries(
+        Object.entries(options.input).filter(([key]) => key !== "itineraryId" && key !== "trip")
+      )
+      : null;
+  const incomingItinerary = nestedItinerary ?? flatItinerary;
+  if (!isRecord(incomingItinerary)) {
+    return options.input;
+  }
+
+  const merged = mergeReplacementItinerary(activeItineraryResult.data as Record<string, unknown>, incomingItinerary);
+  const parsed = replaceItinerarySchema.safeParse(merged);
+  if (!parsed.success) {
+    return options.input;
+  }
+
+  return {
+    itineraryId: itineraryId || activeItineraryId,
+    itinerary: parsed.data
+  };
+}
+
 export async function recoverPlainItineraryToolOutput(options: {
   modelProvider: ModelProvider;
   userContent: string;
@@ -450,8 +556,4 @@ export async function recoverPlainItineraryToolOutput(options: {
 
   const parsed = parseModelOutput(recovery.content);
   return parsed.type === "json" && parsed.toolCalls.length > 0 ? parsed : null;
-}
-
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return value !== null && typeof value === "object" && !Array.isArray(value);
 }
