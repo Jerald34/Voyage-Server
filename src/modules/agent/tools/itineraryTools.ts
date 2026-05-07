@@ -6,6 +6,7 @@ import { replaceItinerarySchema, structuredItineraryInputSchema } from "../../it
 import type { StructuredItineraryInput } from "../../itineraries/itineraryService";
 import type { AgentTool, AgentToolService, CreateItineraryService, UpdateItineraryService } from "../agentTools";
 import { createRunRecord, inputError, toTitleCase, isRecordLike, upsertPlaceSnapshot } from "./toolUtils";
+import { enrichResolvedPlaceForSnapshot } from "./placeSnapshotEnrichment";
 
 const updateItineraryInputSchema = z.object({
   itineraryId: z.string().min(1),
@@ -114,7 +115,8 @@ async function resolveItineraryItemPlaces<T extends StructuredItineraryInput["it
               cityContext: item.cityContext ?? options.input.title
             });
             console.log(`[Maps] Successfully resolved "${item.placeName}" to ${resolved.location.latitude}, ${resolved.location.longitude}`);
-            const snapshot = await upsertPlaceSnapshot(options.client, resolved);
+            const enriched = await enrichResolvedPlaceForSnapshot(options.maps, resolved);
+            const snapshot = await upsertPlaceSnapshot(options.client, enriched);
             return {
               ...item,
               placeSnapshotId: snapshot.id

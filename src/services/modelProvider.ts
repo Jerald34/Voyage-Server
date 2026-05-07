@@ -18,6 +18,7 @@ type OpenAiCompatibleProviderOptions = {
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
   errorFactory?: (error?: unknown) => ApiError;
+  requestBodyExtras?: Record<string, unknown>;
 };
 
 function defaultErrorFactory() {
@@ -26,7 +27,14 @@ function defaultErrorFactory() {
 
 export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProviderOptions): ModelProvider {
   const baseUrl = options.baseUrl.replace(/\/+$/, "");
-  const { model, apiKey, timeoutMs = 120000, fetchImpl = fetch, errorFactory = defaultErrorFactory } = options;
+  const {
+    model,
+    apiKey,
+    timeoutMs = 120000,
+    fetchImpl = fetch,
+    errorFactory = defaultErrorFactory,
+    requestBodyExtras = {}
+  } = options;
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
@@ -48,7 +56,8 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
           body: JSON.stringify({
             model,
             messages: input.messages,
-            temperature: input.temperature ?? 0.2
+            temperature: input.temperature ?? 0.2,
+            ...requestBodyExtras
           }),
           signal: controller.signal
         });
@@ -92,6 +101,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
             model,
             messages: input.messages,
             temperature: input.temperature ?? 0.2,
+            ...requestBodyExtras,
             stream: true
           }),
           signal: controller.signal
@@ -201,10 +211,41 @@ export function createGoogleModelProvider(options: GoogleModelProviderOptions = 
   });
 }
 
+type OpenRouterReasoningEffort = "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
+
+type OpenRouterModelProviderOptions = {
+  apiKey?: string;
+  model?: string;
+  reasoningEffort?: OpenRouterReasoningEffort;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export function createOpenRouterModelProvider(options: OpenRouterModelProviderOptions = {}): ModelProvider {
+  return createOpenAiCompatibleProvider({
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: options.model ?? env.OPENROUTER_MODEL,
+    apiKey: options.apiKey ?? env.OPENROUTER_API_KEY,
+    timeoutMs: options.timeoutMs,
+    fetchImpl: options.fetchImpl,
+    requestBodyExtras: {
+      reasoning: {
+        effort: options.reasoningEffort ?? env.OPENROUTER_REASONING_EFFORT,
+        exclude: true
+      }
+    },
+    errorFactory: () => new ApiError(503, "OPENROUTER_UNAVAILABLE", "OpenRouter provider is unavailable. Check your API key and try again.")
+  });
+}
+
 export const lmStudioModelProvider = createLmStudioModelProvider();
 export const googleModelProvider = createGoogleModelProvider();
+export const openRouterModelProvider = createOpenRouterModelProvider();
 
 export function getModelProvider(): ModelProvider {
+  if (env.OPENROUTER_API_KEY) {
+    return openRouterModelProvider;
+  }
   if (env.GOOGLE_AI_API_KEY) {
     return googleModelProvider;
   }

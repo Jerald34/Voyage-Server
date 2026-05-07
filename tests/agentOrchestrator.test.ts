@@ -642,7 +642,16 @@ describe("agent orchestrator", () => {
     const { service } = createFakeAgentService();
     const createdInputs: unknown[] = [];
     const resolvedPlaces: Array<{ placeName: string; cityContext?: string }> = [];
+    const detailsCalls: string[] = [];
+    const photoCalls: Array<{ placeId: string; maxResults?: number }> = [];
     const upsertedPlaces: string[] = [];
+    const upsertCreateInputs: Array<{
+      name: string;
+      rating?: number;
+      websiteUrl?: string;
+      phoneNumber?: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
         agentService: service,
@@ -650,8 +659,27 @@ describe("agent orchestrator", () => {
           async searchPlaces() {
             return [];
           },
-          async getPlaceDetails() {
-            return {};
+          async getPlaceDetails(placeId) {
+            detailsCalls.push(placeId);
+            return {
+              id: placeId,
+              name: `${placeId} detailed name`,
+              address: `${placeId} detailed address`,
+              location: { latitude: 16.4111, longitude: 120.5988 },
+              rating: 4.7,
+              userRatingCount: 321,
+              types: ["park", "tourist_attraction"],
+              phoneNumber: "+63 74 111 2222",
+              websiteUri: "https://example.com/baguio-place"
+            };
+          },
+          async getPlacePhotos(placeId, maxResults) {
+            photoCalls.push({ placeId, maxResults });
+            return [
+              { name: `${placeId}/photos/1`, photoUri: "https://example.com/photo-1.jpg" },
+              { name: `${placeId}/photos/2`, photoUri: "https://example.com/photo-2.jpg" },
+              { name: `${placeId}/photos/empty`, photoUri: "" }
+            ];
           },
           async estimateRoute() {
             return {};
@@ -664,14 +692,15 @@ describe("agent orchestrator", () => {
               name: input.placeName,
               formattedAddress: `${input.placeName}, ${input.cityContext}`,
               location: { latitude: 16.4023, longitude: 120.596 },
-              metadata: {}
+              metadata: { source: "resolved" }
             };
           }
         },
         placeSnapshotClient: {
           placeSnapshot: {
-            async upsert(args: { create: { name: string } }) {
+            async upsert(args: { create: { name: string; metadata?: Record<string, unknown> } }) {
               upsertedPlaces.push(args.create.name);
+              upsertCreateInputs.push(args.create);
               return { id: "11111111-1111-4111-8111-111111111111" };
             }
           }
@@ -695,7 +724,31 @@ describe("agent orchestrator", () => {
       { placeName: "Burnham Park boating", cityContext: "Baguio City, Philippines" },
       { placeName: "Mines View Park views", cityContext: "Baguio City, Philippines" }
     ]);
-    expect(upsertedPlaces).toEqual(["Burnham Park boating", "Mines View Park views"]);
+    expect(detailsCalls).toEqual([
+      "google:burnham-park-boating",
+      "google:mines-view-park-views"
+    ]);
+    expect(photoCalls).toEqual([
+      { placeId: "google:burnham-park-boating", maxResults: 3 },
+      { placeId: "google:mines-view-park-views", maxResults: 3 }
+    ]);
+    expect(upsertedPlaces).toEqual([
+      "google:burnham-park-boating detailed name",
+      "google:mines-view-park-views detailed name"
+    ]);
+    expect(upsertCreateInputs).toHaveLength(2);
+    expect(upsertCreateInputs[0]).toMatchObject({
+      rating: 4.7,
+      websiteUrl: "https://example.com/baguio-place",
+      phoneNumber: "+63 74 111 2222",
+      metadata: {
+        source: "resolved",
+        primaryPhotoUrl: "https://example.com/photo-1.jpg",
+        photoUrls: ["https://example.com/photo-1.jpg", "https://example.com/photo-2.jpg"],
+        googleTypes: ["park", "tourist_attraction"],
+        userRatingCount: 321
+      }
+    });
     expect(createdInputs[0]).toMatchObject({
       itinerary: {
         days: [
