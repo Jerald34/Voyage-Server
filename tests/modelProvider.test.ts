@@ -168,4 +168,74 @@ describe("OpenRouter model provider", () => {
 
     expect(chunks).toEqual(["Visible", " answer"]);
   });
+
+  it("retries transient OpenRouter completion failures up to 3 total attempts", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+
+      if (calls.length < 3) {
+        return new Response("provider busy", { status: 503 });
+      }
+
+      return new Response(
+        JSON.stringify({
+          choices: [{ message: { content: "Recovered itinerary." } }]
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createOpenRouterModelProvider({
+      apiKey: "test-openrouter-key",
+      model: "openai/gpt-5.2",
+      fetchImpl
+    });
+
+    const result = await provider.complete({
+      messages: [{ role: "user", content: "Try until OpenRouter responds." }]
+    });
+
+    expect(result).toEqual({ content: "Recovered itinerary." });
+    expect(calls).toHaveLength(3);
+  });
+
+  it("retries transient OpenRouter stream startup failures up to 3 total attempts", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const encoder = new TextEncoder();
+
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+
+      if (calls.length < 3) {
+        throw new Error("provider capacity reached");
+      }
+
+      return new Response(
+        new ReadableStream<Uint8Array>({
+          start(controller) {
+            controller.enqueue(encoder.encode('data: {"choices":[{"delta":{"content":"Recovered stream"}}]}\n\ndata: [DONE]\n\n'));
+            controller.close();
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createOpenRouterModelProvider({
+      apiKey: "test-openrouter-key",
+      model: "openai/gpt-5.2",
+      fetchImpl
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of provider.completeStream!({
+      messages: [{ role: "user", content: "Stream after retries." }]
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(["Recovered stream"]);
+    expect(calls).toHaveLength(3);
+  });
 });

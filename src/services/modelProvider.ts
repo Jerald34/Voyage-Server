@@ -19,6 +19,7 @@ type OpenAiCompatibleProviderOptions = {
   fetchImpl?: typeof fetch;
   errorFactory?: (error?: unknown) => ApiError;
   requestBodyExtras?: Record<string, unknown>;
+  maxAttempts?: number;
 };
 
 function defaultErrorFactory() {
@@ -33,8 +34,10 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
     timeoutMs = 120000,
     fetchImpl = fetch,
     errorFactory = defaultErrorFactory,
-    requestBodyExtras = {}
+    requestBodyExtras = {},
+    maxAttempts = 1
   } = options;
+  const attemptCount = Math.max(1, maxAttempts);
 
   const headers: Record<string, string> = {
     "Content-Type": "application/json"
@@ -46,73 +49,111 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
 
   return {
     async complete(input) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-      try {
-        const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            model,
-            messages: input.messages,
-            temperature: input.temperature ?? 0.2,
-            ...requestBodyExtras
-          }),
-          signal: controller.signal
-        });
+        try {
+          const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model,
+              messages: input.messages,
+              temperature: input.temperature ?? 0.2,
+              ...requestBodyExtras
+            }),
+            signal: controller.signal
+          });
 
-        if (!response.ok) {
-          const errorBody = await response.text().catch(() => "Could not read error body");
-          console.error(`Model provider error (${response.status}):`, errorBody);
-          throw errorFactory();
+          if (!response.ok) {
+            const errorBody = await response.text().catch(() => "Could not read error body");
+            console.error(`Model provider error (${response.status}):`, errorBody);
+            if (attempt < attemptCount) {
+              continue;
+            }
+            throw errorFactory();
+          }
+
+          const body = (await response.json()) as {
+            choices?: Array<{ message?: { content?: unknown } }>;
+          };
+          const content = body.choices?.[0]?.message?.content;
+
+          if (typeof content !== "string") {
+            throw errorFactory();
+          }
+
+          return { content };
+        } catch (error) {
+          if (error instanceof ApiError) {
+            throw error;
+          }
+
+          if (attempt >= attemptCount) {
+            throw errorFactory(error);
+          }
+        } finally {
+          clearTimeout(timeout);
         }
-
-        const body = (await response.json()) as {
-          choices?: Array<{ message?: { content?: unknown } }>;
-        };
-        const content = body.choices?.[0]?.message?.content;
-
-        if (typeof content !== "string") {
-          throw errorFactory();
-        }
-
-        return { content };
-      } catch (error) {
-        if (error instanceof ApiError) {
-          throw error;
-        }
-
-        throw errorFactory(error);
-      } finally {
-        clearTimeout(timeout);
       }
+
+      throw errorFactory();
     },
 
     async *completeStream(input) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
+        const controller = new AbortController();
+        timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+          response = await fetchImpl(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model,
+              messages: input.messages,
+              temperature: input.temperature ?? 0.2,
+              ...requestBodyExtras,
+              stream: true
+            }),
+            signal: controller.signal
+          });
+
+          if (!response.ok || !response.body) {
+            const errorBody = await response.text().catch(() => "Could not read error body");
+            console.error(`Model provider error (${response.status}):`, errorBody);
+            if (attempt < attemptCount) {
+              clearTimeout(timeout);
+              timeout = undefined;
+              continue;
+            }
+            throw errorFactory();
+          }
+
+          break;
+        } catch (error) {
+          clearTimeout(timeout);
+          timeout = undefined;
+
+          if (error instanceof ApiError) {
+            throw error;
+          }
+
+          if (attempt >= attemptCount) {
+            throw errorFactory(error);
+          }
+        }
+      }
+
+      if (!response?.body) {
+        throw errorFactory();
+      }
 
       try {
-        const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers,
-          body: JSON.stringify({
-            model,
-            messages: input.messages,
-            temperature: input.temperature ?? 0.2,
-            ...requestBodyExtras,
-            stream: true
-          }),
-          signal: controller.signal
-        });
-
-        if (!response.ok || !response.body) {
-          const errorBody = await response.text().catch(() => "Could not read error body");
-          console.error(`Model provider error (${response.status}):`, errorBody);
-          throw errorFactory();
-        }
-
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -170,7 +211,9 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
         }
         throw errorFactory(error);
       } finally {
-        clearTimeout(timeout);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
       }
     }
   };
@@ -228,6 +271,7 @@ export function createOpenRouterModelProvider(options: OpenRouterModelProviderOp
     apiKey: options.apiKey ?? env.OPENROUTER_API_KEY,
     timeoutMs: options.timeoutMs,
     fetchImpl: options.fetchImpl,
+    maxAttempts: 3,
     requestBodyExtras: {
       reasoning: {
         effort: options.reasoningEffort ?? env.OPENROUTER_REASONING_EFFORT,
