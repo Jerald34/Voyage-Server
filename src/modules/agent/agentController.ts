@@ -46,6 +46,15 @@ export async function getThread(req: Request, res: Response, next: NextFunction)
   }
 }
 
+export async function deleteThread(req: Request, res: Response, next: NextFunction) {
+  try {
+    await agentService.deleteThread(getAgencyId(req), String(req.params.id));
+    res.status(204).send();
+  } catch (error) {
+    next(error);
+  }
+}
+
 export async function approveItineraryThread(req: Request, res: Response, next: NextFunction) {
   try {
     const approved = await agentService.approveItineraryThread(getAgencyId(req), String(req.params.id), req.body);

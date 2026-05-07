@@ -96,6 +96,13 @@ export function createAgentService(options: {
       return thread;
     },
 
+    async deleteThread(agencyId: string, threadId: string) {
+      const deleted = await options.repository.deleteThreadByAgency(threadId, agencyId);
+      if (!deleted) {
+        throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
+      }
+    },
+
     async approveItineraryThread(agencyId: string, threadId: string, input: unknown) {
       const parsed = approveItineraryThreadSchema.parse(input);
       const thread = await this.getThread(agencyId, threadId);

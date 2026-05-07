@@ -200,6 +200,7 @@ export interface AgentRepository {
   }): Promise<AgentThreadRecord>;
   listThreadsByAgency(agencyId: string): Promise<AgentThreadRecord[]>;
   findThreadByAgency(id: string, agencyId: string): Promise<AgentThreadRecord | null>;
+  deleteThreadByAgency(id: string, agencyId: string): Promise<boolean>;
   approveItineraryThread(data: {
     agencyId: string;
     threadId: string;

@@ -67,6 +67,13 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       }) as Promise<AgentThreadRecord | null>;
     },
 
+    async deleteThreadByAgency(id, agencyId) {
+      const deleted = await client.agentThread.deleteMany({
+        where: { id, agencyId }
+      });
+      return deleted.count > 0;
+    },
+
     async approveItineraryThread(data) {
       return client.$transaction(async (tx) => {
         const thread = await tx.agentThread.findFirst({

@@ -121,6 +121,23 @@ function createMemoryRepository(): AgentRepository & {
       const thread = threads.find((candidate) => candidate.id === id && candidate.agencyId === agencyId);
       return thread ? hydrateThread(thread) : null;
     },
+    async deleteThreadByAgency(id, agencyId) {
+      const index = threads.findIndex((candidate) => candidate.id === id && candidate.agencyId === agencyId);
+      if (index === -1) {
+        return false;
+      }
+      threads.splice(index, 1);
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].threadId === id) messages.splice(i, 1);
+      }
+      for (let i = runs.length - 1; i >= 0; i -= 1) {
+        if (runs[i].threadId === id) runs.splice(i, 1);
+      }
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        if (events[i].threadId === id) events.splice(i, 1);
+      }
+      return true;
+    },
     async approveItineraryThread(data) {
       const thread = threads.find(
         (candidate) => candidate.id === data.threadId && candidate.agencyId === data.agencyId
@@ -575,6 +592,34 @@ describe("agent service", () => {
       { id: secondThread.id, title: "Second" },
       { id: firstThread.id, title: "First" }
     ]);
+  });
+
+  it("deletes an agency-scoped thread", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft" });
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start draft");
+
+    await expect(service.deleteThread("agency-1", thread.id)).resolves.toBeUndefined();
+
+    await expect(service.getThread("agency-1", thread.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "THREAD_NOT_FOUND"
+    });
+    expect(repository.messages).toHaveLength(0);
+    expect(repository.runs).toHaveLength(0);
+  });
+
+  it("does not delete threads outside the resolved agency", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft" });
+
+    await expect(service.deleteThread("agency-2", thread.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "THREAD_NOT_FOUND"
+    });
+    await expect(service.getThread("agency-1", thread.id)).resolves.toMatchObject({ id: thread.id });
   });
 
   it("does not fail durable agent writes when thread freshness update fails", async () => {
