@@ -47,6 +47,10 @@ export type ItineraryItemRecord = {
     formattedAddress: string | null;
     latitude: number | null;
     longitude: number | null;
+    rating: number | null;
+    websiteUrl: string | null;
+    phoneNumber: string | null;
+    metadata: unknown;
   } | null;
   routeFromPrevious: unknown;
   staffNotes: string | null;

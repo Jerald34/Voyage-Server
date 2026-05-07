@@ -11,96 +11,149 @@ export type ModelProvider = {
   completeStream?(input: { messages: ModelMessage[]; temperature?: number }): AsyncIterable<string>;
 };
 
-type LmStudioModelProviderOptions = {
-  baseUrl?: string;
-  model?: string;
+type OpenAiCompatibleProviderOptions = {
+  baseUrl: string;
+  model: string;
+  apiKey?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  errorFactory?: (error?: unknown) => ApiError;
+  requestBodyExtras?: Record<string, unknown>;
+  maxAttempts?: number;
 };
 
-const LOCAL_MODEL_UNAVAILABLE = new ApiError(
-  503,
-  "LOCAL_MODEL_UNAVAILABLE",
-  "Local model provider is unavailable. Start LM Studio and try again."
-);
-
-function unavailableModelError() {
-  return new ApiError(LOCAL_MODEL_UNAVAILABLE.statusCode, LOCAL_MODEL_UNAVAILABLE.code, LOCAL_MODEL_UNAVAILABLE.message);
+function defaultErrorFactory() {
+  return new ApiError(503, "MODEL_PROVIDER_ERROR", "The model provider is currently unavailable.");
 }
 
-export function createLmStudioModelProvider(options: LmStudioModelProviderOptions = {}): ModelProvider {
-  const baseUrl = (options.baseUrl ?? env.LM_STUDIO_BASE_URL).replace(/\/+$/, "");
-  const model = options.model ?? env.LM_STUDIO_MODEL;
-  const timeoutMs = options.timeoutMs ?? env.LM_STUDIO_TIMEOUT_MS;
-  const fetchImpl = options.fetchImpl ?? fetch;
+export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProviderOptions): ModelProvider {
+  const baseUrl = options.baseUrl.replace(/\/+$/, "");
+  const {
+    model,
+    apiKey,
+    timeoutMs = 120000,
+    fetchImpl = fetch,
+    errorFactory = defaultErrorFactory,
+    requestBodyExtras = {},
+    maxAttempts = 1
+  } = options;
+  const attemptCount = Math.max(1, maxAttempts);
+
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json"
+  };
+
+  if (apiKey) {
+    headers["Authorization"] = `Bearer ${apiKey}`;
+  }
 
   return {
     async complete(input) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
-      try {
-        const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model,
-            messages: input.messages,
-            temperature: input.temperature ?? 0.2
-          }),
-          signal: controller.signal
-        });
+        try {
+          const response = await fetchImpl(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model,
+              messages: input.messages,
+              temperature: input.temperature ?? 0.2,
+              ...requestBodyExtras
+            }),
+            signal: controller.signal
+          });
 
-        if (!response.ok) {
-          throw unavailableModelError();
+          if (!response.ok) {
+            const errorBody = await response.text().catch(() => "Could not read error body");
+            console.error(`Model provider error (${response.status}):`, errorBody);
+            if (attempt < attemptCount) {
+              continue;
+            }
+            throw errorFactory();
+          }
+
+          const body = (await response.json()) as {
+            choices?: Array<{ message?: { content?: unknown } }>;
+          };
+          const content = body.choices?.[0]?.message?.content;
+
+          if (typeof content !== "string") {
+            throw errorFactory();
+          }
+
+          return { content };
+        } catch (error) {
+          if (error instanceof ApiError) {
+            throw error;
+          }
+
+          if (attempt >= attemptCount) {
+            throw errorFactory(error);
+          }
+        } finally {
+          clearTimeout(timeout);
         }
-
-        const body = (await response.json()) as {
-          choices?: Array<{ message?: { content?: unknown } }>;
-        };
-        const content = body.choices?.[0]?.message?.content;
-
-        if (typeof content !== "string") {
-          throw unavailableModelError();
-        }
-
-        return { content };
-      } catch (error) {
-        if (error instanceof ApiError) {
-          throw error;
-        }
-
-        throw unavailableModelError();
-      } finally {
-        clearTimeout(timeout);
       }
+
+      throw errorFactory();
     },
 
     async *completeStream(input) {
-      const controller = new AbortController();
-      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+      let response: Response | undefined;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
+
+      for (let attempt = 1; attempt <= attemptCount; attempt += 1) {
+        const controller = new AbortController();
+        timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+        try {
+          response = await fetchImpl(`${baseUrl}/chat/completions`, {
+            method: "POST",
+            headers,
+            body: JSON.stringify({
+              model,
+              messages: input.messages,
+              temperature: input.temperature ?? 0.2,
+              ...requestBodyExtras,
+              stream: true
+            }),
+            signal: controller.signal
+          });
+
+          if (!response.ok || !response.body) {
+            const errorBody = await response.text().catch(() => "Could not read error body");
+            console.error(`Model provider error (${response.status}):`, errorBody);
+            if (attempt < attemptCount) {
+              clearTimeout(timeout);
+              timeout = undefined;
+              continue;
+            }
+            throw errorFactory();
+          }
+
+          break;
+        } catch (error) {
+          clearTimeout(timeout);
+          timeout = undefined;
+
+          if (error instanceof ApiError) {
+            throw error;
+          }
+
+          if (attempt >= attemptCount) {
+            throw errorFactory(error);
+          }
+        }
+      }
+
+      if (!response?.body) {
+        throw errorFactory();
+      }
 
       try {
-        const response = await fetchImpl(`${baseUrl}/chat/completions`, {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json"
-          },
-          body: JSON.stringify({
-            model,
-            messages: input.messages,
-            temperature: input.temperature ?? 0.2,
-            stream: true
-          }),
-          signal: controller.signal
-        });
-
-        if (!response.ok || !response.body) {
-          throw unavailableModelError();
-        }
-
         const reader = response.body.getReader();
         const decoder = new TextDecoder();
         let buffer = "";
@@ -156,12 +209,89 @@ export function createLmStudioModelProvider(options: LmStudioModelProviderOption
         if (error instanceof ApiError) {
           throw error;
         }
-        throw unavailableModelError();
+        throw errorFactory(error);
       } finally {
-        clearTimeout(timeout);
+        if (timeout) {
+          clearTimeout(timeout);
+        }
       }
     }
   };
 }
 
+type LmStudioModelProviderOptions = {
+  baseUrl?: string;
+  model?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export function createLmStudioModelProvider(options: LmStudioModelProviderOptions = {}): ModelProvider {
+  return createOpenAiCompatibleProvider({
+    baseUrl: options.baseUrl ?? env.LM_STUDIO_BASE_URL,
+    model: options.model ?? env.LM_STUDIO_MODEL,
+    timeoutMs: options.timeoutMs ?? env.LM_STUDIO_TIMEOUT_MS,
+    fetchImpl: options.fetchImpl,
+    errorFactory: () => new ApiError(503, "LOCAL_MODEL_UNAVAILABLE", "Local model provider is unavailable. Start LM Studio and try again.")
+  });
+}
+
+type GoogleModelProviderOptions = {
+  apiKey?: string;
+  model?: string;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export function createGoogleModelProvider(options: GoogleModelProviderOptions = {}): ModelProvider {
+  return createOpenAiCompatibleProvider({
+    baseUrl: "https://generativelanguage.googleapis.com/v1beta/openai",
+    model: options.model ?? env.GOOGLE_AI_MODEL,
+    apiKey: options.apiKey ?? env.GOOGLE_AI_API_KEY,
+    timeoutMs: options.timeoutMs,
+    fetchImpl: options.fetchImpl,
+    errorFactory: () => new ApiError(503, "GOOGLE_AI_UNAVAILABLE", "Google AI provider is unavailable. Check your API key and try again.")
+  });
+}
+
+type OpenRouterReasoningEffort = "xhigh" | "high" | "medium" | "low" | "minimal" | "none";
+
+type OpenRouterModelProviderOptions = {
+  apiKey?: string;
+  model?: string;
+  reasoningEffort?: OpenRouterReasoningEffort;
+  timeoutMs?: number;
+  fetchImpl?: typeof fetch;
+};
+
+export function createOpenRouterModelProvider(options: OpenRouterModelProviderOptions = {}): ModelProvider {
+  return createOpenAiCompatibleProvider({
+    baseUrl: "https://openrouter.ai/api/v1",
+    model: options.model ?? env.OPENROUTER_MODEL,
+    apiKey: options.apiKey ?? env.OPENROUTER_API_KEY,
+    timeoutMs: options.timeoutMs,
+    fetchImpl: options.fetchImpl,
+    maxAttempts: 3,
+    requestBodyExtras: {
+      reasoning: {
+        effort: options.reasoningEffort ?? env.OPENROUTER_REASONING_EFFORT,
+        exclude: true
+      }
+    },
+    errorFactory: () => new ApiError(503, "OPENROUTER_UNAVAILABLE", "OpenRouter provider is unavailable. Check your API key and try again.")
+  });
+}
+
 export const lmStudioModelProvider = createLmStudioModelProvider();
+export const googleModelProvider = createGoogleModelProvider();
+export const openRouterModelProvider = createOpenRouterModelProvider();
+
+export function getModelProvider(): ModelProvider {
+  if (env.OPENROUTER_API_KEY) {
+    return openRouterModelProvider;
+  }
+  if (env.GOOGLE_AI_API_KEY) {
+    return googleModelProvider;
+  }
+  return lmStudioModelProvider;
+}
