@@ -12,6 +12,7 @@ import {
   createMapPinpointTool,
   createRecordAgentTaskTool,
   createSearchGooglePlacesTool,
+  createUpdateItineraryTool,
   createWebSearchTool
 } from "../src/modules/agent/agentTools";
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
@@ -404,7 +405,7 @@ describe("agent orchestrator", () => {
       payload: { delta: "Created a draft itinerary from the itinerary tool." }
     });
     expect(modelProvider.calls).toHaveLength(2);
-    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("itinerary-1");
+    expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("create_itinerary");
   });
 
   it("accepts shorthand create_itinerary payloads from the model", async () => {
@@ -637,6 +638,234 @@ describe("agent orchestrator", () => {
     });
   });
 
+  it("resolves shorthand highlights as itinerary places when maps are available", async () => {
+    const { service } = createFakeAgentService();
+    const createdInputs: unknown[] = [];
+    const resolvedPlaces: Array<{ placeName: string; cityContext?: string }> = [];
+    const detailsCalls: string[] = [];
+    const photoCalls: Array<{ placeId: string; maxResults?: number }> = [];
+    const upsertedPlaces: string[] = [];
+    const upsertCreateInputs: Array<{
+      name: string;
+      rating?: number;
+      websiteUrl?: string;
+      phoneNumber?: string;
+      metadata?: Record<string, unknown>;
+    }> = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        maps: {
+          async searchPlaces() {
+            return [];
+          },
+          async getPlaceDetails(placeId) {
+            detailsCalls.push(placeId);
+            return {
+              id: placeId,
+              name: `${placeId} detailed name`,
+              address: `${placeId} detailed address`,
+              location: { latitude: 16.4111, longitude: 120.5988 },
+              rating: 4.7,
+              userRatingCount: 321,
+              types: ["park", "tourist_attraction"],
+              phoneNumber: "+63 74 111 2222",
+              websiteUri: "https://example.com/baguio-place"
+            };
+          },
+          async getPlacePhotos(placeId, maxResults) {
+            photoCalls.push({ placeId, maxResults });
+            return [
+              { name: `${placeId}/photos/1`, photoUri: "https://example.com/photo-1.jpg" },
+              { name: `${placeId}/photos/2`, photoUri: "https://example.com/photo-2.jpg" },
+              { name: `${placeId}/photos/empty`, photoUri: "" }
+            ];
+          },
+          async estimateRoute() {
+            return {};
+          },
+          async resolvePlace(input) {
+            resolvedPlaces.push(input);
+            return {
+              provider: "GOOGLE_MAPS",
+              providerPlaceId: `google:${input.placeName.toLowerCase().replace(/\s+/g, "-")}`,
+              name: input.placeName,
+              formattedAddress: `${input.placeName}, ${input.cityContext}`,
+              location: { latitude: 16.4023, longitude: 120.596 },
+              metadata: { source: "resolved" }
+            };
+          }
+        },
+        placeSnapshotClient: {
+          placeSnapshot: {
+            async upsert(args: { create: { name: string; metadata?: Record<string, unknown> } }) {
+              upsertedPlaces.push(args.create.name);
+              upsertCreateInputs.push(args.create);
+              return { id: "11111111-1111-4111-8111-111111111111" };
+            }
+          }
+        } as never,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-baguio" }, itinerary: { id: "itinerary-baguio" } };
+          }
+        }
+      })
+    ]);
+
+    await registry.execute("create_itinerary", createRunInput(), {
+      location: "Baguio City, Philippines",
+      duration_days: 2,
+      highlights: ["Burnham Park boating", "Mines View Park views"]
+    });
+
+    expect(resolvedPlaces).toEqual([
+      { placeName: "Burnham Park boating", cityContext: "Baguio City, Philippines" },
+      { placeName: "Mines View Park views", cityContext: "Baguio City, Philippines" }
+    ]);
+    expect(detailsCalls).toEqual([
+      "google:burnham-park-boating",
+      "google:mines-view-park-views"
+    ]);
+    expect(photoCalls).toEqual([
+      { placeId: "google:burnham-park-boating", maxResults: 3 },
+      { placeId: "google:mines-view-park-views", maxResults: 3 }
+    ]);
+    expect(upsertedPlaces).toEqual([
+      "google:burnham-park-boating detailed name",
+      "google:mines-view-park-views detailed name"
+    ]);
+    expect(upsertCreateInputs).toHaveLength(2);
+    expect(upsertCreateInputs[0]).toMatchObject({
+      rating: 4.7,
+      websiteUrl: "https://example.com/baguio-place",
+      phoneNumber: "+63 74 111 2222",
+      metadata: {
+        source: "resolved",
+        primaryPhotoUrl: "https://example.com/photo-1.jpg",
+        photoUrls: ["https://example.com/photo-1.jpg", "https://example.com/photo-2.jpg"],
+        googleTypes: ["park", "tourist_attraction"],
+        userRatingCount: 321
+      }
+    });
+    expect(createdInputs[0]).toMatchObject({
+      itinerary: {
+        days: [
+          { items: [{ title: "Burnham Park boating", placeSnapshotId: "11111111-1111-4111-8111-111111111111" }] },
+          { items: [{ title: "Mines View Park views", placeSnapshotId: "11111111-1111-4111-8111-111111111111" }] }
+        ]
+      }
+    });
+  });
+
+  it("converts weak multi-day shorthand into a fully scheduled itinerary when the user asks for a proper timed plan", async () => {
+    const { service, run } = createFakeAgentService();
+    const createdInputs: any[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-baguio" }, itinerary: { id: "itinerary-baguio" } };
+          }
+        }
+      })
+    ]);
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Creating your Baguio itinerary now.",
+      toolCalls: [
+        {
+          name: "create_itinerary",
+          input: {
+            location: "Baguio City, Philippines",
+            duration_days: 5,
+            activity_type: "nature and restaurant tour",
+            highlights: [
+              "Burnham Park boating and Session Road food crawl",
+              "Mines View Park views and Wright Park horseback riding",
+              "Botanical Garden stroll and Camp John Hay pine forest walk",
+              "Tam-awan Village culture and local Igorot cuisine",
+              "Strawberry Farm visit and Good Shepherd shopping"
+            ]
+          }
+        }
+      ]
+    });
+    const structuredBaguioInput = {
+      trip: {
+        title: "5-Day Baguio City, Philippines Nature And Restaurant Tour Trip",
+        destinationSummary: "Baguio City, Philippines"
+      },
+      itinerary: {
+        title: "5-Day Baguio City, Philippines Nature And Restaurant Tour Itinerary",
+        summary: "A five-day Baguio plan from 10:00 AM to 4:00 PM daily with nature stops and restaurants.",
+        days: Array.from({ length: 5 }, (_, index) => ({
+          dayNumber: index + 1,
+          title: `Day ${index + 1}`,
+          items: [
+            {
+              type: "ACTIVITY",
+              title: `Day ${index + 1} morning tourist stop`,
+              description: "Start with a major Baguio tourist stop.",
+              startTime: "10:00 AM",
+              endTime: "11:30 AM",
+              placeName: "Burnham Park",
+              cityContext: "Baguio City, Philippines"
+            },
+            {
+              type: "MEAL",
+              title: `Day ${index + 1} restaurant lunch`,
+              description: "Add a restaurant or cafe stop that fits the route.",
+              startTime: "12:00 PM",
+              endTime: "1:00 PM",
+              placeName: "Session Road",
+              cityContext: "Baguio City, Philippines"
+            },
+            {
+              type: "ACTIVITY",
+              title: `Day ${index + 1} afternoon nature stop`,
+              description: "End with a scenic or nature-focused activity.",
+              startTime: "1:30 PM",
+              endTime: "4:00 PM",
+              placeName: "Baguio Botanical Garden",
+              cityContext: "Baguio City, Philippines"
+            }
+          ]
+        }))
+      }
+    };
+    const modelProvider = createModelProvider([
+      modelOutput,
+      JSON.stringify(structuredBaguioInput),
+      "Your fully scheduled Baguio itinerary has been created."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry,
+      availableToolNames: ["create_itinerary"]
+    });
+
+    await orchestrator.run({
+      ...createRunInput(),
+      userContent:
+        "Create a proper itinerary plan for Baguio City, Philippines. This is a 5 day itinerary plan that has nature and resto trip. The itinerary will start at 10am and end at 4pm everyday and they want to visit all the tourist spots on Baguio."
+    });
+
+    expect(run.status).toBe("COMPLETED");
+    expect(modelProvider.calls).toHaveLength(3);
+    expect(createdInputs).toHaveLength(1);
+    expect(createdInputs[0].itinerary.days).toHaveLength(5);
+    for (const day of createdInputs[0].itinerary.days) {
+      expect(day.items.length).toBeGreaterThanOrEqual(3);
+      expect(day.items[0].startTime).toBe("10:00 AM");
+      expect(day.items.at(-1).endTime).toBe("4:00 PM");
+      expect(day.items.some((item: any) => item.type === "MEAL")).toBe(true);
+    }
+  });
+
   it("converts plain itinerary prose into a draft itinerary tool call", async () => {
     const { service, events, run } = createFakeAgentService();
     const createdInputs: unknown[] = [];
@@ -726,6 +955,42 @@ describe("agent orchestrator", () => {
       type: "itinerary.updated",
       payload: { itineraryId: "itinerary-prose", change: "created" }
     });
+  });
+
+  it("directly creates a multi-stop one-day itinerary from a custom time window when model output is invalid", async () => {
+    const { service, run } = createFakeAgentService();
+    const createdInputs: any[] = [];
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-baguio-night" }, itinerary: { id: "itinerary-baguio-night" } };
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: createModelProvider('{"assistantMessage": "Missing close"'),
+      agentService: service,
+      toolRegistry: registry,
+      availableToolNames: ["create_itinerary"]
+    });
+
+    await orchestrator.run({
+      ...createRunInput(),
+      userContent: "Create a 1-day Baguio City nature and resto itinerary from 3pm to 9pm."
+    });
+
+    expect(run.status).toBe("COMPLETED");
+    expect(createdInputs).toHaveLength(1);
+    expect(createdInputs[0].itinerary.days).toHaveLength(1);
+    const items = createdInputs[0].itinerary.days[0].items;
+    expect(items.length).toBeGreaterThanOrEqual(3);
+    expect(items[0].startTime).toBe("3:00 PM");
+    expect(items.at(-1).endTime).toBe("9:00 PM");
+    expect(items.some((item: any) => item.type === "MEAL")).toBe(true);
   });
 
   it("parses and executes <|toolcall|> tagged create_itinerary output", async () => {
@@ -1018,6 +1283,211 @@ describe("agent orchestrator", () => {
     expect(events.at(-1)).toMatchObject({
       type: "run.completed"
     });
+  });
+
+  it("includes active itinerary context so update requests can call update_itinerary", async () => {
+    const { service, run } = createFakeAgentService();
+    const replacedInputs: Array<{ itineraryId: string; itinerary: unknown }> = [];
+    service.getThread = async () => ({
+      messages: [
+        { role: "USER", content: "Create a Baguio itinerary." },
+        { role: "ASSISTANT", content: "Created the draft itinerary." },
+        { role: "USER", content: "Change Day 1 lunch to a cheaper restaurant." }
+      ],
+      events: [
+        {
+          type: "tool.completed",
+          payload: {
+            name: "create_itinerary",
+            output: {
+              itinerary: {
+                id: "itinerary-active",
+                title: "Baguio Draft",
+                days: [
+                  {
+                    dayNumber: 1,
+                    title: "Day 1",
+                    items: [
+                      {
+                        type: "ACTIVITY",
+                        title: "Burnham Park",
+                        startTime: "10:00 AM",
+                        endTime: "11:30 AM"
+                      },
+                      {
+                        type: "MEAL",
+                        title: "Premium lunch on Session Road",
+                        startTime: "12:00 PM",
+                        endTime: "1:00 PM"
+                      }
+                    ]
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    } as any);
+    const modelProvider: ModelProvider & { sawActiveContext: boolean } = {
+      sawActiveContext: false,
+      async complete(input) {
+        if (input.messages.some((message) => message.content.includes("Active itinerary draft context"))) {
+          this.sawActiveContext = true;
+        }
+        if (this.sawActiveContext && input.messages[0].role === "system") {
+          return {
+              content: JSON.stringify({
+                assistantMessage: "Updating Day 1 lunch.",
+                toolCalls: [
+                  {
+                    name: "update_itinerary",
+                    input: {
+                      itineraryId: "itinerary-active",
+                      itinerary: {
+                        title: "Baguio Draft",
+                        days: [
+                          {
+                            dayNumber: 1,
+                            title: "Day 1",
+                            items: [
+                              {
+                                type: "ACTIVITY",
+                                title: "Burnham Park",
+                                startTime: "10:00 AM",
+                                endTime: "11:30 AM"
+                              },
+                              {
+                                title: "Budget lunch near Session Road",
+                                startTime: "12:00 PM",
+                                endTime: "1:00 PM",
+                                placeName: "Session Road",
+                                cityContext: "Baguio City, Philippines"
+                              }
+                            ]
+                          }
+                      ]
+                    }
+                  }
+                }
+              ]
+            })
+          };
+        }
+        return { content: "Updated Day 1 lunch." };
+      }
+    };
+    const registry = createAgentToolRegistry([
+      createUpdateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async replaceDraft(_agencyId, itineraryId, itinerary) {
+            replacedInputs.push({ itineraryId, itinerary });
+            return { id: itineraryId, version: 2, status: "DRAFT" };
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry,
+      availableToolNames: ["update_itinerary"]
+    });
+
+    await orchestrator.run({
+      ...createRunInput(),
+      userContent: "Change Day 1 lunch to a cheaper restaurant."
+    });
+
+    expect(run.status).toBe("COMPLETED");
+    expect(modelProvider.sawActiveContext).toBe(true);
+    expect(replacedInputs).toEqual([
+      expect.objectContaining({
+        itineraryId: "itinerary-active",
+        itinerary: expect.objectContaining({
+          title: "Baguio Draft",
+          days: [
+            expect.objectContaining({
+              items: expect.arrayContaining([
+                expect.objectContaining({ type: "MEAL", title: "Budget lunch near Session Road" })
+              ])
+            })
+          ]
+        })
+      })
+    ]);
+  });
+
+  it("replaces object-coerced synthesis with a readable itinerary summary", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Created the Baguio itinerary draft.",
+      toolCalls: [
+        {
+          name: "create_itinerary",
+          input: {
+            destination: "Baguio City, Philippines",
+            duration_days: 1,
+            highlights: ["Burnham Park boating"]
+          }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([
+      modelOutput,
+      "I have successfully created the itinerary draft: [object Object]\n- Burnham Park boating\n[object Object]"
+    ]);
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput() {
+            return {
+              trip: { id: "trip-baguio", title: "1-Day Baguio City, Philippines Trip" },
+              itinerary: {
+                id: "itinerary-baguio",
+                title: "1-Day Baguio City, Philippines Itinerary",
+                days: [
+                  {
+                    dayNumber: 1,
+                    title: "Day 1",
+                    items: [
+                      {
+                        title: "Burnham Park boating",
+                        startTime: "10:00 AM",
+                        endTime: "11:30 AM",
+                        placeSnapshot: {
+                          name: "Burnham Park",
+                          formattedAddress: "Jose Abad Santos Dr, Baguio"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            };
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const completed = events.find((event) => event.type === "message.completed");
+    expect(completed?.payload).toMatchObject({
+      content: expect.stringContaining("1-Day Baguio City, Philippines Itinerary")
+    });
+    expect(completed?.payload).toMatchObject({
+      content: expect.stringContaining("Burnham Park boating")
+    });
+    expect(JSON.stringify(completed?.payload)).not.toContain("[object Object]");
   });
 
   it("record_agent_task emits task.updated", async () => {

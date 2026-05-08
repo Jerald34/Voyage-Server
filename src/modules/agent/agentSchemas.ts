@@ -9,6 +9,21 @@ export const createMessageSchema = z.object({
   content: z.string().min(1).max(12000)
 });
 
+const optionalNullableDateSchema = z.preprocess(
+  (value) => (value === "" || value === null ? null : value),
+  z.coerce.date().nullable().optional()
+);
+
+export const approveItineraryThreadSchema = z.object({
+  itineraryId: z.uuid(),
+  clientName: z.string().trim().min(1).max(200),
+  destination: z.string().trim().min(1).max(500),
+  startDate: optionalNullableDateSchema,
+  endDate: optionalNullableDateSchema,
+  travelerCount: z.number().int().positive().max(999).optional(),
+  budgetLevel: z.string().trim().max(100).optional()
+});
+
 export const agentEventSchema = z.object({
   type: z.enum([
     "run.started",

@@ -23,6 +23,24 @@ function createMemoryRepository(): AgentRepository & {
   toolCalls: AgentToolCallRecord[];
   tasks: AgentTaskRecord[];
   sources: AgentSourceRecord[];
+  trips: {
+    id: string;
+    agencyId: string;
+    clientName: string | null;
+    title: string;
+    destinationSummary: string | null;
+    startDate: Date | null;
+    endDate: Date | null;
+    travelerCount: number | null;
+    budgetLevel: string | null;
+  }[];
+  itineraries: {
+    id: string;
+    tripId: string;
+    agencyId: string;
+    version: number;
+    status: string;
+  }[];
 } {
   const now = new Date("2026-04-28T00:00:00.000Z");
   const threads: AgentThreadRecord[] = [];
@@ -32,6 +50,24 @@ function createMemoryRepository(): AgentRepository & {
   const toolCalls: AgentToolCallRecord[] = [];
   const tasks: AgentTaskRecord[] = [];
   const sources: AgentSourceRecord[] = [];
+  const trips: {
+    id: string;
+    agencyId: string;
+    clientName: string | null;
+    title: string;
+    destinationSummary: string | null;
+    startDate: Date | null;
+    endDate: Date | null;
+    travelerCount: number | null;
+    budgetLevel: string | null;
+  }[] = [];
+  const itineraries: {
+    id: string;
+    tripId: string;
+    agencyId: string;
+    version: number;
+    status: string;
+  }[] = [];
   const isTerminalRunStatus = (status: AgentRunStatus) =>
     status === "COMPLETED" || status === "FAILED" || status === "CANCELLED";
 
@@ -53,6 +89,8 @@ function createMemoryRepository(): AgentRepository & {
     toolCalls,
     tasks,
     sources,
+    trips,
+    itineraries,
     async createThread(data) {
       const thread: AgentThreadRecord = {
         id: `thread-${threads.length + 1}`,
@@ -82,6 +120,78 @@ function createMemoryRepository(): AgentRepository & {
     async findThreadByAgency(id, agencyId) {
       const thread = threads.find((candidate) => candidate.id === id && candidate.agencyId === agencyId);
       return thread ? hydrateThread(thread) : null;
+    },
+    async deleteThreadByAgency(id, agencyId) {
+      const index = threads.findIndex((candidate) => candidate.id === id && candidate.agencyId === agencyId);
+      if (index === -1) {
+        return false;
+      }
+      threads.splice(index, 1);
+      for (let i = messages.length - 1; i >= 0; i -= 1) {
+        if (messages[i].threadId === id) messages.splice(i, 1);
+      }
+      for (let i = runs.length - 1; i >= 0; i -= 1) {
+        if (runs[i].threadId === id) runs.splice(i, 1);
+      }
+      for (let i = events.length - 1; i >= 0; i -= 1) {
+        if (events[i].threadId === id) events.splice(i, 1);
+      }
+      return true;
+    },
+    async approveItineraryThread(data) {
+      const thread = threads.find(
+        (candidate) => candidate.id === data.threadId && candidate.agencyId === data.agencyId
+      );
+      if (!thread) {
+        return null;
+      }
+      if (thread.tripId) {
+        throw new ApiError(409, "THREAD_ALREADY_BOUND", "This thread is already attached to a trip.");
+      }
+      const itinerary = itineraries.find(
+        (candidate) =>
+          candidate.id === data.input.itineraryId && candidate.agencyId === data.agencyId && candidate.status === "DRAFT"
+      );
+      if (!itinerary) {
+        throw new ApiError(409, "DRAFT_ITINERARY_REQUIRED", "Generate an itinerary before saving this draft.");
+      }
+      const itineraryWasGeneratedByThread = events.some((event) => {
+        if (event.threadId !== data.threadId || event.type !== "itinerary.updated") {
+          return false;
+        }
+        const payload = event.payload;
+        return (
+          typeof payload === "object" &&
+          payload !== null &&
+          !Array.isArray(payload) &&
+          "itineraryId" in payload &&
+          payload.itineraryId === data.input.itineraryId
+        );
+      });
+      if (!itineraryWasGeneratedByThread) {
+        throw new ApiError(409, "DRAFT_ITINERARY_REQUIRED", "Generate an itinerary before saving this draft.");
+      }
+      const trip = trips.find((candidate) => candidate.id === itinerary.tripId && candidate.agencyId === data.agencyId);
+      if (!trip) {
+        throw new ApiError(409, "DRAFT_ITINERARY_REQUIRED", "Generate an itinerary before saving this draft.");
+      }
+
+      trip.clientName = data.input.clientName;
+      trip.title = `${data.input.clientName} itinerary`;
+      trip.destinationSummary = data.input.destination;
+      trip.startDate = data.input.startDate ?? null;
+      trip.endDate = data.input.endDate ?? null;
+      trip.travelerCount = data.input.travelerCount ?? null;
+      trip.budgetLevel = data.input.budgetLevel ?? null;
+      thread.title = data.input.clientName;
+      thread.tripId = trip.id;
+      thread.updatedAt = now;
+
+      return {
+        thread: hydrateThread(thread),
+        trip,
+        itinerary
+      };
     },
     async createMessage(data) {
       const message: AgentMessageRecord = {
@@ -484,6 +594,34 @@ describe("agent service", () => {
     ]);
   });
 
+  it("deletes an agency-scoped thread", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft" });
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start draft");
+
+    await expect(service.deleteThread("agency-1", thread.id)).resolves.toBeUndefined();
+
+    await expect(service.getThread("agency-1", thread.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "THREAD_NOT_FOUND"
+    });
+    expect(repository.messages).toHaveLength(0);
+    expect(repository.runs).toHaveLength(0);
+  });
+
+  it("does not delete threads outside the resolved agency", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft" });
+
+    await expect(service.deleteThread("agency-2", thread.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "THREAD_NOT_FOUND"
+    });
+    await expect(service.getThread("agency-1", thread.id)).resolves.toMatchObject({ id: thread.id });
+  });
+
   it("does not fail durable agent writes when thread freshness update fails", async () => {
     const repository = createMemoryRepository();
     repository.touchThread = async () => {
@@ -721,6 +859,166 @@ describe("agent service", () => {
     await expect(service.getThread("agency-1", "missing-thread")).rejects.toMatchObject({
       code: "THREAD_NOT_FOUND",
       statusCode: 404
+    } satisfies Partial<ApiError>);
+  });
+
+  it("approves a draft itinerary thread by updating the draft trip and binding the thread", async () => {
+    const repository = createMemoryRepository();
+    const touchedAt = new Date("2026-04-28T04:00:00.000Z");
+    const service = createAgentService({ repository, now: () => touchedAt });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
+    repository.trips.push({
+      id: "00000000-0000-4000-8000-000000000101",
+      agencyId: "agency-1",
+      clientName: null,
+      title: "Untitled draft",
+      destinationSummary: null,
+      startDate: null,
+      endDate: null,
+      travelerCount: null,
+      budgetLevel: null
+    });
+    repository.itineraries.push({
+      id: "00000000-0000-4000-8000-000000000201",
+      tripId: "00000000-0000-4000-8000-000000000101",
+      agencyId: "agency-1",
+      version: 2,
+      status: "DRAFT"
+    });
+    repository.events.push({
+      id: "event-itinerary-1",
+      runId: "run-itinerary-1",
+      threadId: thread.id,
+      type: "itinerary.updated",
+      payload: {
+        itineraryId: "00000000-0000-4000-8000-000000000201"
+      },
+      sequence: 1,
+      createdAt: new Date("2026-04-28T03:00:00.000Z")
+    });
+
+    const approved = await service.approveItineraryThread("agency-1", thread.id, {
+      itineraryId: "00000000-0000-4000-8000-000000000201",
+      clientName: "  Santos Family  ",
+      destination: "Olongapo City and Subic Bay",
+      startDate: "2026-06-01",
+      endDate: "2026-06-05",
+      travelerCount: 4,
+      budgetLevel: "midrange"
+    });
+
+    expect(approved.thread).toMatchObject({
+      id: thread.id,
+      agencyId: "agency-1",
+      title: "Santos Family",
+      tripId: "00000000-0000-4000-8000-000000000101"
+    });
+    expect(approved.trip).toMatchObject({
+      id: "00000000-0000-4000-8000-000000000101",
+      agencyId: "agency-1",
+      clientName: "Santos Family",
+      title: "Santos Family itinerary",
+      destinationSummary: "Olongapo City and Subic Bay",
+      travelerCount: 4,
+      budgetLevel: "midrange"
+    });
+    expect(approved.trip.startDate).toEqual(new Date("2026-06-01T00:00:00.000Z"));
+    expect(approved.trip.endDate).toEqual(new Date("2026-06-05T00:00:00.000Z"));
+    expect(approved.itinerary).toMatchObject({
+      id: "00000000-0000-4000-8000-000000000201",
+      tripId: "00000000-0000-4000-8000-000000000101",
+      agencyId: "agency-1",
+      version: 2,
+      status: "DRAFT"
+    });
+    expect(repository.threads[0]).toMatchObject({
+      title: "Santos Family",
+      tripId: "00000000-0000-4000-8000-000000000101",
+      updatedAt: touchedAt
+    });
+  });
+
+  it("rejects approving a same-agency itinerary generated by another thread", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const producerThread = await service.createThread("agency-1", "user-1", { title: "Producer draft" });
+    const approvingThread = await service.createThread("agency-1", "user-1", { title: "Approving draft" });
+    repository.trips.push({
+      id: "00000000-0000-4000-8000-000000000101",
+      agencyId: "agency-1",
+      clientName: null,
+      title: "Untitled draft",
+      destinationSummary: null,
+      startDate: null,
+      endDate: null,
+      travelerCount: null,
+      budgetLevel: null
+    });
+    repository.itineraries.push({
+      id: "00000000-0000-4000-8000-000000000201",
+      tripId: "00000000-0000-4000-8000-000000000101",
+      agencyId: "agency-1",
+      version: 1,
+      status: "DRAFT"
+    });
+    repository.events.push({
+      id: "event-itinerary-1",
+      runId: "run-itinerary-1",
+      threadId: producerThread.id,
+      type: "itinerary.updated",
+      payload: {
+        itineraryId: "00000000-0000-4000-8000-000000000201"
+      },
+      sequence: 1,
+      createdAt: new Date("2026-04-28T03:00:00.000Z")
+    });
+
+    await expect(
+      service.approveItineraryThread("agency-1", approvingThread.id, {
+        itineraryId: "00000000-0000-4000-8000-000000000201",
+        clientName: "Santos Family",
+        destination: "Olongapo City"
+      })
+    ).rejects.toMatchObject({
+      code: "DRAFT_ITINERARY_REQUIRED",
+      statusCode: 409,
+      message: "Generate an itinerary before saving this draft."
+    } satisfies Partial<ApiError>);
+    expect(repository.threads[1]?.tripId).toBeNull();
+  });
+
+  it("rejects approving a thread from the wrong agency", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
+
+    await expect(
+      service.approveItineraryThread("agency-2", thread.id, {
+        itineraryId: "00000000-0000-4000-8000-000000000201",
+        clientName: "Santos Family",
+        destination: "Olongapo City"
+      })
+    ).rejects.toMatchObject({
+      code: "THREAD_NOT_FOUND",
+      statusCode: 404
+    } satisfies Partial<ApiError>);
+  });
+
+  it("rejects approving a thread without a draft itinerary", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
+
+    await expect(
+      service.approveItineraryThread("agency-1", thread.id, {
+        itineraryId: "00000000-0000-4000-8000-000000000201",
+        clientName: "Santos Family",
+        destination: "Olongapo City"
+      })
+    ).rejects.toMatchObject({
+      code: "DRAFT_ITINERARY_REQUIRED",
+      statusCode: 409,
+      message: "Generate an itinerary before saving this draft."
     } satisfies Partial<ApiError>);
   });
 });

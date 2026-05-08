@@ -53,4 +53,24 @@ describe("app routes", () => {
       }
     });
   });
+
+  it("requires auth for agency agent thread approval", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/agencies/agency-1/agent/threads/thread-1/approve-itinerary")
+      .send({
+        itineraryId: "00000000-0000-4000-8000-000000000010",
+        clientName: "Santos Family",
+        destination: "Olongapo City"
+      });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
 });

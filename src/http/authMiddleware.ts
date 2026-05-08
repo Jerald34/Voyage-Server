@@ -14,6 +14,7 @@ declare global {
     interface Request {
       authUser?: AuthUser;
       sessionId?: string;
+      resolvedAgencyId?: string;
     }
   }
 }
