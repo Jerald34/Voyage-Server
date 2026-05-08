@@ -91,3 +91,69 @@ export const structuredItineraryInputSchema = z.object({
 });
 
 export const replaceItinerarySchema = structuredItineraryInputSchema.shape.itinerary;
+
+// Skeleton-only itinerary input. Days are required, but each day must have an empty items array.
+// The agent populates items afterwards via add_itinerary_item.
+const planItineraryDaySchema = structuredItineraryDaySchema.extend({
+  items: z.array(structuredItineraryItemSchema).max(0).default([])
+});
+
+export const planItineraryInputSchema = z.object({
+  trip: structuredItineraryInputSchema.shape.trip,
+  itinerary: z.object({
+    title: z.string().min(1).max(200),
+    summary: z.string().max(3000).optional(),
+    days: z.array(planItineraryDaySchema).min(1).max(60)
+  })
+});
+
+export const addItineraryDayInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  dayNumber: z.number().int().positive().optional(),
+  title: z.string().min(1).max(200),
+  summary: z.string().max(2000).optional(),
+  date: optionalNullableDateSchema
+});
+
+export const updateItineraryDayInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  dayId: z.string().min(1),
+  title: z.string().min(1).max(200).optional(),
+  summary: z.string().max(2000).optional(),
+  date: optionalNullableDateSchema
+});
+
+export const removeItineraryDayInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  dayId: z.string().min(1)
+});
+
+export const addItineraryItemInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  dayId: z.string().min(1),
+  sortOrder: z.number().int().nonnegative().optional(),
+  item: structuredItineraryItemSchema
+});
+
+export const updateItineraryItemInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  itemId: z.string().min(1),
+  item: structuredItineraryItemSchema.partial()
+});
+
+export const removeItineraryItemInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  itemId: z.string().min(1)
+});
+
+export const moveItineraryItemInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  itemId: z.string().min(1),
+  toDayId: z.string().min(1),
+  toSortOrder: z.number().int().nonnegative().optional()
+});
+
+export const deleteItineraryInputSchema = z.object({
+  itineraryId: z.string().min(1),
+  deleteTrip: z.boolean().default(false)
+});

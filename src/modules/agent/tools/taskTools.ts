@@ -8,19 +8,45 @@ const taskInputSchema = z.object({
   sortOrder: z.number().int().nonnegative().optional()
 });
 
-const taskShorthandInputSchema = z.object({
-  task: z.string().min(1).max(500).optional(),
-  task_name: z.string().min(1).max(500).optional(),
-  task_description: z.string().min(1).max(2000).optional(),
+const taskNestedObjectSchema = z.object({
+  title: z.string().min(1).max(500).optional(),
+  label: z.string().min(1).max(500).optional(),
+  name: z.string().min(1).max(500).optional(),
   description: z.string().max(2000).optional(),
   status: z.string().min(1).max(40).optional(),
   priority: z.enum(["low", "medium", "high"]).optional(),
   sortOrder: z.number().int().nonnegative().optional()
+});
+
+const taskShorthandInputSchema = z.object({
+  task: z.union([z.string().min(1).max(500), taskNestedObjectSchema]).optional(),
+  task_name: z.string().min(1).max(500).optional(),
+  task_description: z.string().min(1).max(2000).optional(),
+  description: z.string().max(2000).optional(),
+  title: z.string().min(1).max(500).optional(),
+  label: z.string().min(1).max(500).optional(),
+  status: z.string().min(1).max(40).optional(),
+  priority: z.enum(["low", "medium", "high"]).optional(),
+  sortOrder: z.number().int().nonnegative().optional()
 }).superRefine((value, context) => {
-  if (!value.task && !value.task_name && !value.task_description && !value.description) {
+  const taskValue = value.task;
+  const hasTaskString = typeof taskValue === "string" && taskValue.trim().length > 0;
+  const nested = taskValue && typeof taskValue === "object" ? taskValue : null;
+  const hasNestedLabel = nested
+    ? Boolean(nested.title || nested.label || nested.name || nested.description)
+    : false;
+  if (
+    !hasTaskString &&
+    !hasNestedLabel &&
+    !value.task_name &&
+    !value.task_description &&
+    !value.description &&
+    !value.title &&
+    !value.label
+  ) {
     context.addIssue({
       code: z.ZodIssueCode.custom,
-      message: "Either task, task_name, task_description, or description is required."
+      message: "Provide a task label via one of: label, task, title, task_name, task_description, or description."
     });
   }
 });
@@ -32,27 +58,53 @@ function normalizeTaskInput(input: unknown): z.infer<typeof taskInputSchema> {
   }
 
   const shorthand = taskShorthandInputSchema.parse(input);
-  const rawStatus = shorthand.status?.trim().toUpperCase();
+  const taskValue = shorthand.task;
+  const taskString = typeof taskValue === "string" ? taskValue : undefined;
+  const taskNested = taskValue && typeof taskValue === "object" ? taskValue : undefined;
+
+  const candidateStatus = shorthand.status ?? taskNested?.status;
+  const rawStatus = candidateStatus?.trim().toUpperCase();
   const normalizedStatus =
     rawStatus === "PENDING" || rawStatus === "RUNNING" || rawStatus === "COMPLETED" || rawStatus === "FAILED"
       ? rawStatus
-      : undefined;
+      : rawStatus === "IN_PROGRESS" || rawStatus === "ACTIVE" || rawStatus === "WORKING"
+        ? "RUNNING"
+        : rawStatus === "DONE" || rawStatus === "COMPLETE" || rawStatus === "SUCCESS"
+          ? "COMPLETED"
+          : rawStatus === "ERROR" || rawStatus === "FAIL"
+            ? "FAILED"
+            : undefined;
+  const candidatePriority = shorthand.priority ?? taskNested?.priority;
   const mappedStatus =
     normalizedStatus ??
-    (shorthand.priority === "high"
+    (candidatePriority === "high"
       ? "RUNNING"
-      : shorthand.priority === "medium"
-        ? "PENDING"
-        : "PENDING");
-  const baseLabel = (shorthand.task_name ?? shorthand.task ?? shorthand.task_description ?? shorthand.description ?? "").trim();
-  const label = (shorthand.description && (shorthand.task || shorthand.task_name))
-    ? `${baseLabel} — ${shorthand.description.trim()}`.slice(0, 500)
+      : "PENDING");
+
+  const baseLabel = (
+    shorthand.label ??
+    shorthand.title ??
+    shorthand.task_name ??
+    taskNested?.title ??
+    taskNested?.label ??
+    taskNested?.name ??
+    taskString ??
+    shorthand.task_description ??
+    shorthand.description ??
+    taskNested?.description ??
+    ""
+  ).trim();
+  const description = shorthand.description ?? shorthand.task_description ?? taskNested?.description;
+  const hasSeparateDescription =
+    description && description.trim().length > 0 && description.trim() !== baseLabel;
+  const label = hasSeparateDescription
+    ? `${baseLabel} — ${description.trim()}`.slice(0, 500)
     : baseLabel.slice(0, 500);
 
   return taskInputSchema.parse({
     label,
     status: mappedStatus,
-    sortOrder: shorthand.sortOrder
+    sortOrder: shorthand.sortOrder ?? taskNested?.sortOrder
   });
 }
 

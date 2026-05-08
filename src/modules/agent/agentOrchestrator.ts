@@ -85,6 +85,33 @@ function extractItineraryFromToolOutput(output: unknown) {
   return itinerary;
 }
 
+const ITINERARY_TOOL_NAMES = new Set([
+  "create_itinerary",
+  "update_itinerary",
+  "plan_itinerary",
+  "add_itinerary_day",
+  "update_itinerary_day",
+  "remove_itinerary_day",
+  "add_itinerary_item",
+  "update_itinerary_item",
+  "remove_itinerary_item",
+  "move_itinerary_item",
+  "delete_itinerary"
+]);
+
+// Only the granular Approach-B tools should trigger the multi-turn continuation loop.
+// Legacy create_itinerary/update_itinerary are one-shot and were never expected to chain.
+const GRANULAR_ITINERARY_TOOL_NAMES = new Set([
+  "plan_itinerary",
+  "add_itinerary_day",
+  "update_itinerary_day",
+  "remove_itinerary_day",
+  "add_itinerary_item",
+  "update_itinerary_item",
+  "remove_itinerary_item",
+  "move_itinerary_item"
+]);
+
 function buildActiveItineraryContext(thread: unknown) {
   if (!isRecordLike(thread) || !Array.isArray(thread.events)) {
     return null;
@@ -98,7 +125,8 @@ function buildActiveItineraryContext(thread: unknown) {
     const payload = event.payload;
     const isItineraryTool =
       event.type === "tool.completed" &&
-      (payload.name === "create_itinerary" || payload.name === "update_itinerary");
+      typeof payload.name === "string" &&
+      ITINERARY_TOOL_NAMES.has(payload.name);
     if (!isItineraryTool) {
       continue;
     }
@@ -111,14 +139,111 @@ function buildActiveItineraryContext(thread: unknown) {
     return {
       prompt: [
         "Active itinerary draft context",
-        "The user may ask to modify this draft. For add, remove, replace, shorten, extend, reorder, or revise requests, call update_itinerary with this itinerary id and a full replacement itinerary that preserves unchanged days/items.",
-        "For update_itinerary, include the itineraryId and a complete itinerary object with title, days, and every required day/item field. Do not omit item type or title."
+        "The user may ask to modify this draft. Prefer the granular tools (update_itinerary_item, add_itinerary_item, remove_itinerary_item, move_itinerary_item, add/update/remove_itinerary_day) so changes stream as discrete events.",
+        "Reserve update_itinerary (full replacement) for explicit wholesale-rewrite requests."
       ].join("\n"),
       itinerary
     };
   }
 
   return null;
+}
+
+// Update the in-memory itinerary cache after a granular tool call so the agent's next turn sees a fresh snapshot.
+function applyToolResultToItineraryContext(
+  context: { prompt: string; itinerary: Record<string, unknown> } | null,
+  toolName: string,
+  output: unknown
+) {
+  if (!ITINERARY_TOOL_NAMES.has(toolName) || !isRecordLike(output)) {
+    return context;
+  }
+
+  // create_itinerary/update_itinerary return the full itinerary at the root or under .itinerary.
+  // The granular tools return { itinerary, ... } where itinerary is a full snapshot.
+  const updatedItinerary = extractItineraryFromToolOutput(
+    isRecordLike((output as Record<string, unknown>).itinerary)
+      ? (output as Record<string, unknown>).itinerary
+      : output
+  );
+  if (!updatedItinerary) {
+    return context;
+  }
+
+  // delete_itinerary clears the active context.
+  if (toolName === "delete_itinerary") {
+    return null;
+  }
+
+  return {
+    prompt: context?.prompt ??
+      [
+        "Active itinerary draft context",
+        "The user may ask to modify this draft. Prefer the granular tools (update_itinerary_item, add_itinerary_item, remove_itinerary_item, move_itinerary_item, add/update/remove_itinerary_day) so changes stream as discrete events.",
+        "Reserve update_itinerary (full replacement) for explicit wholesale-rewrite requests."
+      ].join("\n"),
+    itinerary: updatedItinerary
+  };
+}
+
+// Surface the canonical UUIDs back to the model so it cannot fabricate slug-style IDs on continuation turns.
+// Returns "" when the itinerary is missing or malformed so callers can safely append the result without
+// emitting an empty system message.
+function buildItineraryIdentifierBlock(itinerary: Record<string, unknown> | undefined | null): string {
+  if (!itinerary || typeof itinerary !== "object") {
+    return "";
+  }
+
+  const itineraryId = typeof itinerary.id === "string" ? itinerary.id : null;
+  if (!itineraryId) {
+    return "";
+  }
+
+  const lines: string[] = [
+    "Active itinerary identifiers (use these EXACT UUIDs, do not fabricate IDs):",
+    `- itineraryId: ${itineraryId}`
+  ];
+
+  const days = Array.isArray(itinerary.days) ? itinerary.days : [];
+  const itemLines: string[] = [];
+  for (const day of days) {
+    if (!isRecordLike(day)) {
+      continue;
+    }
+    const dayId = typeof day.id === "string" ? day.id : null;
+    if (!dayId) {
+      continue;
+    }
+    const dayNumber = typeof day.dayNumber === "number" ? day.dayNumber : null;
+    const dayTitle = typeof day.title === "string" ? day.title : "";
+    const label = dayNumber !== null ? `Day ${dayNumber}` : "Day";
+    const titleSuffix = dayTitle ? ` (${dayTitle})` : "";
+    lines.push(`- ${label}${titleSuffix}: dayId = ${dayId}`);
+
+    const items = Array.isArray(day.items) ? day.items : [];
+    for (const item of items) {
+      if (!isRecordLike(item)) {
+        continue;
+      }
+      const itemId = typeof item.id === "string" ? item.id : null;
+      if (!itemId) {
+        continue;
+      }
+      const sortOrder = typeof item.sortOrder === "number" ? item.sortOrder : null;
+      const title = typeof item.title === "string" ? item.title : "";
+      const sortLabel = sortOrder !== null ? `sortOrder ${sortOrder}` : "(unknown order)";
+      itemLines.push(
+        `  - ${label} / ${sortLabel}: itemId = ${itemId}${title ? `, title = ${title}` : ""}`
+      );
+    }
+  }
+
+  if (itemLines.length > 0) {
+    lines.push("- Existing items:");
+    lines.push(...itemLines);
+  }
+
+  return lines.join("\n");
 }
 
 function availableToolSet(toolNames: string[]) {
@@ -134,7 +259,8 @@ export function createAgentOrchestrator(options: {
   maxToolCallsPerRun?: number;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
-  const maxToolCallsPerRun = options.maxToolCallsPerRun ?? 20;
+  // Packed Approach B with research + clustering + per-stop estimate_route fans out to ~3 tool calls per stop on a multi-day plan.
+  const maxToolCallsPerRun = options.maxToolCallsPerRun ?? 120;
   const historyMessageLimit = 30;
   const availableToolNames = options.availableToolNames ?? [];
   const tools = availableToolSet(availableToolNames);
@@ -200,6 +326,10 @@ export function createAgentOrchestrator(options: {
                 }
               ];
 
+          const initialIdentifierBlock = activeItineraryContext
+            ? buildItineraryIdentifierBlock(activeItineraryContext.itinerary)
+            : "";
+
           const initialMessages = [
             {
               role: "system" as const,
@@ -210,6 +340,14 @@ export function createAgentOrchestrator(options: {
                 {
                   role: "system" as const,
                   content: activeItineraryContext.prompt
+                }
+              ]
+              : []),
+            ...(initialIdentifierBlock
+              ? [
+                {
+                  role: "system" as const,
+                  content: initialIdentifierBlock
                 }
               ]
               : []),
@@ -318,82 +456,214 @@ export function createAgentOrchestrator(options: {
         };
 
         let toolCallsExecuted = 0;
+        let hadRecoverableFailure = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
-        for (const toolCall of parsedOutput.toolCalls) {
-          if (toolCallsExecuted >= maxToolCallsPerRun) {
-            await failRun(input, new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached."));
-            return;
-          }
 
-          const startedAt = now();
-          const toolInput = await enrichToolInputFromUserRequestForExecution({
-            modelProvider: options.modelProvider,
-            toolName: toolCall.name,
-            input: toolCall.input,
-            userContent: input.userContent
-          });
-          const normalizedToolInput =
-            toolCall.name === "update_itinerary" && activeItineraryContext
-              ? mergeUpdateItineraryInputFromActiveItinerary({
-                input: toolInput,
-                activeItinerary: activeItineraryContext.itinerary
-              })
-              : toolInput;
-          const persistedToolCall = await options.agentService.recordToolCallStarted(
-            run,
-            { toolName: toolCall.name, input: normalizedToolInput },
-            startedAt
-          );
-          await options.agentService.recordRunEvent(run, {
-            type: "tool.started",
-            payload: { name: toolCall.name, input: normalizedToolInput }
-          });
-          toolCallsExecuted += 1;
-
-          try {
-            const output = await options.toolRegistry.execute(toolCall.name, context, normalizedToolInput);
-            toolResults.push({ name: toolCall.name, output });
-            await options.agentService.completeToolCall(persistedToolCall.id, output, now());
-            await options.agentService.recordRunEvent(run, {
-              type: "tool.completed",
-              payload: { name: toolCall.name, output }
-            });
-          } catch (error) {
-            agentLogger.error(`Tool Execution Failed: ${toolCall.name}`, input.runId, error);
-            const details = errorDetails(error);
-            await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
-            await options.agentService.recordRunEvent(run, {
-              type: "tool.failed",
-              payload: { name: toolCall.name, code: details.code, message: details.message }
-            });
-
-            const isRecoverableToolFailure =
-              (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
-              ([
-                "search_google_places",
-                "get_google_place_details",
-                "estimate_route",
-                "map_pinpoint",
-                "route_logistics",
-                "place_insights"
-              ].includes(toolCall.name) &&
-                (details.code === "MAPS_PROVIDER_UNAVAILABLE" || details.code === "AGENT_TOOL_LIMIT_REACHED"));
-            if (isRecoverableToolFailure) {
-              toolResults.push({
-                name: toolCall.name,
-                output: {
-                  unavailable: true,
-                  code: details.code,
-                  message: details.message
-                }
-              });
-              continue;
+        async function executeToolCallsBatch(toolCalls: Array<{ name: string; input: Record<string, unknown> }>) {
+          for (const toolCall of toolCalls) {
+            if (toolCallsExecuted >= maxToolCallsPerRun) {
+              throw new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached.");
             }
 
+            const startedAt = now();
+            const toolInput = await enrichToolInputFromUserRequestForExecution({
+              modelProvider: options.modelProvider,
+              toolName: toolCall.name,
+              input: toolCall.input,
+              userContent: input.userContent
+            });
+            const normalizedToolInput =
+              toolCall.name === "update_itinerary" && activeItineraryContext
+                ? mergeUpdateItineraryInputFromActiveItinerary({
+                  input: toolInput,
+                  activeItinerary: activeItineraryContext.itinerary
+                })
+                : toolInput;
+            const persistedToolCall = await options.agentService.recordToolCallStarted(
+              run,
+              { toolName: toolCall.name, input: normalizedToolInput },
+              startedAt
+            );
+            await options.agentService.recordRunEvent(run, {
+              type: "tool.started",
+              payload: { name: toolCall.name, input: normalizedToolInput }
+            });
+            toolCallsExecuted += 1;
+
+            try {
+              const output = await options.toolRegistry.execute(toolCall.name, context, normalizedToolInput);
+              toolResults.push({ name: toolCall.name, output });
+              activeItineraryContext = applyToolResultToItineraryContext(
+                activeItineraryContext,
+                toolCall.name,
+                output
+              );
+              await options.agentService.completeToolCall(persistedToolCall.id, output, now());
+              await options.agentService.recordRunEvent(run, {
+                type: "tool.completed",
+                payload: { name: toolCall.name, output }
+              });
+            } catch (error) {
+              agentLogger.error(`Tool Execution Failed: ${toolCall.name}`, input.runId, error);
+              const details = errorDetails(error);
+              await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
+              await options.agentService.recordRunEvent(run, {
+                type: "tool.failed",
+                payload: { name: toolCall.name, code: details.code, message: details.message }
+              });
+
+              const isRecoverableToolFailure =
+                (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
+                ([
+                  "search_google_places",
+                  "get_google_place_details",
+                  "estimate_route",
+                  "map_pinpoint",
+                  "route_logistics",
+                  "place_insights"
+                ].includes(toolCall.name) &&
+                  (details.code === "MAPS_PROVIDER_UNAVAILABLE" || details.code === "AGENT_TOOL_LIMIT_REACHED"));
+              if (isRecoverableToolFailure) {
+                toolResults.push({
+                  name: toolCall.name,
+                  output: {
+                    unavailable: true,
+                    code: details.code,
+                    message: details.message
+                  }
+                });
+                continue;
+              }
+
+              // Any 400-class tool input error is recoverable: feed the error message back as a tool
+              // result so the next continuation turn can self-correct rather than failing the whole run.
+              // Also covers granular itinerary tools rejecting malformed UUIDs / missing itineraries.
+              const isCorrectableInputFailure =
+                details.code === "AGENT_TOOL_INPUT_INVALID" ||
+                (GRANULAR_ITINERARY_TOOL_NAMES.has(toolCall.name) && details.code === "ITINERARY_NOT_FOUND");
+              if (isCorrectableInputFailure) {
+                toolResults.push({
+                  name: toolCall.name,
+                  output: {
+                    error: true,
+                    code: details.code,
+                    message: details.message
+                  }
+                });
+                hadRecoverableFailure = true;
+                continue;
+              }
+
+              throw error;
+            }
+          }
+        }
+
+        try {
+          await executeToolCallsBatch(parsedOutput.toolCalls);
+        } catch (error) {
+          await failRun(input, error);
+          return;
+        }
+
+        // Approach B continuation loop: when the agent invoked an itinerary-building tool, give it more turns
+        // so it can keep streaming items left-to-right (plan_itinerary -> add_itinerary_item x N -> ...).
+        // We stop when the model responds with plain text, when no itinerary tool was called, or when the cap is hit.
+        const maxContinuations = 100;
+        let continuationsRun = 0;
+        let lastAssistantMessage = parsedOutput.assistantMessage;
+        let lastInvokedItineraryTool = parsedOutput.toolCalls.some((c: { name: string }) =>
+          GRANULAR_ITINERARY_TOOL_NAMES.has(c.name)
+        );
+        // A recoverable input failure (e.g. record_agent_task with a malformed shape) should still
+        // trigger a continuation so the model can self-correct, even if no itinerary tool ran.
+        let shouldContinueLoop = lastInvokedItineraryTool || hadRecoverableFailure;
+
+        while (shouldContinueLoop && continuationsRun < maxContinuations && toolCallsExecuted < maxToolCallsPerRun) {
+          continuationsRun += 1;
+          hadRecoverableFailure = false;
+
+          const continuationIdentifierBlock = activeItineraryContext
+            ? buildItineraryIdentifierBlock(activeItineraryContext.itinerary)
+            : "";
+
+          const continuationMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
+            {
+              role: "system" as const,
+              content: buildVoyageSystemPrompt(toolListForPrompt)
+            },
+            ...(activeItineraryContext
+              ? [{ role: "system" as const, content: activeItineraryContext.prompt }]
+              : []),
+            ...(continuationIdentifierBlock
+              ? [{ role: "system" as const, content: continuationIdentifierBlock }]
+              : []),
+            {
+              role: "user" as const,
+              content: input.userContent
+            },
+            {
+              role: "assistant" as const,
+              content: lastAssistantMessage
+            },
+            {
+              role: "user" as const,
+              content: [
+                "Tool results so far (most recent last):",
+                stringifyToolResults(toolResults),
+                "",
+                activeItineraryContext
+                  ? `Current itinerary draft state:\n${JSON.stringify(activeItineraryContext.itinerary)}`
+                  : "",
+                "",
+                "If the itinerary still needs more stops to fulfil the original request, respond with the next single tool call (preferably add_itinerary_item, one item at a time). When the itinerary is complete, respond with a brief plain-text summary and no tool call."
+              ].filter(Boolean).join("\n")
+            }
+          ];
+
+          let nextContent: string;
+          try {
+            const completion = await options.modelProvider.complete({
+              messages: continuationMessages,
+              temperature: 0.2
+            });
+            nextContent = completion.content;
+            agentLogger.modelOutput(input.runId, nextContent);
+          } catch (error) {
+            agentLogger.error("Continuation completion failed", input.runId, error);
+            break;
+          }
+
+          let nextParsed: any;
+          try {
+            nextParsed = parseModelOutput(nextContent);
+          } catch (error) {
+            agentLogger.error("Continuation parse failed", input.runId, error);
+            break;
+          }
+
+          if (nextParsed.type === "text" || !nextParsed.toolCalls?.length) {
+            lastAssistantMessage = nextParsed.assistantMessage || lastAssistantMessage;
+            lastInvokedItineraryTool = false;
+            shouldContinueLoop = false;
+            break;
+          }
+
+          lastAssistantMessage = nextParsed.assistantMessage || lastAssistantMessage;
+          try {
+            await executeToolCallsBatch(nextParsed.toolCalls);
+          } catch (error) {
             await failRun(input, error);
             return;
           }
+          lastInvokedItineraryTool = nextParsed.toolCalls.some((c: { name: string }) =>
+            GRANULAR_ITINERARY_TOOL_NAMES.has(c.name)
+          );
+          shouldContinueLoop = lastInvokedItineraryTool || hadRecoverableFailure;
         }
+
+        // Update the assistantMessage seed used by synthesis to the last continuation if we ran one.
+        parsedOutput = { ...parsedOutput, assistantMessage: lastAssistantMessage };
 
         if (toolResults.length === 0) {
           await streamAndComplete(run, parsedOutput.assistantMessage);

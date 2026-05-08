@@ -5,17 +5,26 @@ import { agentService } from "./agentService";
 import { itineraryService } from "../itineraries/itineraryService";
 import { createAgentOrchestrator } from "./agentOrchestrator";
 import {
+  createAddItineraryDayTool,
+  createAddItineraryItemTool,
   createAgentToolRegistry,
   createCreateItineraryTool,
+  createDeleteItineraryTool,
   createEstimateRouteTool,
   createGetGooglePlaceDetailsTool,
   createMapPinpointTool,
+  createMoveItineraryItemTool,
   createPlaceInsightsTool,
+  createPlanItineraryTool,
   createRecordAgentTaskTool,
+  createRemoveItineraryDayTool,
+  createRemoveItineraryItemTool,
   createRouteLogisticsTool,
   createSearchGooglePlacesTool,
   createSearchNearbyGooglePlacesTool,
   createGetGooglePlacePhotosTool,
+  createUpdateItineraryDayTool,
+  createUpdateItineraryItemTool,
   createUpdateItineraryTool,
   createWebSearchTool
 } from "./agentTools";
@@ -37,16 +46,40 @@ const GOOGLE_MAPS_TOOL_NAMES = [
 const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
 
 function createAgencyAgentOrchestrator() {
+  // Tools that don't need a maps provider can be registered up front.
   const tools = [
     createRecordAgentTaskTool({ agentService }),
     createCreateItineraryTool({ itineraryService, agentService }),
-    createUpdateItineraryTool({ itineraryService, agentService })
+    createUpdateItineraryTool({ itineraryService, agentService }),
+    createPlanItineraryTool({ itineraryService, agentService }),
+    createDeleteItineraryTool({ itineraryService, agentService }),
+    createAddItineraryDayTool({ itineraryService, agentService }),
+    createUpdateItineraryDayTool({ itineraryService, agentService }),
+    createRemoveItineraryDayTool({ itineraryService, agentService }),
+    createAddItineraryItemTool({ itineraryService, agentService }),
+    createUpdateItineraryItemTool({ itineraryService, agentService }),
+    createRemoveItineraryItemTool({ itineraryService, agentService }),
+    createMoveItineraryItemTool({ itineraryService, agentService })
   ];
+
+  function rebindWithMaps(maps: ReturnType<typeof createNominatimMapsProvider> | ReturnType<typeof createGoogleMapsProvider>) {
+    const replacements: Record<string, () => typeof tools[number]> = {
+      create_itinerary: () => createCreateItineraryTool({ itineraryService, agentService, maps }),
+      update_itinerary: () => createUpdateItineraryTool({ itineraryService, agentService, maps }),
+      add_itinerary_item: () =>
+        createAddItineraryItemTool({ itineraryService, agentService, maps, placeSnapshotClient: prisma }),
+      update_itinerary_item: () =>
+        createUpdateItineraryItemTool({ itineraryService, agentService, maps, placeSnapshotClient: prisma })
+    };
+    for (const [name, factory] of Object.entries(replacements)) {
+      const idx = tools.findIndex((t) => t.name === name);
+      if (idx !== -1) tools[idx] = factory();
+    }
+  }
 
   try {
     const maps = createNominatimMapsProvider();
-    tools[1] = createCreateItineraryTool({ itineraryService, agentService, maps });
-    tools[2] = createUpdateItineraryTool({ itineraryService, agentService, maps });
+    rebindWithMaps(maps);
     tools.push(
       createMapPinpointTool({ maps, agentService, placeSnapshotClient: prisma }),
       createPlaceInsightsTool({ maps, agentService, placeSnapshotClient: prisma })
@@ -69,13 +102,12 @@ function createAgencyAgentOrchestrator() {
     ];
 
     tools.push(...googleMapsTools.filter(t => !tools.some(existing => existing.name === t.name)));
-    
-    tools[1] = createCreateItineraryTool({ itineraryService, agentService, maps: googleMaps });
-    tools[2] = createUpdateItineraryTool({ itineraryService, agentService, maps: googleMaps });
-    
+
+    rebindWithMaps(googleMaps);
+
     const pinpointIdx = tools.findIndex(t => t.name === "map_pinpoint");
     if (pinpointIdx !== -1) tools[pinpointIdx] = googleMapsTools.find(t => t.name === "map_pinpoint")!;
-    
+
     const insightsIdx = tools.findIndex(t => t.name === "place_insights");
     if (insightsIdx !== -1) tools[insightsIdx] = googleMapsTools.find(t => t.name === "place_insights")!;
 
@@ -102,6 +134,8 @@ function createAgencyAgentOrchestrator() {
     modelProvider: getModelProvider(),
     agentService,
     availableToolNames: tools.map((tool) => tool.name),
+    // Packed Approach B with research + clustering + per-stop estimate_route fans out to ~3 tool calls per stop on a multi-day plan.
+    maxToolCallsPerRun: 120,
     toolRegistry: createAgentToolRegistry(tools, {
       maxCallsByGroup: {
         google_maps: env.GOOGLE_MAPS_MAX_CALLS_PER_RUN,
