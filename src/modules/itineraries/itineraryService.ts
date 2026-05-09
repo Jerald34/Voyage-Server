@@ -114,6 +114,7 @@ export type AddItineraryItemRepoInput = {
 export type UpdateItineraryItemRepoInput = Partial<StructuredItineraryItem>;
 
 export interface ItineraryRepository {
+  listTripsWithItineraries(agencyId: string): Promise<Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>>;
   createTripWithItinerary(data: {
     agencyId: string;
     createdByUserId: string;
@@ -203,6 +204,10 @@ export function assertUuid(value: unknown, field: string): asserts value is stri
 
 export function createItineraryService(options: { repository: ItineraryRepository }) {
   return {
+    async listTripsWithItineraries(agencyId: string) {
+      return options.repository.listTripsWithItineraries(agencyId);
+    },
+
     async createDraftFromStructuredInput(
       agencyId: string,
       createdByUserId: string,
@@ -373,6 +378,20 @@ function createDayData(day: StructuredItineraryDay) {
 
 export function createPrismaItineraryRepository(client: PrismaClient = prisma): ItineraryRepository {
   return {
+    async listTripsWithItineraries(agencyId) {
+      const trips = await client.clientTrip.findMany({
+        where: { agencyId },
+        orderBy: { createdAt: "desc" },
+        include: {
+          itineraries: {
+            select: { id: true, status: true, version: true },
+            orderBy: { createdAt: "desc" },
+          },
+        },
+      });
+      return trips as Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>;
+    },
+
     async createTripWithItinerary(data) {
       return client.$transaction(async (tx) => {
         const trip = await tx.clientTrip.create({

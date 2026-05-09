@@ -4,31 +4,31 @@ import type { AgentRunRecord, AgentMessageRecord, AgentRunEventRecord } from "./
 import { agentLogger } from "./agentLogger";
 import type { AgentEvent } from "./agentSchemas";
 import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
-import type { 
-  AgentOrchestrator, 
-  AgentOrchestratorRunInput, 
-  AgentOrchestratorAgentService 
+import type {
+  AgentOrchestrator,
+  AgentOrchestratorRunInput,
+  AgentOrchestratorAgentService
 } from "./agentTypes";
-import { 
-  parseModelOutput, 
-  canonicalToolName 
+import {
+  parseModelOutput,
+  canonicalToolName
 } from "./agentParser";
-import { 
-  buildVoyageSystemPrompt, 
-  buildVoyageSynthesisPrompt 
+import {
+  buildVoyageSystemPrompt,
+  buildVoyageSynthesisPrompt
 } from "./agentPrompts";
-import { 
-  shouldRecoverPlainItinerary, 
-  recoverPlainItineraryToolOutput, 
-  shouldCreateItineraryDirectlyFromUserRequest, 
+import {
+  shouldRecoverPlainItinerary,
+  recoverPlainItineraryToolOutput,
+  shouldCreateItineraryDirectlyFromUserRequest,
   createItineraryToolCallFromUserRequest,
   enrichToolInputFromUserRequestForExecution,
   mergeUpdateItineraryInputFromActiveItinerary
 } from "./agentInference";
-import { 
-  errorDetails, 
+import {
+  errorDetails,
   recoverSynthesizedMessage,
-  stringifyToolResults 
+  stringifyToolResults
 } from "./agentUtils";
 
 async function streamModelCompletion(options: {
@@ -112,6 +112,21 @@ const GRANULAR_ITINERARY_TOOL_NAMES = new Set([
   "move_itinerary_item"
 ]);
 
+// Tools that are progress-tracking or research actions — they should always trigger a
+// continuation turn so the agent keeps working after recording a task or searching the web.
+const CONTINUATION_TRIGGER_TOOL_NAMES = new Set([
+  "record_agent_task",
+  "web_search",
+  "search_google_places",
+  "get_google_place_details",
+  "estimate_route",
+  "map_pinpoint",
+  "route_logistics",
+  "place_insights",
+  "search_nearby_google_places",
+  "get_google_place_photos"
+]);
+
 function buildActiveItineraryContext(thread: unknown) {
   if (!isRecordLike(thread) || !Array.isArray(thread.events)) {
     return null;
@@ -184,6 +199,22 @@ function applyToolResultToItineraryContext(
       ].join("\n"),
     itinerary: updatedItinerary
   };
+}
+
+// Count items across all days. Used to detect premature termination after plan_itinerary
+// (model jumps to plain text before populating any stops).
+function countItineraryItems(itinerary: Record<string, unknown> | undefined | null): { dayCount: number; itemCount: number } {
+  if (!isRecordLike(itinerary) || !Array.isArray(itinerary.days)) {
+    return { dayCount: 0, itemCount: 0 };
+  }
+  const days = itinerary.days as Array<unknown>;
+  let itemCount = 0;
+  for (const day of days) {
+    if (isRecordLike(day) && Array.isArray(day.items)) {
+      itemCount += (day.items as Array<unknown>).length;
+    }
+  }
+  return { dayCount: days.length, itemCount };
 }
 
 // Surface the canonical UUIDs back to the model so it cannot fabricate slug-style IDs on continuation turns.
@@ -358,7 +389,7 @@ export function createAgentOrchestrator(options: {
               modelProvider: options.modelProvider,
               input: {
                 messages: initialMessages,
-                temperature: 0.2
+                temperature: 0.6
               },
               onDelta: async (delta) => {
                 modelContent += delta;
@@ -390,7 +421,7 @@ export function createAgentOrchestrator(options: {
           } else {
             const modelResult = await options.modelProvider.complete({
               messages: initialMessages,
-              temperature: 0.2
+              temperature: 0.6
             });
             modelContent = modelResult.content;
             initialMode = detectInitialOutputMode(modelContent);
@@ -575,13 +606,24 @@ export function createAgentOrchestrator(options: {
         let lastInvokedItineraryTool = parsedOutput.toolCalls.some((c: { name: string }) =>
           GRANULAR_ITINERARY_TOOL_NAMES.has(c.name)
         );
+        const lastInvokedContinuationTool = parsedOutput.toolCalls.some((c: { name: string }) =>
+          CONTINUATION_TRIGGER_TOOL_NAMES.has(c.name)
+        );
         // A recoverable input failure (e.g. record_agent_task with a malformed shape) should still
         // trigger a continuation so the model can self-correct, even if no itinerary tool ran.
-        let shouldContinueLoop = lastInvokedItineraryTool || hadRecoverableFailure;
+        // Progress-tracking / research tools (record_agent_task, web_search, etc.) must also
+        // trigger continuation so the agent proceeds to the actual work after recording status.
+        let shouldContinueLoop = lastInvokedItineraryTool || lastInvokedContinuationTool || hadRecoverableFailure;
+        // Track remediation attempts so the model can't terminate prematurely after plan_itinerary
+        // when the itinerary still has empty days. Capped to avoid infinite loops on a stuck model.
+        let remediationAttempts = 0;
+        const maxRemediationAttempts = 3;
 
         while (shouldContinueLoop && continuationsRun < maxContinuations && toolCallsExecuted < maxToolCallsPerRun) {
           continuationsRun += 1;
           hadRecoverableFailure = false;
+          const { dayCount: currentDayCount, itemCount: currentItemCount } = countItineraryItems(activeItineraryContext?.itinerary);
+          const itineraryIsEmptySkeleton = currentDayCount > 0 && currentItemCount === 0;
 
           const continuationIdentifierBlock = activeItineraryContext
             ? buildItineraryIdentifierBlock(activeItineraryContext.itinerary)
@@ -616,7 +658,9 @@ export function createAgentOrchestrator(options: {
                   ? `Current itinerary draft state:\n${JSON.stringify(activeItineraryContext.itinerary)}`
                   : "",
                 "",
-                "If the itinerary still needs more stops to fulfil the original request, respond with the next single tool call (preferably add_itinerary_item, one item at a time). When the itinerary is complete, respond with a brief plain-text summary and no tool call."
+                itineraryIsEmptySkeleton
+                  ? `STATE CHECK: The itinerary has ${currentDayCount} day(s) but ZERO items so far. The plan is NOT complete. Your next response MUST be a single add_itinerary_item tool call (or estimate_route to validate the route before the next add). Do NOT respond with plain text yet. Do NOT call plan_itinerary again — the skeleton already exists. Begin populating Day 1.`
+                  : "If the itinerary still needs more stops to fulfil the original request, respond with the next single tool call (preferably add_itinerary_item, one item at a time). When the itinerary is complete, respond with a brief plain-text summary and no tool call."
               ].filter(Boolean).join("\n")
             }
           ];
@@ -625,7 +669,7 @@ export function createAgentOrchestrator(options: {
           try {
             const completion = await options.modelProvider.complete({
               messages: continuationMessages,
-              temperature: 0.2
+              temperature: 0.6
             });
             nextContent = completion.content;
             agentLogger.modelOutput(input.runId, nextContent);
@@ -643,6 +687,20 @@ export function createAgentOrchestrator(options: {
           }
 
           if (nextParsed.type === "text" || !nextParsed.toolCalls?.length) {
+            // Anti-termination guard: if the model tries to terminate while the itinerary still
+            // has empty days (skeleton-only), force more turns up to maxRemediationAttempts.
+            const postTurn = countItineraryItems(activeItineraryContext?.itinerary);
+            const stillEmpty = postTurn.dayCount > 0 && postTurn.itemCount === 0;
+            if (stillEmpty && remediationAttempts < maxRemediationAttempts) {
+              remediationAttempts += 1;
+              agentLogger.debug(
+                input.runId,
+                `Premature termination after plan_itinerary; remediating (attempt ${remediationAttempts}/${maxRemediationAttempts})`
+              );
+              lastAssistantMessage = nextParsed.assistantMessage || lastAssistantMessage;
+              shouldContinueLoop = true;
+              continue;
+            }
             lastAssistantMessage = nextParsed.assistantMessage || lastAssistantMessage;
             lastInvokedItineraryTool = false;
             shouldContinueLoop = false;
@@ -659,7 +717,10 @@ export function createAgentOrchestrator(options: {
           lastInvokedItineraryTool = nextParsed.toolCalls.some((c: { name: string }) =>
             GRANULAR_ITINERARY_TOOL_NAMES.has(c.name)
           );
-          shouldContinueLoop = lastInvokedItineraryTool || hadRecoverableFailure;
+          const continuationTool = nextParsed.toolCalls.some((c: { name: string }) =>
+            CONTINUATION_TRIGGER_TOOL_NAMES.has(c.name)
+          );
+          shouldContinueLoop = lastInvokedItineraryTool || continuationTool || hadRecoverableFailure;
         }
 
         // Update the assistantMessage seed used by synthesis to the last continuation if we ran one.
@@ -693,7 +754,7 @@ export function createAgentOrchestrator(options: {
 
           const synthesis = await options.modelProvider.complete({
             messages: synthesisMessages,
-            temperature: 0.2
+            temperature: 0.6
           });
           synthesizedMessage = recoverSynthesizedMessage(
             synthesis.content.trim() || parsedOutput.assistantMessage,

@@ -27,6 +27,16 @@ itineraryRoutes.use(async (request, _response, next) => {
   }
 });
 
+itineraryRoutes.get("/", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const trips = await itineraryService.listTripsWithItineraries(agencyId);
+    response.json({ trips });
+  } catch (error) {
+    next(error);
+  }
+});
+
 itineraryRoutes.get("/:itineraryId", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
