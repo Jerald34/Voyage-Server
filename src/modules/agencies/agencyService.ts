@@ -24,6 +24,18 @@ export type AgencyRecord = {
   suspendedAt: Date | null;
   suspendedByAdminUserId: string | null;
   suspensionReason: string | null;
+  businessPhone: string | null;
+  businessEmail: string | null;
+  country: string | null;
+  city: string | null;
+};
+
+export type AgencyWithOwner = AgencyRecord & {
+  ownerUser: { id: string; email: string; displayName: string };
+};
+
+export type AgencyDetailRecord = AgencyWithOwner & {
+  auditEvents: AdminAuditRecord[];
 };
 
 export type AgencyMembershipRecord = {
@@ -52,10 +64,23 @@ export type AdminAuditRecord = {
 };
 
 export type AgencyRepository = {
-  createAgency(data: { name: string; slug: string; ownerUserId: string }): Promise<AgencyRecord>;
+  createAgency(data: {
+    name: string;
+    slug: string;
+    ownerUserId: string;
+    businessPhone?: string;
+    businessEmail?: string;
+    country?: string;
+    city?: string;
+    logoImageId?: string;
+  }): Promise<AgencyRecord>;
   createOwnerMembership(data: { agencyId: string; userId: string }): Promise<AgencyMembershipRecord>;
   listPendingAgencies(): Promise<AgencyRecord[]>;
+  listAgencies(status?: string): Promise<AgencyWithOwner[]>;
   findAgencyById(id: string): Promise<AgencyRecord | null>;
+  findAgencyByIdWithOwner(id: string): Promise<AgencyWithOwner | null>;
+  countAgenciesByStatus(status: string): Promise<number>;
+  listAuditEventsForTarget(targetType: string, targetId: string): Promise<AdminAuditRecord[]>;
   updateAgency(id: string, data: Partial<AgencyRecord>): Promise<AgencyRecord>;
   createAdminAuditEvent(data: Omit<AdminAuditRecord, "id" | "createdAt">): Promise<AdminAuditRecord>;
 };
@@ -94,11 +119,15 @@ export function createAgencyService(options: { repository: AgencyRepository; now
   }
 
   return {
-    async createAgencyApplication(user: AgencyUser, input: { name: string }) {
+    async createAgencyApplication(user: AgencyUser, input: {
+      name: string;
+      businessPhone: string;
+      businessEmail?: string;
+      country: string;
+      city: string;
+      logoImageId?: string;
+    }) {
       assertActive(user);
-      if (!user.emailVerifiedAt) {
-        throw new ApiError(403, "EMAIL_VERIFICATION_REQUIRED", "Verify your email before registering an agency.");
-      }
 
       const name = input.name.trim();
       if (!name) {
@@ -108,7 +137,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       const agency = await options.repository.createAgency({
         name,
         slug: slugifyAgencyName(name),
-        ownerUserId: user.id
+        ownerUserId: user.id,
+        businessPhone: input.businessPhone.trim(),
+        businessEmail: input.businessEmail?.trim(),
+        country: input.country.trim(),
+        city: input.city.trim(),
+        logoImageId: input.logoImageId,
       });
       await options.repository.createOwnerMembership({ agencyId: agency.id, userId: user.id });
       return agency;
@@ -188,9 +222,54 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         reason
       });
       return agency;
+    },
+
+    async unsuspendAgency(user: AgencyUser, agencyId: string) {
+      assertAdmin(user);
+      const agency = await findRequiredAgency(agencyId);
+      if (agency.status !== "SUSPENDED") {
+        throw new ApiError(400, "AGENCY_NOT_SUSPENDED", "Only suspended agencies can be unsuspended.");
+      }
+      const updated = await options.repository.updateAgency(agencyId, {
+        status: "VERIFIED",
+        suspendedAt: null,
+        suspendedByAdminUserId: null,
+        suspensionReason: null
+      });
+      await options.repository.createAdminAuditEvent({
+        adminUserId: user.id,
+        action: "AGENCY_UNSUSPENDED",
+        targetType: "Agency",
+        targetId: agencyId,
+        reason: null
+      });
+      return updated;
+    },
+
+    async listAllAgencies(user: AgencyUser, status?: string) {
+      assertAdmin(user);
+      return options.repository.listAgencies(status);
+    },
+
+    async getAgencyDetail(user: AgencyUser, agencyId: string): Promise<AgencyDetailRecord> {
+      assertAdmin(user);
+      const agency = await options.repository.findAgencyByIdWithOwner(agencyId);
+      if (!agency) {
+        throw new ApiError(404, "AGENCY_NOT_FOUND", "Agency not found.");
+      }
+      const auditEvents = await options.repository.listAuditEventsForTarget("Agency", agencyId);
+      return { ...agency, auditEvents };
+    },
+
+    async getPendingCount(user: AgencyUser) {
+      assertAdmin(user);
+      return options.repository.countAgenciesByStatus("PENDING_REVIEW");
     }
   };
 }
+
+const ownerSelect = { id: true, email: true, displayName: true } as const;
+const auditInclude = { adminUser: { select: { id: true, displayName: true } } } as const;
 
 export function createPrismaAgencyRepository(client: PrismaClient = prisma): AgencyRepository {
   return {
@@ -212,8 +291,32 @@ export function createPrismaAgencyRepository(client: PrismaClient = prisma): Age
         orderBy: { submittedAt: "asc" }
       }) as Promise<AgencyRecord[]>;
     },
+    async listAgencies(status?) {
+      const where = status ? { status: status as AgencyRecord["status"] } : {};
+      return client.agency.findMany({
+        where,
+        include: { ownerUser: { select: ownerSelect } },
+        orderBy: { submittedAt: "desc" }
+      }) as Promise<AgencyWithOwner[]>;
+    },
     async findAgencyById(id) {
       return client.agency.findUnique({ where: { id } }) as Promise<AgencyRecord | null>;
+    },
+    async findAgencyByIdWithOwner(id) {
+      return client.agency.findUnique({
+        where: { id },
+        include: { ownerUser: { select: ownerSelect } }
+      }) as Promise<AgencyWithOwner | null>;
+    },
+    async countAgenciesByStatus(status) {
+      return client.agency.count({ where: { status: status as AgencyRecord["status"] } });
+    },
+    async listAuditEventsForTarget(targetType, targetId) {
+      return client.adminAuditEvent.findMany({
+        where: { targetType, targetId },
+        include: auditInclude,
+        orderBy: { createdAt: "desc" }
+      }) as Promise<AdminAuditRecord[]>;
     },
     async updateAgency(id, data) {
       return client.agency.update({

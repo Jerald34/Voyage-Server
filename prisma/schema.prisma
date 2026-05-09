@@ -222,6 +222,10 @@ model Agency {
   suspendedByAdminUserId String?            @db.Uuid
   suspendedByAdminUser   User?              @relation("AgencySuspendedBy", fields: [suspendedByAdminUserId], references: [id])
   suspensionReason       String?
+  businessPhone          String?
+  businessEmail          String?
+  country                String?
+  city                   String?
   memberships            AgencyMembership[]
   imageAssets            ImageAsset[]        @relation("AgencyImageAssets")
   clientTrips            ClientTrip[]

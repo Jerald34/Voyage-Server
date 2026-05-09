@@ -1,12 +1,16 @@
 import type { NextFunction, Request, Response } from "express";
-import type { AgencyMembership, User } from "@prisma/client";
+import type { Agency, AgencyMembership, User } from "@prisma/client";
 import { env } from "../config/env";
 import { prisma } from "../db/prisma";
 import { ApiError } from "./errors";
 import { hashToken } from "../services/tokens";
 
+type MembershipWithAgency = AgencyMembership & {
+  agency: Pick<Agency, "id" | "status" | "name" | "rejectionReason" | "suspensionReason">;
+};
+
 export type AuthUser = User & {
-  memberships: AgencyMembership[];
+  memberships: MembershipWithAgency[];
 };
 
 declare global {
@@ -31,7 +35,11 @@ export async function attachAuthUser(request: Request, _response: Response, next
     include: {
       user: {
         include: {
-          memberships: true
+          memberships: {
+            include: {
+              agency: { select: { id: true, status: true, name: true, rejectionReason: true, suspensionReason: true } }
+            }
+          }
         }
       }
     }

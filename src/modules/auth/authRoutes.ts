@@ -28,7 +28,8 @@ function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
     memberships: user.memberships.map(m => ({
       agencyId: m.agencyId,
       role: m.role,
-      status: m.status
+      status: m.status,
+      agency: m.agency
     }))
   };
 }

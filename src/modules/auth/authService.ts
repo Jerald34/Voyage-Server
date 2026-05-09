@@ -276,7 +276,13 @@ export function createAuthService(options: AuthServiceOptions) {
 }
 
 function includeMemberships() {
-  return { memberships: true } as const;
+  return {
+    memberships: {
+      include: {
+        agency: { select: { id: true, status: true, name: true, rejectionReason: true, suspensionReason: true } }
+      }
+    }
+  } as const;
 }
 
 export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthRepository {

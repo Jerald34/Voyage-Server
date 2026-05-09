@@ -7,7 +7,7 @@ type UserWithMemberships = User & {
 export function getUserCapabilities(user: UserWithMemberships) {
   return {
     canUseApp: user.status === "ACTIVE",
-    canRegisterAgency: user.status === "ACTIVE" && Boolean(user.emailVerifiedAt),
+    canRegisterAgency: user.status === "ACTIVE",
     canReviewAgencies: user.status === "ACTIVE" && user.role === "ADMIN",
     agencyMembershipCount: user.memberships?.length ?? 0
   };
