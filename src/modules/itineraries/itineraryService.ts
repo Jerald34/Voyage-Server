@@ -138,6 +138,7 @@ export interface ItineraryRepository {
     agencyId: string,
     opts: { deleteTrip: boolean }
   ): Promise<{ deleted: boolean; tripDeleted: boolean }>;
+  deleteTrip(tripId: string, agencyId: string): Promise<{ deleted: boolean }>;
   addDay(
     itineraryId: string,
     agencyId: string,
@@ -267,6 +268,11 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       return options.repository.deleteItinerary(parsed.itineraryId, agencyId, {
         deleteTrip: parsed.deleteTrip
       });
+    },
+
+    async deleteTrip(agencyId: string, tripId: string) {
+      assertUuid(tripId, "tripId");
+      return options.repository.deleteTrip(tripId, agencyId);
     },
 
     async addDay(agencyId: string, input: AddItineraryDayInput) {
@@ -534,6 +540,26 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         }
 
         return { deleted: true, tripDeleted };
+      });
+    },
+
+    async deleteTrip(tripId, agencyId) {
+      return client.$transaction(async (tx) => {
+        const existing = await tx.clientTrip.findFirst({
+          where: { id: tripId, agencyId },
+          select: { id: true }
+        });
+        if (!existing) {
+          throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+        }
+        await tx.agentThread.updateMany({
+          where: { tripId, agencyId },
+          data: { tripId: null }
+        });
+        await tx.clientTrip.delete({
+          where: { id_agencyId: { id: tripId, agencyId } }
+        });
+        return { deleted: true };
       });
     },
 

@@ -64,3 +64,14 @@ itineraryRoutes.patch("/:itineraryId", async (request, response, next) => {
     next(error);
   }
 });
+
+itineraryRoutes.delete("/trips/:tripId", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const tripId = String(request.params.tripId);
+    const result = await itineraryService.deleteTrip(agencyId, tripId);
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
