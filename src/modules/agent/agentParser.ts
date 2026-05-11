@@ -328,7 +328,7 @@ function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
           break;
         }
       }
-      
+
       if (foundEnd > braceStart) {
         jsonText = content.slice(braceStart, foundEnd + 1);
       }
@@ -373,7 +373,7 @@ function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
 
 export function parseModelOutput(content: string): ParsedModelOutput {
   console.log(`[Agent] Parsing model output (${content.length} chars)`);
-  
+
   const xmlToolCall = parseXmlToolCallOutput(content);
   if (xmlToolCall && xmlToolCall.type === "json") {
     console.log(`[Agent] Detected XML tool call: ${xmlToolCall.toolCalls[0].name}`);
