@@ -6,7 +6,7 @@ import { ApiError } from "./errors";
 import { hashToken } from "../services/tokens";
 
 type MembershipWithAgency = AgencyMembership & {
-  agency: Pick<Agency, "id" | "status" | "name" | "rejectionReason" | "suspensionReason">;
+  agency: Pick<Agency, "id" | "status" | "name" | "city" | "country" | "rejectionReason" | "suspensionReason">;
 };
 
 export type AuthUser = User & {
@@ -37,7 +37,17 @@ export async function attachAuthUser(request: Request, _response: Response, next
         include: {
           memberships: {
             include: {
-              agency: { select: { id: true, status: true, name: true, rejectionReason: true, suspensionReason: true } }
+              agency: {
+                select: {
+                  id: true,
+                  status: true,
+                  name: true,
+                  city: true,
+                  country: true,
+                  rejectionReason: true,
+                  suspensionReason: true
+                }
+              }
             }
           }
         }

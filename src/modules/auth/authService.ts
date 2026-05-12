@@ -279,7 +279,17 @@ function includeMemberships() {
   return {
     memberships: {
       include: {
-        agency: { select: { id: true, status: true, name: true, rejectionReason: true, suspensionReason: true } }
+        agency: {
+          select: {
+            id: true,
+            status: true,
+            name: true,
+            city: true,
+            country: true,
+            rejectionReason: true,
+            suspensionReason: true
+          }
+        }
       }
     }
   } as const;

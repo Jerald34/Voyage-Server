@@ -5,6 +5,7 @@ import {
   type AgentOrchestratorAgentService
 } from "../src/modules/agent/agentOrchestrator";
 import {
+  createAddItineraryItemTool,
   createAgentToolRegistry,
   createCreateItineraryTool,
   createEstimateRouteTool,
@@ -1579,6 +1580,160 @@ describe("agent orchestrator", () => {
         })
       }
     ]);
+  });
+
+  it("adds routeFromPrevious to newly added itinerary stops when the previous stop is mapped", async () => {
+    const { service, events } = createFakeAgentService();
+    const updateInputs: unknown[] = [];
+    const tool = createAddItineraryItemTool({
+      agentService: service,
+      itineraryService: {
+        async addItem(_agencyId, input) {
+          return {
+            itinerary: {
+              id: input.itineraryId,
+              days: [
+                {
+                  id: input.dayId,
+                  items: [
+                    {
+                      id: "item-previous",
+                      sortOrder: 1,
+                      title: "Burnham Park",
+                      placeSnapshot: {
+                        latitude: 16.411,
+                        longitude: 120.593
+                      }
+                    },
+                    {
+                      id: "item-current",
+                      sortOrder: 2,
+                      title: input.item.title,
+                      placeSnapshot: {
+                        latitude: 16.402,
+                        longitude: 120.596
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            dayId: input.dayId,
+            item: {
+              id: "item-current",
+              sortOrder: 2,
+              title: input.item.title,
+              placeSnapshot: {
+                latitude: 16.402,
+                longitude: 120.596
+              }
+            }
+          };
+        },
+        async updateItem(_agencyId, input) {
+          updateInputs.push(input);
+          return {
+            itinerary: { id: input.itineraryId },
+            dayId: "day-1",
+            item: {
+              id: input.itemId,
+              title: "Baguio Cathedral",
+              routeFromPrevious: input.item.routeFromPrevious
+            }
+          };
+        }
+      },
+      maps: {
+        async resolvePlace() {
+          return {
+            provider: "GOOGLE_MAPS",
+            providerPlaceId: "google-place-current",
+            name: "Baguio Cathedral",
+            formattedAddress: "Baguio Cathedral, Baguio City",
+            location: { latitude: 16.402, longitude: 120.596 }
+          };
+        },
+        async getPlaceDetails() {
+          return {
+            id: "google-place-current",
+            name: "Baguio Cathedral",
+            address: "Baguio Cathedral, Baguio City",
+            types: []
+          };
+        },
+        async getPlacePhotos() {
+          return [];
+        },
+        async searchPlaces() {
+          return [];
+        },
+        async searchNearby() {
+          return [];
+        },
+        async estimateRoute(input) {
+          return {
+            distanceMeters: 1400,
+            durationSeconds: 480,
+            polyline: "encoded-route",
+            staticDurationSeconds: 420
+          };
+        }
+      },
+      placeSnapshotClient: {
+        placeSnapshot: {
+          async upsert() {
+            return { id: "snapshot-current" };
+          }
+        }
+      } as never
+    });
+
+    const output = await tool.execute(createRunInput(), {
+      itineraryId: "itinerary-1",
+      dayId: "day-1",
+      item: {
+        type: "ACTIVITY",
+        title: "Baguio Cathedral",
+        placeName: "Baguio Cathedral",
+        cityContext: "Baguio City"
+      }
+    });
+
+    expect(updateInputs).toEqual([
+      expect.objectContaining({
+        itineraryId: "itinerary-1",
+        itemId: "item-current",
+        item: expect.objectContaining({
+          routeFromPrevious: {
+            originItemId: "item-previous",
+            destinationItemId: "item-current",
+            travelMode: "DRIVE",
+            distanceMeters: 1400,
+            durationSeconds: 480,
+            staticDurationSeconds: 420,
+            polyline: "encoded-route"
+          }
+        })
+      })
+    ]);
+    expect(output).toMatchObject({
+      item: {
+        id: "item-current",
+        routeFromPrevious: expect.objectContaining({
+          polyline: "encoded-route"
+        })
+      }
+    });
+    expect(events).toContainEqual({
+      type: "itinerary.item.added",
+      payload: expect.objectContaining({
+        item: expect.objectContaining({
+          routeFromPrevious: expect.objectContaining({
+            polyline: "encoded-route"
+          })
+        })
+      })
+    });
   });
 
   it("persists sources for web search", async () => {

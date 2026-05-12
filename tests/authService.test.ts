@@ -5,6 +5,7 @@ import {
   type AuthRepository,
   type EmailSender
 } from "../src/modules/auth/authService";
+import { serializeUser } from "../src/modules/auth/authRoutes";
 import { hashToken } from "../src/services/tokens";
 
 type UserRecord = Awaited<ReturnType<AuthRepository["createUser"]>>;
@@ -306,5 +307,39 @@ describe("auth service", () => {
     expect(second.user.id).toBe(first.user.id);
     expect(repository.users).toHaveLength(1);
     expect(repository.providerAccounts).toHaveLength(1);
+  });
+});
+
+describe("auth route serialization", () => {
+  it("includes agency registration city and country in memberships", () => {
+    const user = {
+      id: "user-1",
+      email: "owner@example.com",
+      displayName: "Agency Owner",
+      role: "USER",
+      status: "ACTIVE",
+      emailVerifiedAt: null,
+      memberships: [
+        {
+          agencyId: "agency-1",
+          role: "OWNER",
+          status: "ACTIVE",
+          agency: {
+            id: "agency-1",
+            status: "VERIFIED",
+            name: "Voyage Baguio",
+            city: "Baguio",
+            country: "Philippines",
+            rejectionReason: null,
+            suspensionReason: null,
+          },
+        },
+      ],
+    };
+
+    expect(serializeUser(user).memberships[0].agency).toMatchObject({
+      city: "Baguio",
+      country: "Philippines",
+    });
   });
 });

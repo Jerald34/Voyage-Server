@@ -302,6 +302,113 @@ async function resolveSingleItemPlace(options: {
   }
 }
 
+function toFiniteNumber(value: unknown) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number : null;
+}
+
+function getItemSnapshotPoint(item: Record<string, unknown> | null | undefined) {
+  const snapshot = isRecordLike(item?.placeSnapshot) ? item.placeSnapshot : null;
+  const latitude = toFiniteNumber(snapshot?.latitude);
+  const longitude = toFiniteNumber(snapshot?.longitude);
+
+  if (latitude === null || longitude === null) {
+    return null;
+  }
+
+  return { latitude, longitude };
+}
+
+function getItineraryDayItems(itinerary: unknown, dayId: string): Array<Record<string, unknown>> {
+  if (!isRecordLike(itinerary) || !Array.isArray(itinerary.days)) {
+    return [];
+  }
+
+  const day = itinerary.days.find((candidate) => isRecordLike(candidate) && candidate.id === dayId);
+  if (!isRecordLike(day) || !Array.isArray(day.items)) {
+    return [];
+  }
+
+  return day.items.filter(isRecordLike).sort((a, b) => Number(a.sortOrder ?? 0) - Number(b.sortOrder ?? 0));
+}
+
+function findPreviousMappedItem(items: Array<Record<string, unknown>>, currentItemId: string) {
+  const currentIndex = items.findIndex((item) => item.id === currentItemId);
+  if (currentIndex <= 0) {
+    return null;
+  }
+
+  for (let index = currentIndex - 1; index >= 0; index -= 1) {
+    const item = items[index];
+    if (getItemSnapshotPoint(item)) {
+      return item;
+    }
+  }
+
+  return null;
+}
+
+async function attachRouteFromPrevious(options: {
+  maps: MapsProvider;
+  itineraryService: Pick<ItineraryAgentService, "updateItem">;
+  agencyId: string;
+  itineraryId: string;
+  dayId: string;
+  result: {
+    itinerary: unknown;
+    item: Record<string, unknown>;
+  };
+}) {
+  const currentItemId = typeof options.result.item.id === "string" ? options.result.item.id : "";
+  if (!currentItemId || options.result.item.routeFromPrevious !== undefined) {
+    return options.result;
+  }
+
+  const dayItems = getItineraryDayItems(options.result.itinerary, options.dayId);
+  const currentItem = dayItems.find((item) => item.id === currentItemId) ?? options.result.item;
+  const previousItem = findPreviousMappedItem(dayItems, currentItemId);
+  const origin = getItemSnapshotPoint(previousItem);
+  const destination = getItemSnapshotPoint(currentItem);
+
+  if (!previousItem || !origin || !destination || typeof previousItem.id !== "string") {
+    return options.result;
+  }
+
+  try {
+    const route = await options.maps.estimateRoute({
+      origin,
+      destination,
+      travelMode: "DRIVE"
+    });
+    const routeFromPrevious = {
+      originItemId: previousItem.id,
+      destinationItemId: currentItemId,
+      travelMode: "DRIVE",
+      distanceMeters: route.distanceMeters ?? null,
+      durationSeconds: route.durationSeconds ?? null,
+      staticDurationSeconds: route.staticDurationSeconds ?? null,
+      polyline: route.polyline ?? null
+    };
+    const updated = await options.itineraryService.updateItem(options.agencyId, {
+      itineraryId: options.itineraryId,
+      itemId: currentItemId,
+      item: { routeFromPrevious }
+    });
+
+    if (isRecordLike(updated) && isRecordLike(updated.item)) {
+      return {
+        ...options.result,
+        ...updated,
+        item: updated.item
+      };
+    }
+  } catch (error) {
+    console.error("[Maps] Failed to estimate route for itinerary item", error);
+  }
+
+  return options.result;
+}
+
 export function createPlanItineraryTool(options: {
   itineraryService: Pick<ItineraryAgentService, "createPlanFromStructuredInput">;
   agentService?: AgentToolService;
@@ -435,7 +542,7 @@ export function createRemoveItineraryDayTool(options: {
 }
 
 export function createAddItineraryItemTool(options: {
-  itineraryService: Pick<ItineraryAgentService, "addItem">;
+  itineraryService: Pick<ItineraryAgentService, "addItem" | "updateItem">;
   agentService?: AgentToolService;
   maps?: MapsProvider;
   placeSnapshotClient?: PrismaClient;
@@ -454,7 +561,7 @@ export function createAddItineraryItemTool(options: {
         item = resolvedItem;
       }
 
-      const result = (await options.itineraryService.addItem(context.agencyId, {
+      let result = (await options.itineraryService.addItem(context.agencyId, {
         ...parsed,
         item
       })) as {
@@ -462,6 +569,16 @@ export function createAddItineraryItemTool(options: {
         dayId: string;
         item: Record<string, unknown>;
       };
+      if (options.maps) {
+        result = await attachRouteFromPrevious({
+          maps: options.maps,
+          itineraryService: options.itineraryService,
+          agencyId: context.agencyId,
+          itineraryId: parsed.itineraryId,
+          dayId: parsed.dayId,
+          result
+        }) as typeof result;
+      }
       if (options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
           type: "itinerary.item.added",
