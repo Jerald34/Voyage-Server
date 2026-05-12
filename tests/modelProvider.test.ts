@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { ApiError } from "../src/http/errors";
-import { createLmStudioModelProvider, createOpenRouterModelProvider } from "../src/services/modelProvider";
+import { createGoogleVertexModelProvider, createLmStudioModelProvider, createOpenRouterModelProvider } from "../src/services/modelProvider";
 
 describe("LM Studio model provider", () => {
   it("posts chat completions with defaults and parses the first choice content", async () => {
@@ -95,6 +95,104 @@ describe("LM Studio model provider", () => {
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
       model: "local-test",
       stream: true
+    });
+  });
+});
+
+describe("Google Vertex AI model provider", () => {
+  it("posts generateContent requests with the Google Cloud API key and maps the response text", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "Here is the itinerary." }]
+              }
+            }
+          ]
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3-flash-preview",
+      fetchImpl
+    });
+
+    const result = await provider.complete({
+      messages: [
+        { role: "system", content: "You are Voyage." },
+        { role: "user", content: "Build a Cebu itinerary." },
+        { role: "assistant", content: "Understood." }
+      ],
+      temperature: 0.4
+    });
+
+    expect(result).toEqual({ content: "Here is the itinerary." });
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-3-flash-preview:generateContent?key=test-cloud-key"
+    );
+    expect(calls[0].init.method).toBe("POST");
+    expect(calls[0].init.headers).toMatchObject({ "Content-Type": "application/json" });
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      contents: [
+        { role: "user", parts: [{ text: "Build a Cebu itinerary." }] },
+        { role: "model", parts: [{ text: "Understood." }] }
+      ],
+      systemInstruction: {
+        parts: [{ text: "You are Voyage." }]
+      },
+      generationConfig: {
+        temperature: 0.4
+      }
+    });
+  });
+
+  it("streams generateContent deltas from SSE frames", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const encoder = new TextEncoder();
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(
+          encoder.encode(
+            'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\ndata: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}\n\ndata: [DONE]\n\n'
+          )
+        );
+        controller.close();
+      }
+    });
+
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(stream, { status: 200 });
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3-flash-preview",
+      fetchImpl
+    });
+
+    const chunks: string[] = [];
+    for await (const chunk of provider.completeStream!({
+      messages: [{ role: "user", content: "Stream this." }]
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(["Hello", " world"]);
+    expect(calls).toHaveLength(1);
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      contents: [{ role: "user", parts: [{ text: "Stream this." }] }],
+      generationConfig: {
+        temperature: 0.2
+      }
     });
   });
 });
