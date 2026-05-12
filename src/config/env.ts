@@ -31,7 +31,16 @@ const envSchema = z.object({
   OPENROUTER_API_KEY: z.string().default(""),
   OPENROUTER_MODEL: z.string().default("openai/gpt-5.2"),
   OPENROUTER_REASONING_EFFORT: z.enum(["xhigh", "high", "medium", "low", "minimal", "none"]).default("medium"),
+  MODEL_PROVIDER: z.preprocess(
+    (value) => {
+      const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+      return normalized === "" ? "auto" : normalized;
+    },
+    z.enum(["auto", "vertex", "openrouter", "google_ai", "gemini", "lm_studio"]).default("auto")
+  ),
   GOOGLE_CLOUD_API_KEY: z.string().default(""),
+  GOOGLE_CLOUD_PROJECT: z.string().default(""),
+  GOOGLE_CLOUD_LOCATION: z.string().default("global"),
   GOOGLE_AI_API_KEY: z.string().default(""),
   GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-3-flash-preview"),
   GOOGLE_MAPS_API_KEY: z.string().default(""),

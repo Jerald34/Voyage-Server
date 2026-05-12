@@ -1,5 +1,5 @@
 import { ApiError } from "../../http/errors";
-import type { ModelProvider } from "../../services/modelProvider";
+import type { ModelProvider, ModelUsage } from "../../services/modelProvider";
 import type { AgentRunRecord, AgentMessageRecord, AgentRunEventRecord } from "./agentTypes";
 import { agentLogger } from "./agentLogger";
 import type { AgentEvent } from "./agentSchemas";
@@ -33,7 +33,10 @@ import {
 
 async function streamModelCompletion(options: {
   modelProvider: ModelProvider;
-  input: { messages: Array<{ role: "system" | "user" | "assistant"; content: string }>; temperature?: number };
+  input: {
+    messages: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+    temperature?: number;
+  };
   onDelta: (delta: string) => Promise<void>;
 }) {
   if (!options.modelProvider.completeStream) {
@@ -41,7 +44,13 @@ async function streamModelCompletion(options: {
   }
 
   let content = "";
-  for await (const delta of options.modelProvider.completeStream(options.input)) {
+  let usage: ModelUsage | undefined;
+  for await (const delta of options.modelProvider.completeStream({
+    ...options.input,
+    onUsage: (nextUsage) => {
+      usage = nextUsage;
+    }
+  })) {
     if (!delta) {
       continue;
     }
@@ -49,7 +58,7 @@ async function streamModelCompletion(options: {
     await options.onDelta(delta);
   }
 
-  return content;
+  return { content, usage };
 }
 
 function detectInitialOutputMode(content: string) {
@@ -344,6 +353,7 @@ export function createAgentOrchestrator(options: {
         }
 
         let modelContent = "";
+        let modelUsage: ModelUsage | undefined;
         let initialMode: "text" | "json" = "text";
         let recoveryNotified = false;
         try {
@@ -414,8 +424,9 @@ export function createAgentOrchestrator(options: {
               }
             });
 
-            if (typeof streamed === "string") {
-              modelContent = streamed;
+            if (streamed && typeof streamed.content === "string") {
+              modelContent = streamed.content;
+              modelUsage = streamed.usage;
               initialMode = detectInitialOutputMode(modelContent);
             }
           } else {
@@ -424,10 +435,11 @@ export function createAgentOrchestrator(options: {
               temperature: 0.6
             });
             modelContent = modelResult.content;
+            modelUsage = modelResult.usage;
             initialMode = detectInitialOutputMode(modelContent);
           }
 
-          agentLogger.modelOutput(input.runId, modelContent);
+          agentLogger.modelOutput(input.runId, modelContent, modelUsage);
         } catch (error) {
           await failRun(input, error);
           return;
@@ -666,13 +678,15 @@ export function createAgentOrchestrator(options: {
           ];
 
           let nextContent: string;
+          let nextUsage: ModelUsage | undefined;
           try {
             const completion = await options.modelProvider.complete({
               messages: continuationMessages,
               temperature: 0.6
             });
             nextContent = completion.content;
-            agentLogger.modelOutput(input.runId, nextContent);
+            nextUsage = completion.usage;
+            agentLogger.modelOutput(input.runId, nextContent, nextUsage);
           } catch (error) {
             agentLogger.error("Continuation completion failed", input.runId, error);
             break;
@@ -732,6 +746,8 @@ export function createAgentOrchestrator(options: {
         }
 
         let synthesizedMessage = parsedOutput.assistantMessage;
+        let synthesisUsage: ModelUsage | undefined;
+        let streamedSynthesis = false;
         try {
           const synthesisMessages = [
             {
@@ -752,25 +768,57 @@ export function createAgentOrchestrator(options: {
             }
           ];
 
-          const synthesis = await options.modelProvider.complete({
-            messages: synthesisMessages,
-            temperature: 0.6
-          });
-          synthesizedMessage = recoverSynthesizedMessage(
-            synthesis.content.trim() || parsedOutput.assistantMessage,
-            toolResults,
-            parsedOutput.assistantMessage
-          );
-          agentLogger.synthesisOutput(input.runId, synthesizedMessage);
+          if (options.modelProvider.completeStream) {
+            const streamed = await streamModelCompletion({
+              modelProvider: options.modelProvider,
+              input: {
+                messages: synthesisMessages,
+                temperature: 0.6
+              },
+              onDelta: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "message.delta",
+                  payload: { delta }
+                });
+              }
+            });
+
+            if (streamed && streamed.content.trim().length > 0) {
+              synthesizedMessage = recoverSynthesizedMessage(
+                streamed.content.trim(),
+                toolResults,
+                parsedOutput.assistantMessage
+              );
+              synthesisUsage = streamed.usage;
+              streamedSynthesis = true;
+            }
+          }
+
+          if (!streamedSynthesis) {
+            const synthesis = await options.modelProvider.complete({
+              messages: synthesisMessages,
+              temperature: 0.6
+            });
+            synthesisUsage = synthesis.usage;
+            synthesizedMessage = recoverSynthesizedMessage(
+              synthesis.content.trim() || parsedOutput.assistantMessage,
+              toolResults,
+              parsedOutput.assistantMessage
+            );
+          }
+
+          agentLogger.synthesisOutput(input.runId, synthesizedMessage, synthesisUsage);
         } catch {
           synthesizedMessage = parsedOutput.assistantMessage;
           agentLogger.error("Synthesis Failed", input.runId, "Falling back to assistant message.");
         }
 
-        await options.agentService.recordRunEvent(run, {
-          type: "message.delta",
-          payload: { delta: synthesizedMessage }
-        });
+        if (!streamedSynthesis) {
+          await options.agentService.recordRunEvent(run, {
+            type: "message.delta",
+            payload: { delta: synthesizedMessage }
+          });
+        }
         await options.agentService.completeRun(run.id, synthesizedMessage);
 
       } finally {

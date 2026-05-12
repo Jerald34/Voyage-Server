@@ -21,6 +21,7 @@
     "cors": "^2.8.6",
     "dotenv": "^17.4.2",
     "express": "^5.2.1",
+    "google-auth-library": "^10.6.2",
     "jose": "^6.2.2",
     "nanoid": "^5.1.11",
     "pg": "^8.20.0",

@@ -1,6 +1,11 @@
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/http/errors";
-import { createGoogleVertexModelProvider, createLmStudioModelProvider, createOpenRouterModelProvider } from "../src/services/modelProvider";
+import {
+  createGoogleVertexModelProvider,
+  createLmStudioModelProvider,
+  createOpenRouterModelProvider,
+  getModelProviderInfo
+} from "../src/services/modelProvider";
 
 describe("LM Studio model provider", () => {
   it("posts chat completions with defaults and parses the first choice content", async () => {
@@ -100,6 +105,34 @@ describe("LM Studio model provider", () => {
 });
 
 describe("Google Vertex AI model provider", () => {
+  const originalCredentials = process.env.GOOGLE_APPLICATION_CREDENTIALS;
+  const originalAppData = process.env.APPDATA;
+  const originalUserProfile = process.env.USERPROFILE;
+
+  beforeAll(() => {
+    process.env.GOOGLE_APPLICATION_CREDENTIALS = "C:/does-not-exist";
+    process.env.APPDATA = "";
+    process.env.USERPROFILE = "";
+  });
+
+  afterAll(() => {
+    if (originalCredentials === undefined) {
+      delete process.env.GOOGLE_APPLICATION_CREDENTIALS;
+    } else {
+      process.env.GOOGLE_APPLICATION_CREDENTIALS = originalCredentials;
+    }
+    if (originalAppData === undefined) {
+      delete process.env.APPDATA;
+    } else {
+      process.env.APPDATA = originalAppData;
+    }
+    if (originalUserProfile === undefined) {
+      delete process.env.USERPROFILE;
+    } else {
+      process.env.USERPROFILE = originalUserProfile;
+    }
+  });
+
   it("posts generateContent requests with the Google Cloud API key and maps the response text", async () => {
     const calls: Array<{ url: string; init: RequestInit }> = [];
     const fetchImpl: typeof fetch = async (url, init) => {
@@ -112,7 +145,12 @@ describe("Google Vertex AI model provider", () => {
                 parts: [{ text: "Here is the itinerary." }]
               }
             }
-          ]
+          ],
+          usageMetadata: {
+            promptTokenCount: 1000,
+            candidatesTokenCount: 500,
+            totalTokenCount: 1500
+          }
         }),
         { status: 200 }
       );
@@ -133,7 +171,20 @@ describe("Google Vertex AI model provider", () => {
       temperature: 0.4
     });
 
-    expect(result).toEqual({ content: "Here is the itinerary." });
+    expect(result).toMatchObject({
+      content: "Here is the itinerary.",
+      usage: {
+        model: "gemini-3-flash-preview",
+        promptTokenCount: 1000,
+        candidatesTokenCount: 500,
+        totalTokenCount: 1500,
+        estimatedCostUsd: {
+          prompt: 0.0005,
+          output: 0.0015,
+          total: 0.002
+        }
+      }
+    });
     expect(calls).toHaveLength(1);
     expect(calls[0].url).toBe(
       "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-3-flash-preview:generateContent?key=test-cloud-key"
@@ -161,7 +212,7 @@ describe("Google Vertex AI model provider", () => {
       start(controller) {
         controller.enqueue(
           encoder.encode(
-            'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\ndata: {"candidates":[{"content":{"parts":[{"text":" world"}]}}]}\n\ndata: [DONE]\n\n'
+            'data: {"candidates":[{"content":{"parts":[{"text":"Hello"}]}}]}\n\ndata: {"candidates":[{"content":{"parts":[{"text":" world"}]}}],"usageMetadata":{"promptTokenCount":1000,"candidatesTokenCount":500,"totalTokenCount":1500}}\n\ndata: [DONE]\n\n'
           )
         );
         controller.close();
@@ -180,19 +231,316 @@ describe("Google Vertex AI model provider", () => {
     });
 
     const chunks: string[] = [];
+    const usages: Array<unknown> = [];
     for await (const chunk of provider.completeStream!({
-      messages: [{ role: "user", content: "Stream this." }]
+      messages: [{ role: "user", content: "Stream this." }],
+      onUsage: (usage) => {
+        usages.push(usage);
+      }
     })) {
       chunks.push(chunk);
     }
 
     expect(chunks).toEqual(["Hello", " world"]);
+    expect(usages).toEqual([
+      expect.objectContaining({
+        model: "gemini-3-flash-preview",
+        promptTokenCount: 1000,
+        candidatesTokenCount: 500,
+        totalTokenCount: 1500
+      })
+    ]);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
       contents: [{ role: "user", parts: [{ text: "Stream this." }] }],
       generationConfig: {
         temperature: 0.2
       }
+    });
+  });
+
+  it("falls back to non-stream generateContent when Vertex blocks API-key streaming", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      if (String(url).includes(":streamGenerateContent")) {
+        return new Response(
+          JSON.stringify([
+            {
+              error: {
+                code: 403,
+                message: "Requests to this API aiplatform.googleapis.com method google.cloud.aiplatform.v1beta1.PredictionService.StreamGenerateContent are blocked.",
+                status: "PERMISSION_DENIED",
+                details: [
+                  {
+                    "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+                    reason: "API_KEY_SERVICE_BLOCKED",
+                    domain: "googleapis.com",
+                    metadata: {
+                      service: "aiplatform.googleapis.com",
+                      methodName: "google.cloud.aiplatform.v1beta1.PredictionService.StreamGenerateContent",
+                      consumer: "projects/123",
+                      apiName: "aiplatform.googleapis.com"
+                    }
+                  }
+                ]
+              }
+            }
+          ]),
+          {
+            status: 403,
+            headers: {
+              "content-type": "application/json; charset=UTF-8"
+            }
+          }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "fallback ok" }]
+              }
+            }
+          ],
+          usageMetadata: {
+            promptTokenCount: 7,
+            candidatesTokenCount: 1,
+            totalTokenCount: 8
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3-flash-preview",
+      fetchImpl
+    });
+
+    const chunks: string[] = [];
+    const usages: Array<unknown> = [];
+    for await (const chunk of provider.completeStream!({
+      messages: [{ role: "user", content: "Stream this." }],
+      onUsage: (usage) => usages.push(usage)
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(["fallback ok"]);
+    expect(usages).toEqual([
+      expect.objectContaining({
+        model: "gemini-3-flash-preview",
+        promptTokenCount: 7,
+        candidatesTokenCount: 1,
+        totalTokenCount: 8
+      })
+    ]);
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-3-flash-preview:streamGenerateContent?key=test-cloud-key",
+      "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-3-flash-preview:generateContent?key=test-cloud-key"
+    ]);
+  });
+
+  it("parses JSON stream responses when Vertex returns application/json", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(
+        JSON.stringify([
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: "json stream ok" }]
+                }
+              }
+            ],
+            usageMetadata: {
+              trafficType: "ON_DEMAND"
+            },
+            modelVersion: "gemini-3-flash-preview",
+            createTime: "2026-05-12T18:30:16.747264Z",
+            responseId: "first"
+          },
+          {
+            candidates: [
+              {
+                content: {
+                  parts: [{ text: "" }]
+                }
+              }
+            ],
+            usageMetadata: {
+              promptTokenCount: 9,
+              candidatesTokenCount: 2,
+              totalTokenCount: 11,
+              thoughtsTokenCount: 0
+            },
+            modelVersion: "gemini-3-flash-preview",
+            createTime: "2026-05-12T18:30:16.747264Z",
+            responseId: "second"
+          }
+        ]),
+        {
+          status: 200,
+          headers: {
+            "content-type": "application/json; charset=UTF-8"
+          }
+        }
+      );
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3-flash-preview",
+      fetchImpl
+    });
+
+    const chunks: string[] = [];
+    const usages: Array<unknown> = [];
+    for await (const chunk of provider.completeStream!({
+      messages: [{ role: "user", content: "Stream this." }],
+      onUsage: (usage) => usages.push(usage)
+    })) {
+      chunks.push(chunk);
+    }
+
+    expect(chunks).toEqual(["json stream ok"]);
+    expect(usages).toEqual([
+      expect.objectContaining({
+        model: "gemini-3-flash-preview",
+        promptTokenCount: 9,
+        candidatesTokenCount: 2,
+        totalTokenCount: 11
+      })
+    ]);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("yields Vertex JSON stream chunks before the body closes", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const encoder = new TextEncoder();
+    let controller: ReadableStreamDefaultController<Uint8Array> | undefined;
+    const stream = new ReadableStream<Uint8Array>({
+      start(nextController) {
+        controller = nextController;
+        nextController.enqueue(
+          encoder.encode(
+            '[{"candidates":[{"content":{"parts":[{"text":"Hello"}]}}],"usageMetadata":{"promptTokenCount":1}},'
+          )
+        );
+      }
+    });
+
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(stream, {
+        status: 200,
+        headers: {
+          "content-type": "application/json; charset=UTF-8"
+        }
+      });
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3-flash-preview",
+      fetchImpl
+    });
+
+    const iterator = provider.completeStream!({
+      messages: [{ role: "user", content: "Stream this." }],
+      onUsage: () => undefined
+    })[Symbol.asyncIterator]();
+
+    const firstChunk = await Promise.race([
+      iterator.next(),
+      new Promise<never>((_, reject) => setTimeout(() => reject(new Error("Vertex stream did not yield early")), 50))
+    ]);
+
+    expect(firstChunk).toEqual({
+      value: "Hello",
+      done: false
+    });
+
+    controller?.enqueue(
+      encoder.encode(
+        '{"candidates":[{"content":{"parts":[{"text":" world"}]}}],"usageMetadata":{"promptTokenCount":2,"candidatesTokenCount":1,"totalTokenCount":3}}]'
+      )
+    );
+    controller?.close();
+
+    const secondChunk = await iterator.next();
+    expect(secondChunk).toEqual({
+      value: " world",
+      done: false
+    });
+
+    const finalChunk = await iterator.next();
+    expect(finalChunk).toEqual({
+      value: undefined,
+      done: true
+    });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("uses ADC bearer auth when no API key is supplied", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "ADC response." }]
+              }
+            }
+          ]
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      auth: {
+        getAccessToken: async () => "adc-token",
+        getProjectId: async () => "adc-project"
+      } as never,
+      projectId: "",
+      model: "gemini-3-flash-preview",
+      location: "global",
+      fetchImpl
+    });
+
+    const result = await provider.complete({
+      messages: [{ role: "user", content: "Use ADC." }]
+    });
+
+    expect(result.content).toBe("ADC response.");
+    expect(result.usage).toBeUndefined();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].url).toBe(
+      "https://aiplatform.googleapis.com/v1/projects/adc-project/locations/global/publishers/google/models/gemini-3-flash-preview:generateContent"
+    );
+    expect(calls[0].init.headers).toMatchObject({
+      "Content-Type": "application/json",
+      Authorization: "Bearer adc-token"
+    });
+  });
+});
+
+describe("model provider info", () => {
+  it("describes the selected provider and model", () => {
+    const info = getModelProviderInfo();
+
+    expect(info).toMatchObject({
+      provider: expect.any(String),
+      model: expect.any(String)
     });
   });
 });

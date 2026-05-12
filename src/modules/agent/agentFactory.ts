@@ -30,7 +30,7 @@ import {
 } from "./agentTools";
 import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../services/maps";
 import { createWebSearchProvider } from "../../services/webSearch";
-import { getModelProvider } from "../../services/modelProvider";
+import { getModelProvider, getModelProviderInfo } from "../../services/modelProvider";
 
 const GOOGLE_MAPS_TOOL_NAMES = [
   "search_google_places",
@@ -124,6 +124,11 @@ function createAgencyAgentOrchestrator() {
   }
 
   try {
+    const modelInfo = getModelProviderInfo();
+    console.log(
+      `[Model Provider] MODEL_PROVIDER=${env.MODEL_PROVIDER} -> ${modelInfo.provider} (${modelInfo.model})`
+    );
+
     const webSearch = createWebSearchProvider();
     tools.push(createWebSearchTool({ webSearch, agentService }));
   } catch {

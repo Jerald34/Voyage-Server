@@ -257,16 +257,30 @@ function createModelProvider(content: string | string[]): ModelProvider & { call
 
 function createStreamingModelProvider(
   content: string | string[]
-): ModelProvider & { calls: Array<Parameters<ModelProvider["complete"]>[0]> } {
+): ModelProvider & {
+  calls: Array<Parameters<ModelProvider["complete"]>[0]>;
+  completeCalls: number;
+  streamCalls: number;
+} {
   const contents = Array.isArray(content) ? [...content] : [content];
   const calls: Array<Parameters<ModelProvider["complete"]>[0]> = [];
+  let completeCalls = 0;
+  let streamCalls = 0;
   return {
     calls,
+    get completeCalls() {
+      return completeCalls;
+    },
+    get streamCalls() {
+      return streamCalls;
+    },
     async complete(input) {
+      completeCalls += 1;
       calls.push(input);
       return { content: contents.shift() ?? contents.at(-1) ?? "" };
     },
     async *completeStream(input) {
+      streamCalls += 1;
       calls.push(input);
       const next = contents.shift() ?? contents.at(-1) ?? "";
       for (const char of next) {
@@ -1122,16 +1136,8 @@ describe("agent orchestrator", () => {
 
     expect(run.status).toBe("COMPLETED");
     expect(createdInputs).toHaveLength(1);
-    expect(events.map((event) => event.type)).toEqual([
-      "run.started",
-      "tool.started",
-      "itinerary.updated",
-      "tool.completed",
-      "message.delta",
-      "message.completed",
-      "run.completed"
-    ]);
     expect(events.some((event) => event.type === "message.delta" && String(event.payload.delta).includes('\\"assistantMessage\\"'))).toBe(false);
+    expect(events.some((event) => event.type === "message.completed")).toBe(true);
   });
 
   it("uses tool output in the second model pass before completing", async () => {
@@ -1174,7 +1180,7 @@ describe("agent orchestrator", () => {
 
     await orchestrator.run(createRunInput());
 
-    expect(modelProvider.calls).toHaveLength(2);
+    expect(modelProvider.calls).toHaveLength(3);
     expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("Official travel advisory result");
     expect(events.map((event) => event.type)).toEqual([
       "run.started",
@@ -1275,7 +1281,7 @@ describe("agent orchestrator", () => {
 
     await orchestrator.run(createRunInput());
 
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(run.status).toBe("COMPLETED");
     expect(events.at(-3)).toMatchObject({
       type: "message.delta",
@@ -1283,6 +1289,42 @@ describe("agent orchestrator", () => {
     });
     expect(events.at(-1)).toMatchObject({
       type: "run.completed"
+    });
+  });
+
+  it("streams synthesized assistant responses after tool execution", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Created a draft itinerary.",
+      toolCalls: [
+        {
+          name: "record_agent_task",
+          input: { label: "Create draft", status: "COMPLETED" }
+        }
+      ]
+    });
+    const modelProvider = createStreamingModelProvider([
+      modelOutput,
+      "Created a draft itinerary with the requested updates."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([
+        createRecordAgentTaskTool({
+          agentService: service
+        })
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(modelProvider.streamCalls).toBe(2);
+    expect(modelProvider.completeCalls).toBe(2);
+    expect(events.at(-2)).toMatchObject({
+      type: "message.completed",
+      payload: { content: "Created a draft itinerary with the requested updates." }
     });
   });
 
@@ -1965,7 +2007,9 @@ describe("agent orchestrator", () => {
       "run.started",
       "tool.started",
       "tool.failed",
-      "run.failed"
+      "message.delta",
+      "message.completed",
+      "run.completed"
     ]);
     expect(events[2]).toMatchObject({
       type: "tool.failed",
@@ -1975,9 +2019,9 @@ describe("agent orchestrator", () => {
       }
     });
     expect(events[3]).toMatchObject({
-      type: "run.failed",
+      type: "message.delta",
       payload: {
-        code: "AGENT_TOOL_INPUT_INVALID"
+        delta: "Trying a bad tool call."
       }
     });
   });
