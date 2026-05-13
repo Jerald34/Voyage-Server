@@ -77,6 +77,25 @@ describe("prepareGoogleApplicationCredentials", () => {
     expect(readFileSync(credentialPath, "utf8")).toContain('"project_id": "voyage-test-alias"');
   });
 
+  it("accepts a quoted JSON blob from Railway's UI representation", () => {
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_JSON = JSON.stringify(
+      JSON.stringify({
+        type: "service_account",
+        project_id: "voyage-quoted",
+        client_email: "voyage-quoted@example.com"
+      })
+    );
+    const credentialPath = join(tempDir, "quoted-gcp-sa.json");
+
+    const result = prepareGoogleApplicationCredentials({
+      env: process.env,
+      credentialPath
+    });
+
+    expect(result).toBe(credentialPath);
+    expect(readFileSync(credentialPath, "utf8")).toContain('"project_id": "voyage-quoted"');
+  });
+
   it("keeps an existing credential file path when it already exists", () => {
     const existingCredentialPath = join(tempDir, "existing.json");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = existingCredentialPath;
