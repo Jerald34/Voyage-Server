@@ -158,7 +158,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     async updateAgencySettings(user: AgencyUser, agencyId: string, input: {
       name: string;
       businessPhone: string;
-      businessEmail?: string;
+      businessEmail?: string | null;
       country: string;
       city: string;
     }) {
@@ -170,7 +170,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
 
       const name = input.name.trim();
       const businessPhone = input.businessPhone.trim();
-      const businessEmail = input.businessEmail?.trim() || undefined;
+      const businessEmail = normalizeBusinessEmail(input.businessEmail);
       const country = input.country.trim();
       const city = input.city.trim();
 
@@ -306,6 +306,15 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       return options.repository.countAgenciesByStatus("PENDING_REVIEW");
     }
   };
+}
+
+function normalizeBusinessEmail(businessEmail: string | null | undefined) {
+  if (businessEmail == null) {
+    return businessEmail;
+  }
+
+  const trimmed = businessEmail.trim();
+  return trimmed === "" ? null : trimmed;
 }
 
 const ownerSelect = { id: true, email: true, displayName: true } as const;

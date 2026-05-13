@@ -23,8 +23,7 @@ agencyRoutes.patch("/:agencyId/settings", requireAuth, async (request, response,
   try {
     const input = updateAgencySettingsSchema.parse(request.body);
     const agency = await agencyService.updateAgencySettings(request.authUser!, String(request.params.agencyId), {
-      ...input,
-      businessEmail: input.businessEmail?.trim() || undefined
+      ...input
     });
     response.json({ agency });
   } catch (error) {

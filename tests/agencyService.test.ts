@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { updateAgencySettingsSchema } from "../src/modules/agencies/agencySchemas";
 import {
   createAgencyService,
   type AgencyRepository,
@@ -244,6 +245,40 @@ describe("agency service", () => {
       country: "Philippines"
     });
     expect(repository.audits).toHaveLength(0);
+  });
+
+  it.each(["", "   "])("owner can clear businessEmail with blank input %j", async (businessEmail) => {
+    const { service } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Blank Email Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    const updated = await service.updateAgencySettings(owner, agency.id, {
+      name: "Blank Email Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail,
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(updated.businessEmail).toBeNull();
+  });
+
+  it("trims padded businessEmail before validation", () => {
+    const parsed = updateAgencySettingsSchema.parse({
+      name: "Trimmed Email Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: " hello@example.com ",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(parsed.businessEmail).toBe("hello@example.com");
   });
 
   it("non-owner member gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
