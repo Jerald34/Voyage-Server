@@ -421,6 +421,10 @@ function isRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
 
+function getDayNumber(value: unknown) {
+  return isRecord(value) && typeof value.dayNumber === "number" ? value.dayNumber : null;
+}
+
 function mergeObjectRecord(base: Record<string, unknown>, incoming: Record<string, unknown>) {
   return {
     ...base,
@@ -451,20 +455,18 @@ function mergeReplacementItinerary(baseItinerary: Record<string, unknown>, incom
   const baseDays = Array.isArray(baseItinerary.days) ? baseItinerary.days.filter(isRecord) : [];
   const incomingDays = Array.isArray(incomingItinerary.days) ? incomingItinerary.days.filter(isRecord) : [];
   const mergedDays = baseDays.map((baseDay) => {
-    const dayNumber = typeof baseDay.dayNumber === "number" ? baseDay.dayNumber : null;
-    const incomingDay = dayNumber === null
-      ? null
-      : incomingDays.find((day) => day.dayNumber === dayNumber);
+    const dayNumber = getDayNumber(baseDay);
+    const incomingDay = dayNumber === null ? null : incomingDays.find((day) => getDayNumber(day) === dayNumber);
     return incomingDay ? mergeItineraryDay(baseDay, incomingDay) : baseDay;
   });
 
   for (const incomingDay of incomingDays) {
-    const dayNumber = typeof incomingDay.dayNumber === "number" ? incomingDay.dayNumber : null;
+    const dayNumber = getDayNumber(incomingDay);
     if (dayNumber === null) {
       mergedDays.push(incomingDay);
       continue;
     }
-    if (!mergedDays.some((day) => day.dayNumber === dayNumber)) {
+    if (!mergedDays.some((day) => getDayNumber(day) === dayNumber)) {
       mergedDays.push(incomingDay);
     }
   }
@@ -473,8 +475,8 @@ function mergeReplacementItinerary(baseItinerary: Record<string, unknown>, incom
     ...baseItinerary,
     ...incomingItinerary,
     days: mergedDays.sort((a, b) => {
-      const left = typeof a.dayNumber === "number" ? a.dayNumber : Number.MAX_SAFE_INTEGER;
-      const right = typeof b.dayNumber === "number" ? b.dayNumber : Number.MAX_SAFE_INTEGER;
+      const left = getDayNumber(a) ?? Number.MAX_SAFE_INTEGER;
+      const right = getDayNumber(b) ?? Number.MAX_SAFE_INTEGER;
       return left - right;
     })
   };
