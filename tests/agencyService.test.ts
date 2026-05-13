@@ -95,20 +95,21 @@ function createService() {
 }
 
 describe("agency service", () => {
-  it("blocks unverified users from agency registration", async () => {
+  it("creates agency applications without adding an email verification gate", async () => {
     const { service } = createService();
 
-    await expect(
-      service.createAgencyApplication(createUser({ emailVerifiedAt: null }), {
-        name: "Unverified Travel",
-        businessPhone: "+63 900 111 2222",
-        businessEmail: "owner@example.com",
-        city: "Subic",
-        country: "Philippines"
-      })
-    ).rejects.toMatchObject({
-      code: "EMAIL_VERIFICATION_REQUIRED",
-      statusCode: 403
+    const agency = await service.createAgencyApplication(createUser({ emailVerifiedAt: null }), {
+      name: "Unverified Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(agency).toMatchObject({
+      name: "Unverified Travel",
+      slug: "unverified-travel",
+      status: "PENDING_REVIEW"
     });
   });
 

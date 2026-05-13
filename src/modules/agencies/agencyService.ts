@@ -101,12 +101,6 @@ function assertActive(user: AgencyUser) {
   }
 }
 
-function assertEmailVerified(user: AgencyUser) {
-  if (!user.emailVerifiedAt) {
-    throw new ApiError(403, "EMAIL_VERIFICATION_REQUIRED", "Verify your email before creating an agency.");
-  }
-}
-
 function assertAdmin(user: AgencyUser) {
   assertActive(user);
   if (user.role !== "ADMIN") {
@@ -141,7 +135,6 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       logoImageId?: string;
     }) {
       assertActive(user);
-      assertEmailVerified(user);
 
       const name = input.name.trim();
       if (!name) {
