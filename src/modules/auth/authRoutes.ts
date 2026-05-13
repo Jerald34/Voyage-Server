@@ -16,7 +16,7 @@ import { authService } from "./authService";
 
 export const authRoutes = Router();
 
-function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
+export function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
   return {
     id: user.id,
     email: user.email,
@@ -28,7 +28,8 @@ function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
     memberships: user.memberships.map(m => ({
       agencyId: m.agencyId,
       role: m.role,
-      status: m.status
+      status: m.status,
+      agency: m.agency
     }))
   };
 }

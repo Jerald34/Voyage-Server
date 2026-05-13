@@ -122,6 +122,33 @@ function createMemoryRepository(): ItineraryRepository & {
         }))
       }));
       return itinerary;
+    },
+    async createPlanItinerary() {
+      throw new Error("not implemented in memory repo");
+    },
+    async deleteItinerary() {
+      throw new Error("not implemented in memory repo");
+    },
+    async addDay() {
+      throw new Error("not implemented in memory repo");
+    },
+    async updateDay() {
+      throw new Error("not implemented in memory repo");
+    },
+    async removeDay() {
+      throw new Error("not implemented in memory repo");
+    },
+    async addItem() {
+      throw new Error("not implemented in memory repo");
+    },
+    async updateItem() {
+      throw new Error("not implemented in memory repo");
+    },
+    async removeItem() {
+      throw new Error("not implemented in memory repo");
+    },
+    async moveItem() {
+      throw new Error("not implemented in memory repo");
     }
   };
 }

@@ -1,5 +1,8 @@
 import { createApp } from "./app";
 import { env } from "./config/env";
+import { prepareGoogleApplicationCredentials } from "./config/googleCredentials";
+
+prepareGoogleApplicationCredentials();
 
 const app = createApp();
 

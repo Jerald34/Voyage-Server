@@ -114,7 +114,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         const itineraryEvents = await tx.agentRunEvent.findMany({
           where: {
             threadId: data.threadId,
-            type: "itinerary.updated"
+            type: { in: ["itinerary.updated", "itinerary.created"] }
           },
           select: {
             payload: true
@@ -148,7 +148,8 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             startDate: data.input.startDate ?? null,
             endDate: data.input.endDate ?? null,
             travelerCount: data.input.travelerCount ?? null,
-            budgetLevel: data.input.budgetLevel ?? null
+            budgetLevel: data.input.budgetLevel ?? null,
+            status: "APPROVED_INTERNAL",
           },
           select: {
             id: true,

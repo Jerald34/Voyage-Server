@@ -5,6 +5,7 @@ import {
   type AgentOrchestratorAgentService
 } from "../src/modules/agent/agentOrchestrator";
 import {
+  createAddItineraryItemTool,
   createAgentToolRegistry,
   createCreateItineraryTool,
   createEstimateRouteTool,
@@ -256,16 +257,30 @@ function createModelProvider(content: string | string[]): ModelProvider & { call
 
 function createStreamingModelProvider(
   content: string | string[]
-): ModelProvider & { calls: Array<Parameters<ModelProvider["complete"]>[0]> } {
+): ModelProvider & {
+  calls: Array<Parameters<ModelProvider["complete"]>[0]>;
+  completeCalls: number;
+  streamCalls: number;
+} {
   const contents = Array.isArray(content) ? [...content] : [content];
   const calls: Array<Parameters<ModelProvider["complete"]>[0]> = [];
+  let completeCalls = 0;
+  let streamCalls = 0;
   return {
     calls,
+    get completeCalls() {
+      return completeCalls;
+    },
+    get streamCalls() {
+      return streamCalls;
+    },
     async complete(input) {
+      completeCalls += 1;
       calls.push(input);
       return { content: contents.shift() ?? contents.at(-1) ?? "" };
     },
     async *completeStream(input) {
+      streamCalls += 1;
       calls.push(input);
       const next = contents.shift() ?? contents.at(-1) ?? "";
       for (const char of next) {
@@ -1121,16 +1136,8 @@ describe("agent orchestrator", () => {
 
     expect(run.status).toBe("COMPLETED");
     expect(createdInputs).toHaveLength(1);
-    expect(events.map((event) => event.type)).toEqual([
-      "run.started",
-      "tool.started",
-      "itinerary.updated",
-      "tool.completed",
-      "message.delta",
-      "message.completed",
-      "run.completed"
-    ]);
     expect(events.some((event) => event.type === "message.delta" && String(event.payload.delta).includes('\\"assistantMessage\\"'))).toBe(false);
+    expect(events.some((event) => event.type === "message.completed")).toBe(true);
   });
 
   it("uses tool output in the second model pass before completing", async () => {
@@ -1173,7 +1180,7 @@ describe("agent orchestrator", () => {
 
     await orchestrator.run(createRunInput());
 
-    expect(modelProvider.calls).toHaveLength(2);
+    expect(modelProvider.calls).toHaveLength(3);
     expect(modelProvider.calls[1].messages.at(-1)?.content).toContain("Official travel advisory result");
     expect(events.map((event) => event.type)).toEqual([
       "run.started",
@@ -1274,7 +1281,7 @@ describe("agent orchestrator", () => {
 
     await orchestrator.run(createRunInput());
 
-    expect(calls).toBe(2);
+    expect(calls).toBe(3);
     expect(run.status).toBe("COMPLETED");
     expect(events.at(-3)).toMatchObject({
       type: "message.delta",
@@ -1282,6 +1289,42 @@ describe("agent orchestrator", () => {
     });
     expect(events.at(-1)).toMatchObject({
       type: "run.completed"
+    });
+  });
+
+  it("streams synthesized assistant responses after tool execution", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "Created a draft itinerary.",
+      toolCalls: [
+        {
+          name: "record_agent_task",
+          input: { label: "Create draft", status: "COMPLETED" }
+        }
+      ]
+    });
+    const modelProvider = createStreamingModelProvider([
+      modelOutput,
+      "Created a draft itinerary with the requested updates."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([
+        createRecordAgentTaskTool({
+          agentService: service
+        })
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(modelProvider.streamCalls).toBe(2);
+    expect(modelProvider.completeCalls).toBe(2);
+    expect(events.at(-2)).toMatchObject({
+      type: "message.completed",
+      payload: { content: "Created a draft itinerary with the requested updates." }
     });
   });
 
@@ -1581,6 +1624,270 @@ describe("agent orchestrator", () => {
     ]);
   });
 
+  it("adds routeFromPrevious to newly added itinerary stops when the previous stop is mapped", async () => {
+    const { service, events } = createFakeAgentService();
+    const updateInputs: unknown[] = [];
+    const tool = createAddItineraryItemTool({
+      agentService: service,
+      itineraryService: {
+        async addItem(_agencyId, input) {
+          return {
+            itinerary: {
+              id: input.itineraryId,
+              days: [
+                {
+                  id: input.dayId,
+                  items: [
+                    {
+                      id: "item-previous",
+                      sortOrder: 1,
+                      title: "Burnham Park",
+                      placeSnapshot: {
+                        latitude: 16.411,
+                        longitude: 120.593
+                      }
+                    },
+                    {
+                      id: "item-current",
+                      sortOrder: 2,
+                      title: input.item.title,
+                      placeSnapshot: {
+                        latitude: 16.402,
+                        longitude: 120.596
+                      }
+                    }
+                  ]
+                }
+              ]
+            },
+            dayId: input.dayId,
+            item: {
+              id: "item-current",
+              sortOrder: 2,
+              title: input.item.title,
+              placeSnapshot: {
+                latitude: 16.402,
+                longitude: 120.596
+              }
+            }
+          };
+        },
+        async updateItem(_agencyId, input) {
+          updateInputs.push(input);
+          return {
+            itinerary: { id: input.itineraryId },
+            dayId: "day-1",
+            item: {
+              id: input.itemId,
+              title: "Baguio Cathedral",
+              routeFromPrevious: input.item.routeFromPrevious
+            }
+          };
+        }
+      },
+      maps: {
+        async resolvePlace() {
+          return {
+            provider: "GOOGLE_MAPS",
+            providerPlaceId: "google-place-current",
+            name: "Baguio Cathedral",
+            formattedAddress: "Baguio Cathedral, Baguio City",
+            location: { latitude: 16.402, longitude: 120.596 }
+          };
+        },
+        async getPlaceDetails() {
+          return {
+            id: "google-place-current",
+            name: "Baguio Cathedral",
+            address: "Baguio Cathedral, Baguio City",
+            types: []
+          };
+        },
+        async getPlacePhotos() {
+          return [];
+        },
+        async searchPlaces() {
+          return [];
+        },
+        async searchNearby() {
+          return [];
+        },
+        async estimateRoute(input) {
+          return {
+            distanceMeters: 1400,
+            durationSeconds: 480,
+            polyline: "encoded-route",
+            staticDurationSeconds: 420
+          };
+        }
+      },
+      placeSnapshotClient: {
+        placeSnapshot: {
+          async upsert() {
+            return { id: "snapshot-current" };
+          }
+        }
+      } as never
+    });
+
+    const output = await tool.execute(createRunInput(), {
+      itineraryId: "itinerary-1",
+      dayId: "day-1",
+      item: {
+        type: "ACTIVITY",
+        title: "Baguio Cathedral",
+        placeName: "Baguio Cathedral",
+        cityContext: "Baguio City"
+      }
+    });
+
+    expect(updateInputs).toEqual([
+      expect.objectContaining({
+        itineraryId: "itinerary-1",
+        itemId: "item-current",
+        item: expect.objectContaining({
+          routeFromPrevious: {
+            originItemId: "item-previous",
+            destinationItemId: "item-current",
+            travelMode: "DRIVE",
+            distanceMeters: 1400,
+            durationSeconds: 480,
+            staticDurationSeconds: 420,
+            polyline: "encoded-route"
+          }
+        })
+      })
+    ]);
+    expect(output).toMatchObject({
+      item: {
+        id: "item-current",
+        routeFromPrevious: expect.objectContaining({
+          polyline: "encoded-route"
+        })
+      }
+    });
+    expect(events).toContainEqual({
+      type: "itinerary.item.added",
+      payload: expect.objectContaining({
+        item: expect.objectContaining({
+          routeFromPrevious: expect.objectContaining({
+            polyline: "encoded-route"
+          })
+        })
+      })
+    });
+  });
+
+  it("adds routeFromPrevious to freshly created itinerary stops after resolving places", async () => {
+    const { service } = createFakeAgentService();
+    const createdInputs: any[] = [];
+    const routeCalls: Array<{
+      origin: { latitude: number; longitude: number };
+      destination: { latitude: number; longitude: number };
+    }> = [];
+    let snapshotIndex = 0;
+
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        maps: {
+          async searchPlaces() {
+            return [];
+          },
+          async getPlaceDetails() {
+            return null;
+          },
+          async getPlacePhotos() {
+            return [];
+          },
+          async searchNearby() {
+            return [];
+          },
+          async resolvePlace(input) {
+            const isBurnham = input.placeName === "Burnham Park";
+            return {
+              provider: "GOOGLE_MAPS",
+              providerPlaceId: isBurnham ? "google:burnham" : "google:mines-view",
+              name: input.placeName,
+              formattedAddress: `${input.placeName}, ${input.cityContext}`,
+              location: isBurnham
+                ? { latitude: 16.411, longitude: 120.593 }
+                : { latitude: 16.421, longitude: 120.628 },
+              metadata: {}
+            };
+          },
+          async estimateRoute(input) {
+            routeCalls.push({
+              origin: input.origin,
+              destination: input.destination
+            });
+            return {
+              distanceMeters: 6400,
+              durationSeconds: 960,
+              staticDurationSeconds: 900,
+              polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+            };
+          }
+        },
+        placeSnapshotClient: {
+          placeSnapshot: {
+            async upsert() {
+              snapshotIndex += 1;
+              return {
+                id:
+                  snapshotIndex === 1
+                    ? "11111111-1111-4111-8111-111111111111"
+                    : "22222222-2222-4222-8222-222222222222"
+              };
+            }
+          }
+        } as never,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
+          }
+        }
+      })
+    ]);
+
+    await registry.execute("create_itinerary", createRunInput(), {
+      trip: {
+        title: "Baguio route test",
+        destinationSummary: "Baguio"
+      },
+      itinerary: {
+        title: "Baguio route test",
+        days: [
+          {
+            dayNumber: 1,
+            title: "Day 1",
+            items: [
+              { type: "ACTIVITY", title: "Burnham Park", placeName: "Burnham Park", cityContext: "Baguio" },
+              { type: "ACTIVITY", title: "Mines View Park", placeName: "Mines View Park", cityContext: "Baguio" }
+            ]
+          }
+        ]
+      }
+    });
+
+    expect(routeCalls).toEqual([
+      {
+        origin: { latitude: 16.411, longitude: 120.593 },
+        destination: { latitude: 16.421, longitude: 120.628 }
+      }
+    ]);
+    expect(createdInputs[0].itinerary.days[0].items[1].routeFromPrevious).toMatchObject({
+      originPlaceSnapshotId: "11111111-1111-4111-8111-111111111111",
+      destinationPlaceSnapshotId: "22222222-2222-4222-8222-222222222222",
+      travelMode: "DRIVE",
+      distanceMeters: 6400,
+      durationSeconds: 960,
+      staticDurationSeconds: 900,
+      polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+    });
+  });
+
   it("persists sources for web search", async () => {
     const { service, sources, events } = createFakeAgentService();
     const registry = createAgentToolRegistry([
@@ -1810,7 +2117,9 @@ describe("agent orchestrator", () => {
       "run.started",
       "tool.started",
       "tool.failed",
-      "run.failed"
+      "message.delta",
+      "message.completed",
+      "run.completed"
     ]);
     expect(events[2]).toMatchObject({
       type: "tool.failed",
@@ -1820,9 +2129,9 @@ describe("agent orchestrator", () => {
       }
     });
     expect(events[3]).toMatchObject({
-      type: "run.failed",
+      type: "message.delta",
       payload: {
-        code: "AGENT_TOOL_INPUT_INVALID"
+        delta: "Trying a bad tool call."
       }
     });
   });

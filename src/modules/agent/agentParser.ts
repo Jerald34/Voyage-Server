@@ -27,6 +27,15 @@ export function canonicalToolName(name: string) {
   const aliases: Record<string, string> = {
     createitinerary: "create_itinerary",
     updateitinerary: "update_itinerary",
+    planitinerary: "plan_itinerary",
+    deleteitinerary: "delete_itinerary",
+    additineraryday: "add_itinerary_day",
+    updateitineraryday: "update_itinerary_day",
+    removeitineraryday: "remove_itinerary_day",
+    additineraryitem: "add_itinerary_item",
+    updateitineraryitem: "update_itinerary_item",
+    removeitineraryitem: "remove_itinerary_item",
+    moveitineraryitem: "move_itinerary_item",
     recordagenttask: "record_agent_task",
     websearch: "web_search",
     searchgoogleplaces: "search_google_places",
@@ -319,7 +328,7 @@ function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
           break;
         }
       }
-      
+
       if (foundEnd > braceStart) {
         jsonText = content.slice(braceStart, foundEnd + 1);
       }
@@ -364,7 +373,7 @@ function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
 
 export function parseModelOutput(content: string): ParsedModelOutput {
   console.log(`[Agent] Parsing model output (${content.length} chars)`);
-  
+
   const xmlToolCall = parseXmlToolCallOutput(content);
   if (xmlToolCall && xmlToolCall.type === "json") {
     console.log(`[Agent] Detected XML tool call: ${xmlToolCall.toolCalls[0].name}`);

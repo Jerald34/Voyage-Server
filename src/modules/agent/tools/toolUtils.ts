@@ -26,8 +26,22 @@ export function createRunRecord(context: AgentToolContext): AgentRunRecord {
   };
 }
 
-export function inputError() {
-  return new ApiError(400, "AGENT_TOOL_INPUT_INVALID", "Agent tool input was invalid.");
+export function inputError(zodError?: z.ZodError) {
+  if (!zodError) {
+    return new ApiError(400, "AGENT_TOOL_INPUT_INVALID", "Agent tool input was invalid.");
+  }
+  const summary = zodError.issues
+    .slice(0, 5)
+    .map((issue) => {
+      const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+      return `${path}: ${issue.message}`;
+    })
+    .join("; ");
+  return new ApiError(
+    400,
+    "AGENT_TOOL_INPUT_INVALID",
+    `Agent tool input invalid: ${summary || "validation failed"}`
+  );
 }
 
 export function toCompactMetadata(value: Record<string, unknown>) {

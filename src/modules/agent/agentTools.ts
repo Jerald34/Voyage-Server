@@ -1,11 +1,19 @@
 import { ZodError } from "zod";
-import type { PrismaClient } from "@prisma/client";
 import { ApiError } from "../../http/errors";
-import type { StructuredItineraryInput } from "../itineraries/itineraryService";
+import type {
+  AddItineraryDayInput,
+  AddItineraryItemInput,
+  DeleteItineraryInput,
+  MoveItineraryItemInput,
+  PlanItineraryInput,
+  RemoveItineraryDayInput,
+  RemoveItineraryItemInput,
+  StructuredItineraryInput,
+  UpdateItineraryDayInput,
+  UpdateItineraryItemInput
+} from "../itineraries/itineraryService";
 import type { AgentRunRecord, AgentSourceInput, AgentTaskInput } from "./agentTypes";
 import type { AgentEvent } from "./agentSchemas";
-import { inputError } from "./tools/toolUtils";
-import { z } from "zod";
 
 export type AgentToolContext = {
   agencyId: string;
@@ -52,6 +60,37 @@ export type UpdateItineraryService = {
   ): Promise<{ id?: string; version?: number; status?: string } | unknown>;
 };
 
+// Combined service surface used by the granular itinerary tools (plan, delete, day/item-level ops).
+// Tool factories accept a thin subset of this shape so they remain unit-testable.
+export type ItineraryAgentService = {
+  createDraftFromStructuredInput(
+    agencyId: string,
+    createdByUserId: string,
+    input: StructuredItineraryInput
+  ): Promise<unknown>;
+  replaceDraft(
+    agencyId: string,
+    itineraryId: string,
+    input: any
+  ): Promise<unknown>;
+  createPlanFromStructuredInput(
+    agencyId: string,
+    createdByUserId: string,
+    input: PlanItineraryInput
+  ): Promise<unknown>;
+  deleteItinerary(
+    agencyId: string,
+    input: DeleteItineraryInput
+  ): Promise<{ deleted: boolean; tripDeleted: boolean }>;
+  addDay(agencyId: string, input: AddItineraryDayInput): Promise<unknown>;
+  updateDay(agencyId: string, input: UpdateItineraryDayInput): Promise<unknown>;
+  removeDay(agencyId: string, input: RemoveItineraryDayInput): Promise<unknown>;
+  addItem(agencyId: string, input: AddItineraryItemInput): Promise<unknown>;
+  updateItem(agencyId: string, input: UpdateItineraryItemInput): Promise<unknown>;
+  removeItem(agencyId: string, input: RemoveItineraryItemInput): Promise<unknown>;
+  moveItem(agencyId: string, input: MoveItineraryItemInput): Promise<unknown>;
+};
+
 function limitKey(runId: string, toolName: string) {
   return `${runId}:${toolName}`;
 }
@@ -93,7 +132,18 @@ export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRe
         return await tool.execute(context, input);
       } catch (error) {
         if (error instanceof ZodError) {
-          throw inputError();
+          const summary = error.issues
+            .slice(0, 5)
+            .map((issue) => {
+              const path = issue.path.length > 0 ? issue.path.join(".") : "(root)";
+              return `${path}: ${issue.message}`;
+            })
+            .join("; ");
+          throw new ApiError(
+            400,
+            "AGENT_TOOL_INPUT_INVALID",
+            `Agent tool input invalid: ${summary || "validation failed"}`
+          );
         }
         throw error;
       }

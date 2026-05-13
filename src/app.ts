@@ -10,6 +10,8 @@ import { agentRoutes } from "./modules/agent/agentRoutes";
 import { authRoutes } from "./modules/auth/authRoutes";
 import { imageRoutes } from "./modules/images/imageRoutes";
 import { itineraryRoutes } from "./modules/itineraries/itineraryRoutes";
+import { shareRoutes } from "./modules/shares/shareRoutes";
+import { publicShareRoutes } from "./modules/shares/publicShareRoutes";
 
 export function createApp() {
   const app = express();
@@ -37,6 +39,8 @@ export function createApp() {
   app.use("/agencies", agencyRoutes);
   app.use("/agencies/:agencyId/agent", agentRoutes);
   app.use("/agencies/:agencyId/itineraries", itineraryRoutes);
+  app.use("/agencies/:agencyId/shares", shareRoutes);
+  app.use("/shared", publicShareRoutes);
   app.use("/admin", adminRoutes);
   app.use("/images", imageRoutes);
 
