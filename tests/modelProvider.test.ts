@@ -257,6 +257,8 @@ describe("Google Vertex AI model provider", () => {
         temperature: 0.2
       }
     });
+    expect(JSON.parse(String(calls[0].init.body))).not.toHaveProperty("stream");
+    expect(JSON.parse(String(calls[0].init.body))).not.toHaveProperty("stream_options");
   });
 
   it("falls back to non-stream generateContent when Vertex blocks API-key streaming", async () => {
@@ -530,6 +532,195 @@ describe("Google Vertex AI model provider", () => {
     expect(calls[0].init.headers).toMatchObject({
       "Content-Type": "application/json",
       Authorization: "Bearer adc-token"
+    });
+  });
+
+  it("does not attempt explicit cachedContent creation in API-key express mode", async () => {
+    const warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "cached response." }]
+              }
+            }
+          ],
+          usageMetadata: {
+            promptTokenCount: 16194,
+            candidatesTokenCount: 3,
+            totalTokenCount: 16197
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3-flash-preview",
+      projectId: "test-project",
+      fetchImpl
+    });
+
+    const longSystemPrompt = "Voyage system instructions that are intentionally long enough to be cacheable. ".repeat(250);
+    const result = await provider.complete({
+      messages: [
+        {
+          role: "system" as const,
+          content: longSystemPrompt
+        },
+        {
+          role: "user" as const,
+          content: "Build a Cebu itinerary."
+        }
+      ]
+    });
+
+    expect(result.content).toBe("cached response.");
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://aiplatform.googleapis.com/v1beta1/publishers/google/models/gemini-3-flash-preview:generateContent?key=test-cloud-key"
+    ]);
+    expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: "Build a Cebu itinerary." }]
+        }
+      ],
+      systemInstruction: {
+        parts: [
+          {
+            text: longSystemPrompt
+          }
+        ]
+      }
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("[Vertex Cache] disabled: explicit cachedContent creation requires ADC/OAuth standard Vertex")
+    );
+
+    warnSpy.mockRestore();
+  });
+
+  it("creates and reuses an explicit cachedContent block for a large stable system prefix with ADC auth", async () => {
+    const calls: Array<{ url: string; init: RequestInit }> = [];
+    const fetchImpl: typeof fetch = async (url, init) => {
+      calls.push({ url: String(url), init: init ?? {} });
+
+      if (String(url).includes(":countTokens")) {
+        return new Response(
+          JSON.stringify({
+            totalTokens: 4096,
+            totalBillableCharacters: 8192,
+            promptTokensDetails: [{ modality: "TEXT", tokenCount: 4096 }]
+          }),
+          { status: 200 }
+        );
+      }
+
+      if (String(url).includes("/cachedContents")) {
+        return new Response(
+          JSON.stringify({
+            name: "projects/test-project/locations/global/cachedContents/abc123"
+          }),
+          { status: 200 }
+        );
+      }
+
+      return new Response(
+        JSON.stringify({
+          candidates: [
+            {
+              content: {
+                parts: [{ text: "cached response." }]
+              }
+            }
+          ],
+          usageMetadata: {
+            promptTokenCount: 12,
+            candidatesTokenCount: 3,
+            totalTokenCount: 15,
+            cachedContentTokenCount: 4096
+          }
+        }),
+        { status: 200 }
+      );
+    };
+
+    const provider = createGoogleVertexModelProvider({
+      auth: {
+        getAccessToken: async () => "adc-token",
+        getProjectId: async () => "test-project"
+      } as never,
+      model: "gemini-3-flash-preview",
+      projectId: "",
+      location: "global",
+      fetchImpl
+    });
+
+    const longSystemPrompt = "Voyage system instructions that are intentionally long enough to be cacheable. ".repeat(250);
+    const input = {
+      messages: [
+        {
+          role: "system" as const,
+          content: longSystemPrompt
+        },
+        {
+          role: "user" as const,
+          content: "Build a Cebu itinerary."
+        }
+      ]
+    };
+
+    const first = await provider.complete(input);
+    const second = await provider.complete(input);
+
+    expect(first.content).toBe("cached response.");
+    expect(second.content).toBe("cached response.");
+    expect(calls.map((call) => call.url)).toEqual([
+      "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gemini-3-flash-preview:countTokens",
+      "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/cachedContents",
+      "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gemini-3-flash-preview:generateContent",
+      "https://aiplatform.googleapis.com/v1/projects/test-project/locations/global/publishers/google/models/gemini-3-flash-preview:generateContent"
+    ]);
+    expect(calls[0].init.headers).toMatchObject({ Authorization: "Bearer adc-token" });
+    expect(calls[1].init.headers).toMatchObject({ Authorization: "Bearer adc-token" });
+    expect(JSON.parse(String(calls[0].init.body))).toEqual({
+      model: "projects/test-project/locations/global/publishers/google/models/gemini-3-flash-preview",
+      systemInstruction: {
+        parts: [
+          {
+            text: longSystemPrompt
+          }
+        ]
+      }
+    });
+    expect(JSON.parse(String(calls[1].init.body))).toEqual({
+      model: "projects/test-project/locations/global/publishers/google/models/gemini-3-flash-preview",
+      systemInstruction: {
+        parts: [
+          {
+            text: longSystemPrompt
+          }
+        ]
+      }
+    });
+    expect(JSON.parse(String(calls[2].init.body))).toEqual({
+      contents: [
+        {
+          role: "user",
+          parts: [{ text: "Build a Cebu itinerary." }]
+        }
+      ],
+      cachedContent: "projects/test-project/locations/global/cachedContents/abc123",
+      generationConfig: {
+        temperature: 0.2
+      }
     });
   });
 });
