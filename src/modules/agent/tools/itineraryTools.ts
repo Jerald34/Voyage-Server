@@ -162,13 +162,63 @@ async function resolveItineraryItemPlaces<T extends StructuredItineraryInput["it
   maps: MapsProvider;
   client: PrismaClient;
 }): Promise<T> {
+  type StructuredItem = z.infer<typeof structuredItineraryItemSchema>;
+  type ResolvedItem = {
+    item: StructuredItem;
+    point: { latitude: number; longitude: number } | null;
+    placeSnapshotId: string | null;
+  };
+
+  async function addRoutesWithinDay(items: ResolvedItem[]) {
+    const routedItems: StructuredItem[] = [];
+    let previousMappedItem: ResolvedItem | null = null;
+
+    for (const current of items) {
+      let item = current.item;
+
+      if (previousMappedItem?.point && current.point && item.routeFromPrevious === undefined) {
+        try {
+          const route = await options.maps.estimateRoute({
+            origin: previousMappedItem.point,
+            destination: current.point,
+            travelMode: "DRIVE"
+          });
+          item = {
+            ...item,
+            routeFromPrevious: {
+              originPlaceSnapshotId: previousMappedItem.placeSnapshotId,
+              destinationPlaceSnapshotId: current.placeSnapshotId,
+              travelMode: "DRIVE",
+              distanceMeters: route.distanceMeters ?? null,
+              durationSeconds: route.durationSeconds ?? null,
+              staticDurationSeconds: route.staticDurationSeconds ?? null,
+              polyline: route.polyline ?? null
+            }
+          };
+        } catch (error) {
+          console.error("[Maps] Failed to estimate route for created itinerary item", error);
+        }
+      }
+
+      routedItems.push(item);
+
+      if (current.point) {
+        previousMappedItem = {
+          ...current,
+          item
+        };
+      }
+    }
+
+    return routedItems;
+  }
+
   const days = await Promise.all(
-    options.input.days.map(async (day) => ({
-      ...day,
-      items: await Promise.all(
-        day.items.map(async (item) => {
+    options.input.days.map(async (day) => {
+      const resolvedItems = await Promise.all(
+        day.items.map(async (item): Promise<ResolvedItem> => {
           if (item.placeSnapshotId || !item.placeName) {
-            return item;
+            return { item, point: null, placeSnapshotId: item.placeSnapshotId ?? null };
           }
 
           try {
@@ -181,16 +231,25 @@ async function resolveItineraryItemPlaces<T extends StructuredItineraryInput["it
             const enriched = await enrichResolvedPlaceForSnapshot(options.maps, resolved);
             const snapshot = await upsertPlaceSnapshot(options.client, enriched);
             return {
-              ...item,
+              item: {
+                ...item,
+                placeSnapshotId: snapshot.id
+              },
+              point: enriched.location,
               placeSnapshotId: snapshot.id
             };
           } catch (error) {
             console.error(`[Maps] Failed to resolve place: "${item.placeName}"`, error);
-            return item;
+            return { item, point: null, placeSnapshotId: item.placeSnapshotId ?? null };
           }
         })
-      )
-    }))
+      );
+
+      return {
+        ...day,
+        items: await addRoutesWithinDay(resolvedItems)
+      };
+    })
   );
 
   return {

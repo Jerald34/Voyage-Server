@@ -1778,6 +1778,116 @@ describe("agent orchestrator", () => {
     });
   });
 
+  it("adds routeFromPrevious to freshly created itinerary stops after resolving places", async () => {
+    const { service } = createFakeAgentService();
+    const createdInputs: any[] = [];
+    const routeCalls: Array<{
+      origin: { latitude: number; longitude: number };
+      destination: { latitude: number; longitude: number };
+    }> = [];
+    let snapshotIndex = 0;
+
+    const registry = createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        maps: {
+          async searchPlaces() {
+            return [];
+          },
+          async getPlaceDetails() {
+            return null;
+          },
+          async getPlacePhotos() {
+            return [];
+          },
+          async searchNearby() {
+            return [];
+          },
+          async resolvePlace(input) {
+            const isBurnham = input.placeName === "Burnham Park";
+            return {
+              provider: "GOOGLE_MAPS",
+              providerPlaceId: isBurnham ? "google:burnham" : "google:mines-view",
+              name: input.placeName,
+              formattedAddress: `${input.placeName}, ${input.cityContext}`,
+              location: isBurnham
+                ? { latitude: 16.411, longitude: 120.593 }
+                : { latitude: 16.421, longitude: 120.628 },
+              metadata: {}
+            };
+          },
+          async estimateRoute(input) {
+            routeCalls.push({
+              origin: input.origin,
+              destination: input.destination
+            });
+            return {
+              distanceMeters: 6400,
+              durationSeconds: 960,
+              staticDurationSeconds: 900,
+              polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+            };
+          }
+        },
+        placeSnapshotClient: {
+          placeSnapshot: {
+            async upsert() {
+              snapshotIndex += 1;
+              return {
+                id:
+                  snapshotIndex === 1
+                    ? "11111111-1111-4111-8111-111111111111"
+                    : "22222222-2222-4222-8222-222222222222"
+              };
+            }
+          }
+        } as never,
+        itineraryService: {
+          async createDraftFromStructuredInput(_agencyId, _userId, input) {
+            createdInputs.push(input);
+            return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
+          }
+        }
+      })
+    ]);
+
+    await registry.execute("create_itinerary", createRunInput(), {
+      trip: {
+        title: "Baguio route test",
+        destinationSummary: "Baguio"
+      },
+      itinerary: {
+        title: "Baguio route test",
+        days: [
+          {
+            dayNumber: 1,
+            title: "Day 1",
+            items: [
+              { type: "ACTIVITY", title: "Burnham Park", placeName: "Burnham Park", cityContext: "Baguio" },
+              { type: "ACTIVITY", title: "Mines View Park", placeName: "Mines View Park", cityContext: "Baguio" }
+            ]
+          }
+        ]
+      }
+    });
+
+    expect(routeCalls).toEqual([
+      {
+        origin: { latitude: 16.411, longitude: 120.593 },
+        destination: { latitude: 16.421, longitude: 120.628 }
+      }
+    ]);
+    expect(createdInputs[0].itinerary.days[0].items[1].routeFromPrevious).toMatchObject({
+      originPlaceSnapshotId: "11111111-1111-4111-8111-111111111111",
+      destinationPlaceSnapshotId: "22222222-2222-4222-8222-222222222222",
+      travelMode: "DRIVE",
+      distanceMeters: 6400,
+      durationSeconds: 960,
+      staticDurationSeconds: 900,
+      polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
+    });
+  });
+
   it("persists sources for web search", async () => {
     const { service, sources, events } = createFakeAgentService();
     const registry = createAgentToolRegistry([
