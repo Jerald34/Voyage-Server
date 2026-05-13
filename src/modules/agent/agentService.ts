@@ -293,6 +293,18 @@ export function createAgentService(options: {
       await touchThread(failedRun.threadId);
 
       return failedRun;
+    },
+
+    async cancelRun(runId: string) {
+      const run = await getRun(runId);
+      if (isTerminalRunStatus(run.status)) return;
+      await options.repository.cancelRunIfOpen(runId);
+      // Notify connected SSE clients so they close the stream
+      publishAgentRunEvent(run.id, {
+        type: "run.failed",
+        payload: { code: "USER_CANCELLED", message: "Run cancelled by user." }
+      });
+      await touchThread(run.threadId);
     }
   };
 }

@@ -1,6 +1,6 @@
 import type { Request, Response, NextFunction } from "express";
 import { agentService } from "./agentService";
-import { getAgentOrchestrator, startAgentRunInBackground } from "./agentFactory";
+import { cancelAgentRun, getAgentOrchestrator, startAgentRunInBackground } from "./agentFactory";
 import { subscribeToAgentRun } from "./agentEvents";
 import { 
   createAgentRunStreamController, 
@@ -132,6 +132,17 @@ export async function runStream(req: Request, res: Response, next: NextFunction)
     unsubscribe = subscribeToAgentRun(runId, (published) => {
       writeAgentEvent(controller.safeWrite, published.event);
     });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function cancelRun(req: Request, res: Response, next: NextFunction) {
+  try {
+    const runId = String(req.params.id);
+    cancelAgentRun(runId);
+    await agentService.cancelRun(runId);
+    res.status(204).send();
   } catch (error) {
     next(error);
   }

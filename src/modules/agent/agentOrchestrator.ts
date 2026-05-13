@@ -324,6 +324,14 @@ export function createAgentOrchestrator(options: {
     toolRegistry: options.toolRegistry,
     async run(input) {
       agentLogger.debug(input.runId, `Starting run for thread ${input.threadId}`);
+      const signal = input.signal;
+
+      function checkCancelled() {
+        if (signal?.aborted) {
+          throw new ApiError(499, "USER_CANCELLED", "Run cancelled by user.");
+        }
+      }
+
       const run = await options.agentService.startRun(input.runId, now());
       try {
         await options.agentService.recordRunEvent(run, {
@@ -504,6 +512,7 @@ export function createAgentOrchestrator(options: {
 
         async function executeToolCallsBatch(toolCalls: Array<{ name: string; input: Record<string, unknown> }>) {
           for (const toolCall of toolCalls) {
+            checkCancelled();
             if (toolCallsExecuted >= maxToolCallsPerRun) {
               throw new ApiError(400, "AGENT_TOOL_LIMIT_REACHED", "Agent tool call limit reached.");
             }
@@ -605,6 +614,7 @@ export function createAgentOrchestrator(options: {
         try {
           await executeToolCallsBatch(parsedOutput.toolCalls);
         } catch (error) {
+          if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }
           await failRun(input, error);
           return;
         }
@@ -632,6 +642,7 @@ export function createAgentOrchestrator(options: {
         const maxRemediationAttempts = 3;
 
         while (shouldContinueLoop && continuationsRun < maxContinuations && toolCallsExecuted < maxToolCallsPerRun) {
+          checkCancelled();
           continuationsRun += 1;
           hadRecoverableFailure = false;
           const { dayCount: currentDayCount, itemCount: currentItemCount } = countItineraryItems(activeItineraryContext?.itinerary);
@@ -725,6 +736,7 @@ export function createAgentOrchestrator(options: {
           try {
             await executeToolCallsBatch(nextParsed.toolCalls);
           } catch (error) {
+            if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }
             await failRun(input, error);
             return;
           }
@@ -821,6 +833,9 @@ export function createAgentOrchestrator(options: {
         }
         await options.agentService.completeRun(run.id, synthesizedMessage);
 
+      } catch (error) {
+        if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }
+        await failRun(input, error);
       } finally {
         options.toolRegistry.clearRun?.(input.runId);
       }

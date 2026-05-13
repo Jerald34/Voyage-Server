@@ -157,6 +157,7 @@ export type AgentOrchestratorRunInput = {
   runId: string;
   userId: string;
   userContent: string;
+  signal?: AbortSignal;
 };
 
 import type { AgentToolRegistry } from "./agentTools";
@@ -284,4 +285,5 @@ export interface AgentRepository {
       errorMessage: string;
     }
   ): Promise<AgentRunRecord | null>;
+  cancelRunIfOpen(id: string): Promise<AgentRunRecord | null>;
 }

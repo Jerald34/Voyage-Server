@@ -161,6 +161,16 @@ export function getAgentOrchestrator() {
   return agentOrchestrator;
 }
 
+const runAbortControllers = new Map<string, AbortController>();
+
+export function cancelAgentRun(runId: string) {
+  const controller = runAbortControllers.get(runId);
+  if (controller) {
+    controller.abort();
+    runAbortControllers.delete(runId);
+  }
+}
+
 export async function startAgentRunInBackground(
   input: {
     agencyId: string;
@@ -177,9 +187,14 @@ export async function startAgentRunInBackground(
   const agentServiceDependency = dependencies.agentService ?? agentService;
   const orchestrator = dependencies.orchestrator ?? getAgentOrchestrator();
 
+  const controller = new AbortController();
+  runAbortControllers.set(input.runId, controller);
+
   try {
-    await orchestrator.run(input);
+    await orchestrator.run({ ...input, signal: controller.signal });
   } catch (error) {
+    if (controller.signal.aborted) return;
+
     console.error("Agent orchestration failed", {
       agencyId: input.agencyId,
       threadId: input.threadId,
@@ -205,5 +220,7 @@ export async function startAgentRunInBackground(
         failRunError
       });
     }
+  } finally {
+    runAbortControllers.delete(input.runId);
   }
 }
