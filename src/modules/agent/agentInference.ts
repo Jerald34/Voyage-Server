@@ -466,7 +466,7 @@ function mergeReplacementItinerary(baseItinerary: Record<string, unknown>, incom
       mergedDays.push(incomingDay);
       continue;
     }
-    if (!mergedDays.some((day) => getDayNumber(day) === dayNumber)) {
+    if (!mergedDays.some((day) => (day as any).dayNumber === dayNumber)) {
       mergedDays.push(incomingDay);
     }
   }
@@ -475,8 +475,8 @@ function mergeReplacementItinerary(baseItinerary: Record<string, unknown>, incom
     ...baseItinerary,
     ...incomingItinerary,
     days: mergedDays.sort((a, b) => {
-      const left = getDayNumber(a) ?? Number.MAX_SAFE_INTEGER;
-      const right = getDayNumber(b) ?? Number.MAX_SAFE_INTEGER;
+      const left = typeof (a as any).dayNumber === "number" ? (a as any).dayNumber : Number.MAX_SAFE_INTEGER;
+      const right = typeof (b as any).dayNumber === "number" ? (b as any).dayNumber : Number.MAX_SAFE_INTEGER;
       return left - right;
     })
   };
