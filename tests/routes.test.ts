@@ -73,4 +73,20 @@ describe("app routes", () => {
       }
     });
   });
+
+  it("requires auth for current user profile updates", async () => {
+    const app = createApp();
+
+    const response = await request(app).patch("/auth/me").send({
+      displayName: "Updated User"
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
 });

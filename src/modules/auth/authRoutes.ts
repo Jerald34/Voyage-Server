@@ -10,7 +10,8 @@ import {
   confirmVerificationSchema,
   emailCheckSchema,
   loginSchema,
-  registerSchema
+  registerSchema,
+  updateProfileSchema
 } from "./authSchemas";
 import { authService } from "./authService";
 
@@ -71,6 +72,16 @@ authRoutes.post("/logout", async (request, response, next) => {
 
 authRoutes.get("/me", requireAuth, (request, response) => {
   response.json({ user: serializeUser(request.authUser!) });
+});
+
+authRoutes.patch("/me", requireAuth, async (request, response, next) => {
+  try {
+    const input = updateProfileSchema.parse(request.body);
+    const user = await authService.updateProfile(request.authUser!, input);
+    response.json({ user: serializeUser(user as NonNullable<Express.Request["authUser"]>) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 authRoutes.post("/email/check", async (request, response, next) => {

@@ -182,6 +182,40 @@ describe("auth service", () => {
     expect(result.sessionToken).toEqual(expect.any(String));
   });
 
+  it("updates a user's display name", async () => {
+    const { service } = createService();
+    const registration = await service.registerWithEmail({
+      email: "profile@example.com",
+      password: "password123",
+      displayName: "Old Name"
+    });
+
+    const updated = await service.updateProfile(registration.user, {
+      displayName: "New Name"
+    });
+
+    expect(updated.displayName).toBe("New Name");
+    expect(updated.email).toBe("profile@example.com");
+  });
+
+  it("rejects a blank display name update", async () => {
+    const { service } = createService();
+    const registration = await service.registerWithEmail({
+      email: "blank-name@example.com",
+      password: "password123",
+      displayName: "Valid Name"
+    });
+
+    await expect(
+      service.updateProfile(registration.user, {
+        displayName: "   "
+      })
+    ).rejects.toMatchObject({
+      code: "DISPLAY_NAME_REQUIRED",
+      statusCode: 400
+    });
+  });
+
   it("stores hashed email verification tokens", async () => {
     const { service, repository, emailSender } = createService();
     const registration = await service.registerWithEmail({

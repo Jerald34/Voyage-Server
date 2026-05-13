@@ -205,6 +205,17 @@ export function createAuthService(options: AuthServiceOptions) {
       await options.repository.deleteSessionByTokenHash(hashToken(sessionToken));
     },
 
+    async updateProfile(user: AuthUserRecord, input: { displayName: string }) {
+      assertActiveUser(user);
+
+      const displayName = input.displayName.trim();
+      if (!displayName) {
+        throw new ApiError(400, "DISPLAY_NAME_REQUIRED", "Display name is required.");
+      }
+
+      return options.repository.updateUser(user.id, { displayName });
+    },
+
     requestEmailVerification,
 
     async confirmEmailVerification(rawToken: string) {

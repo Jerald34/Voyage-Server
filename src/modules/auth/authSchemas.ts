@@ -6,6 +6,10 @@ export const registerSchema = z.object({
   displayName: z.string().min(1).max(120)
 });
 
+export const updateProfileSchema = z.object({
+  displayName: z.string().min(1).max(120)
+});
+
 export const loginSchema = z.object({
   email: z.string().email(),
   password: z.string().min(1)
