@@ -99,7 +99,9 @@ function normalizeTokenDetails(details: unknown) {
         tokenCount: typeof tokenCount === "number" ? tokenCount : undefined
       };
     })
-    .filter((item): item is { modality?: string; tokenCount?: number } => Boolean(item));
+    .filter(
+      (item): item is { modality: string | undefined; tokenCount: number | undefined } => Boolean(item)
+    );
 
   return normalized.length > 0 ? normalized : undefined;
 }
@@ -434,6 +436,7 @@ type GoogleModelProviderOptions = {
   location?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  auth?: GoogleAuth;
 };
 
 const DEFAULT_GOOGLE_AI_MODEL = "gemini-3-flash-preview";
@@ -491,7 +494,7 @@ function normalizeModelMessages(messages: ModelMessage[]) {
   return { contents, systemInstruction };
 }
 
-function extractVertexText(responseBody: unknown) {
+function extractVertexText(responseBody: unknown): string {
   if (Array.isArray(responseBody)) {
     return responseBody.map((entry) => extractVertexText(entry)).filter((text) => text.length > 0).join("");
   }
@@ -609,7 +612,20 @@ function extractNextVertexJsonPayload(
   return null;
 }
 
-function extractVertexUsage(responseBody: unknown) {
+function extractVertexUsage(
+  responseBody: unknown
+): {
+  promptTokenCount?: number;
+  candidatesTokenCount?: number;
+  totalTokenCount?: number;
+  cachedContentTokenCount?: number;
+  toolUsePromptTokenCount?: number;
+  thoughtsTokenCount?: number;
+  trafficType?: string;
+  promptTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
+  cacheTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
+  candidatesTokensDetails?: Array<{ modality?: string; tokenCount?: number }>;
+} | undefined {
   if (Array.isArray(responseBody)) {
     const merged = responseBody
       .map((entry) => extractVertexUsage(entry))

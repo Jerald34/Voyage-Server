@@ -23,6 +23,20 @@ function resolveCredentialJson(env: NodeJS.ProcessEnv) {
   return null;
 }
 
+function parseCredentialJson(value: string) {
+  const trimmed = value.trim();
+
+  try {
+    const parsed = JSON.parse(trimmed) as unknown;
+    if (typeof parsed === "string") {
+      return JSON.parse(parsed) as Record<string, unknown>;
+    }
+    return parsed as Record<string, unknown>;
+  } catch {
+    return JSON.parse(trimmed.replace(/^["']|["']$/g, "")) as Record<string, unknown>;
+  }
+}
+
 export function prepareGoogleApplicationCredentials(options: PrepareGoogleCredentialsOptions = {}) {
   const env = options.env ?? process.env;
   const credentialPath = options.credentialPath ?? join(tmpdir(), "voyage-google-application-credentials.json");
@@ -39,7 +53,7 @@ export function prepareGoogleApplicationCredentials(options: PrepareGoogleCreden
 
   let parsedCredential: unknown;
   try {
-    parsedCredential = JSON.parse(credentialJson.value);
+    parsedCredential = parseCredentialJson(credentialJson.value);
   } catch {
     throw new Error(
       `Invalid Google service account JSON in ${credentialJson.name}. Paste the raw JSON contents, not a path.`
