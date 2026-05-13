@@ -96,6 +96,25 @@ describe("prepareGoogleApplicationCredentials", () => {
     expect(readFileSync(credentialPath, "utf8")).toContain('"project_id": "voyage-quoted"');
   });
 
+  it("accepts a base64 encoded service account JSON", () => {
+    const credentialJson = JSON.stringify({
+      type: "service_account",
+      project_id: "voyage-base64",
+      client_email: "voyage-base64@example.com"
+    });
+    process.env.GOOGLE_APPLICATION_CREDENTIALS_B64 = Buffer.from(credentialJson, "utf8").toString("base64");
+    const credentialPath = join(tempDir, "base64-gcp-sa.json");
+
+    const result = prepareGoogleApplicationCredentials({
+      env: process.env,
+      credentialPath
+    });
+
+    expect(result).toBe(credentialPath);
+    expect(process.env.GOOGLE_APPLICATION_CREDENTIALS).toBe(credentialPath);
+    expect(readFileSync(credentialPath, "utf8")).toContain('"project_id": "voyage-base64"');
+  });
+
   it("keeps an existing credential file path when it already exists", () => {
     const existingCredentialPath = join(tempDir, "existing.json");
     process.env.GOOGLE_APPLICATION_CREDENTIALS = existingCredentialPath;
