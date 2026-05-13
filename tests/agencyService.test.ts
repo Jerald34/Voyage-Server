@@ -56,6 +56,9 @@ function createMemoryAgencyRepository(): AgencyRepository & {
       memberships.push(membership);
       return membership;
     },
+    async findMembership(agencyId, userId) {
+      return memberships.find((membership) => membership.agencyId === agencyId && membership.userId === userId) ?? null;
+    },
     async listPendingAgencies() {
       return agencies.filter((agency) => agency.status === "PENDING_REVIEW");
     },
@@ -97,7 +100,11 @@ describe("agency service", () => {
 
     await expect(
       service.createAgencyApplication(createUser({ emailVerifiedAt: null }), {
-        name: "Unverified Travel"
+        name: "Unverified Travel",
+        businessPhone: "+63 900 111 2222",
+        businessEmail: "owner@example.com",
+        city: "Subic",
+        country: "Philippines"
       })
     ).rejects.toMatchObject({
       code: "EMAIL_VERIFICATION_REQUIRED",
@@ -109,7 +116,11 @@ describe("agency service", () => {
     const { service, repository } = createService();
 
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
-      name: "North Star Travel"
+      name: "North Star Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
     });
 
     expect(agency).toMatchObject({
@@ -138,7 +149,11 @@ describe("agency service", () => {
   it("allows admin to approve an agency and audit the decision", async () => {
     const { service, repository } = createService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
-      name: "Review Travel"
+      name: "Review Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
     });
 
     const approved = await service.approveAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id);
@@ -160,7 +175,11 @@ describe("agency service", () => {
   it("allows admin to reject an agency with a reason", async () => {
     const { service } = createService();
     const agency = await service.createAgencyApplication(createUser(), {
-      name: "Reject Travel"
+      name: "Reject Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
     });
 
     const rejected = await service.rejectAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id, {
@@ -177,7 +196,11 @@ describe("agency service", () => {
   it("allows admin to suspend an agency with a reason", async () => {
     const { service } = createService();
     const agency = await service.createAgencyApplication(createUser(), {
-      name: "Suspend Travel"
+      name: "Suspend Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
     });
 
     const suspended = await service.suspendAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id, {
@@ -188,6 +211,94 @@ describe("agency service", () => {
       status: "SUSPENDED",
       suspendedByAdminUserId: "admin-1",
       suspensionReason: "Policy review required."
+    });
+  });
+
+  it("owner can update workspace settings without changing slug", async () => {
+    const { service, repository } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Original Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    const updated = await service.updateAgencySettings(owner, agency.id, {
+      name: "Updated Travel",
+      businessPhone: "+63 900 333 4444",
+      businessEmail: "hello@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+
+    expect(updated).toMatchObject({
+      id: agency.id,
+      name: "Updated Travel",
+      slug: "original-travel",
+      businessPhone: "+63 900 333 4444",
+      businessEmail: "hello@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+    expect(repository.audits).toHaveLength(0);
+  });
+
+  it("non-owner member gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
+    const { service, repository } = createService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
+      name: "Owner Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+    repository.memberships.push({
+      id: "membership-2",
+      agencyId: agency.id,
+      userId: "staff-1",
+      role: "STAFF",
+      status: "ACTIVE"
+    });
+
+    await expect(
+      service.updateAgencySettings(createUser({ id: "staff-1" }), agency.id, {
+        name: "Staff Travel",
+        businessPhone: "+63 900 333 4444",
+        businessEmail: "hello@example.com",
+        city: "Olongapo City",
+        country: "Philippines"
+      })
+    ).rejects.toMatchObject({
+      code: "AGENCY_OWNER_REQUIRED",
+      statusCode: 403
+    });
+  });
+
+  it("disabled owner membership gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
+    const { service, repository } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Disabled Owner Travel",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+    repository.memberships[0].status = "DISABLED";
+
+    await expect(
+      service.updateAgencySettings(owner, agency.id, {
+        name: "Disabled Owner Update",
+        businessPhone: "+63 900 333 4444",
+        businessEmail: "hello@example.com",
+        city: "Olongapo City",
+        country: "Philippines"
+      })
+    ).rejects.toMatchObject({
+      code: "AGENCY_OWNER_REQUIRED",
+      statusCode: 403
     });
   });
 });

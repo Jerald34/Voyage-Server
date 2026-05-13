@@ -75,6 +75,7 @@ export type AgencyRepository = {
     logoImageId?: string;
   }): Promise<AgencyRecord>;
   createOwnerMembership(data: { agencyId: string; userId: string }): Promise<AgencyMembershipRecord>;
+  findMembership(agencyId: string, userId: string): Promise<AgencyMembershipRecord | null>;
   listPendingAgencies(): Promise<AgencyRecord[]>;
   listAgencies(status?: string): Promise<AgencyWithOwner[]>;
   findAgencyById(id: string): Promise<AgencyRecord | null>;
@@ -100,10 +101,22 @@ function assertActive(user: AgencyUser) {
   }
 }
 
+function assertEmailVerified(user: AgencyUser) {
+  if (!user.emailVerifiedAt) {
+    throw new ApiError(403, "EMAIL_VERIFICATION_REQUIRED", "Verify your email before creating an agency.");
+  }
+}
+
 function assertAdmin(user: AgencyUser) {
   assertActive(user);
   if (user.role !== "ADMIN") {
     throw new ApiError(403, "ADMIN_REQUIRED", "Admin access is required.");
+  }
+}
+
+function assertAgencyOwnerMembership(membership: AgencyMembershipRecord | null) {
+  if (!membership || membership.status !== "ACTIVE" || membership.role !== "OWNER") {
+    throw new ApiError(403, "AGENCY_OWNER_REQUIRED", "Only the agency owner can edit workspace settings.");
   }
 }
 
@@ -128,6 +141,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       logoImageId?: string;
     }) {
       assertActive(user);
+      assertEmailVerified(user);
 
       const name = input.name.trim();
       if (!name) {
@@ -146,6 +160,39 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       });
       await options.repository.createOwnerMembership({ agencyId: agency.id, userId: user.id });
       return agency;
+    },
+
+    async updateAgencySettings(user: AgencyUser, agencyId: string, input: {
+      name: string;
+      businessPhone: string;
+      businessEmail?: string;
+      country: string;
+      city: string;
+    }) {
+      assertActive(user);
+      await findRequiredAgency(agencyId);
+
+      const membership = await options.repository.findMembership(agencyId, user.id);
+      assertAgencyOwnerMembership(membership);
+
+      const name = input.name.trim();
+      const businessPhone = input.businessPhone.trim();
+      const businessEmail = input.businessEmail?.trim() || undefined;
+      const country = input.country.trim();
+      const city = input.city.trim();
+
+      if (!name) throw new ApiError(400, "AGENCY_NAME_REQUIRED", "Agency name is required.");
+      if (!businessPhone) throw new ApiError(400, "AGENCY_BUSINESS_PHONE_REQUIRED", "Business phone is required.");
+      if (!country) throw new ApiError(400, "AGENCY_COUNTRY_REQUIRED", "Country is required.");
+      if (!city) throw new ApiError(400, "AGENCY_CITY_REQUIRED", "City is required.");
+
+      return options.repository.updateAgency(agencyId, {
+        name,
+        businessPhone,
+        businessEmail,
+        country,
+        city
+      });
     },
 
     async listPendingAgencies(user: AgencyUser) {
@@ -284,6 +331,16 @@ export function createPrismaAgencyRepository(client: PrismaClient = prisma): Age
           status: "ACTIVE"
         }
       }) as Promise<AgencyMembershipRecord>;
+    },
+    async findMembership(agencyId, userId) {
+      return client.agencyMembership.findUnique({
+        where: {
+          agencyId_userId: {
+            agencyId,
+            userId
+          }
+        }
+      }) as Promise<AgencyMembershipRecord | null>;
     },
     async listPendingAgencies() {
       return client.agency.findMany({

@@ -295,6 +295,8 @@ function includeMemberships() {
             id: true,
             status: true,
             name: true,
+            businessPhone: true,
+            businessEmail: true,
             city: true,
             country: true,
             rejectionReason: true,
