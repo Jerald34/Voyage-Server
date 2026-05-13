@@ -18,10 +18,6 @@ const OPEN_RUN_STATUSES: AgentRunStatus[] = ["QUEUED", "RUNNING"];
 function includeThreadDetails() {
   return {
     messages: { orderBy: { createdAt: "asc" as const } },
-    runs: { orderBy: { createdAt: "asc" as const } },
-    tasks: { orderBy: { sortOrder: "asc" as const } },
-    toolCalls: { orderBy: { createdAt: "asc" as const } },
-    sources: { orderBy: { createdAt: "asc" as const } },
     events: { orderBy: { createdAt: "asc" as const } }
   } as const;
 }

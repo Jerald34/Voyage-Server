@@ -114,10 +114,6 @@ export type AgentThreadRecord = {
   title: string;
   status: AgentThreadStatus;
   messages: AgentMessageRecord[];
-  runs: AgentRunRecord[];
-  toolCalls: AgentToolCallRecord[];
-  tasks: AgentTaskRecord[];
-  sources: AgentSourceRecord[];
   events: AgentRunEventRecord[];
   createdAt: Date;
   updatedAt: Date;
