@@ -205,20 +205,24 @@ describe("auth service", () => {
     });
   });
 
-  it("allows login before email verification", async () => {
-    const { service } = createService();
-    await service.registerWithEmail({
+  it("registers users as verified without sending a verification email", async () => {
+    const { service, emailSender } = createService();
+
+    const registration = await service.registerWithEmail({
       email: "new@example.com",
       password: "password123",
       displayName: "New User"
     });
+
+    expect(registration.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
+    expect(emailSender.sendVerificationEmail).not.toHaveBeenCalled();
 
     const result = await service.loginWithEmail({
       email: "NEW@example.com",
       password: "password123"
     });
 
-    expect(result.user.emailVerifiedAt).toBeNull();
+    expect(result.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
     expect(result.sessionToken).toEqual(expect.any(String));
   });
 
@@ -256,47 +260,12 @@ describe("auth service", () => {
     });
   });
 
-  it("stores hashed email verification tokens", async () => {
-    const { service, repository, emailSender } = createService();
-    const registration = await service.registerWithEmail({
-      email: "verify@example.com",
-      password: "password123",
-      displayName: "Verify Me"
-    });
+  it("rejects direct email verification requests in this deployment", async () => {
+    const { service } = createService();
 
-    await service.requestEmailVerification(registration.user.id);
-
-    const secondToken = repository.verificationTokens.at(-1);
-    expect(secondToken?.tokenHash).toEqual(expect.any(String));
-
-    const emailCall = vi.mocked(emailSender.sendVerificationEmail).mock.calls.at(-1);
-    const verificationUrl = new URL(emailCall?.[0].verificationUrl ?? "");
-    const rawToken = verificationUrl.searchParams.get("token");
-
-    expect(rawToken).toEqual(expect.any(String));
-    expect(secondToken?.tokenHash).toBe(hashToken(rawToken ?? ""));
-    expect(secondToken?.tokenHash).not.toBe(rawToken);
-  });
-
-  it("confirms a verification token and rejects reuse", async () => {
-    const { service, emailSender } = createService();
-    const registration = await service.registerWithEmail({
-      email: "confirm@example.com",
-      password: "password123",
-      displayName: "Confirm Me"
-    });
-    const emailCall = vi.mocked(emailSender.sendVerificationEmail).mock.calls[0];
-    const verificationUrl = new URL(emailCall[0].verificationUrl);
-    const token = verificationUrl.searchParams.get("token") ?? "";
-
-    const verifiedUser = await service.confirmEmailVerification(token);
-
-    expect(verifiedUser.id).toBe(registration.user.id);
-    expect(verifiedUser.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
-
-    await expect(service.confirmEmailVerification(token)).rejects.toMatchObject({
-      code: "INVALID_OR_EXPIRED_TOKEN",
-      statusCode: 400
+    await expect(service.requestEmailVerification("user-1")).rejects.toMatchObject({
+      code: "EMAIL_VERIFICATION_UNAVAILABLE",
+      statusCode: 501
     });
   });
 
