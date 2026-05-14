@@ -22,3 +22,12 @@ export const emailCheckSchema = z.object({
 export const confirmVerificationSchema = z.object({
   token: z.string().min(16)
 });
+
+export const requestPasswordResetSchema = z.object({
+  email: z.string().email()
+});
+
+export const confirmPasswordResetSchema = z.object({
+  token: z.string().min(16),
+  password: z.string().min(8)
+});

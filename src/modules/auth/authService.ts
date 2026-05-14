@@ -2,7 +2,11 @@ import type { PrismaClient } from "@prisma/client";
 import { env } from "../../config/env";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
-import { sendVerificationEmail, type VerificationEmailPayload } from "../../services/email";
+import {
+  sendPasswordResetEmail,
+  sendVerificationEmail,
+  type VerificationEmailPayload
+} from "../../services/email";
 import { hashPassword, verifyPassword } from "../../services/password";
 import { createRandomToken, hashToken } from "../../services/tokens";
 
@@ -45,6 +49,15 @@ export type VerificationTokenRecord = {
   createdAt: Date;
 };
 
+export type PasswordResetTokenRecord = {
+  id: string;
+  userId: string;
+  tokenHash: string;
+  expiresAt: Date;
+  usedAt: Date | null;
+  createdAt: Date;
+};
+
 export type ProviderAccountRecord = {
   id: string;
   userId: string;
@@ -63,11 +76,16 @@ export type AuthRepository = {
   createUser(data: CreateUserInput): Promise<AuthUserRecord>;
   updateUser(id: string, data: Partial<Pick<AuthUserRecord, "emailVerifiedAt" | "displayName" | "passwordHash">>): Promise<AuthUserRecord>;
   createSession(data: { userId: string; tokenHash: string; expiresAt: Date }): Promise<SessionRecord>;
+  deleteSessionsByUserId(userId: string): Promise<void>;
   deleteSessionByTokenHash(tokenHash: string): Promise<void>;
   markUnusedVerificationTokensUsed(userId: string, usedAt: Date): Promise<void>;
   createVerificationToken(data: { userId: string; tokenHash: string; expiresAt: Date }): Promise<VerificationTokenRecord>;
   findVerificationTokenByHash(tokenHash: string): Promise<VerificationTokenRecord | null>;
   markVerificationTokenUsed(id: string, usedAt: Date): Promise<VerificationTokenRecord>;
+  markUnusedPasswordResetTokensUsed(userId: string, usedAt: Date): Promise<void>;
+  createPasswordResetToken(data: { userId: string; tokenHash: string; expiresAt: Date }): Promise<PasswordResetTokenRecord>;
+  findPasswordResetTokenByHash(tokenHash: string): Promise<PasswordResetTokenRecord | null>;
+  markPasswordResetTokenUsed(id: string, usedAt: Date): Promise<PasswordResetTokenRecord>;
   findProviderAccount(provider: "GOOGLE" | "APPLE", providerAccountId: string): Promise<ProviderAccountRecord | null>;
   createProviderAccount(data: {
     userId: string;
@@ -80,6 +98,7 @@ export type AuthRepository = {
 
 export type EmailSender = {
   sendVerificationEmail(payload: VerificationEmailPayload): Promise<void>;
+  sendPasswordResetEmail(payload: { to: string; displayName: string; resetUrl: string }): Promise<void>;
 };
 
 export type AuthServiceOptions = {
@@ -160,6 +179,34 @@ export function createAuthService(options: AuthServiceOptions) {
     return user;
   }
 
+  async function requestPasswordReset(userId: string) {
+    const user = await options.repository.findUserById(userId);
+    if (!user) {
+      throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+    }
+
+    assertActiveUser(user);
+
+    const requestedAt = now();
+    await options.repository.markUnusedPasswordResetTokensUsed(user.id, requestedAt);
+
+    const rawToken = createRandomToken();
+    await options.repository.createPasswordResetToken({
+      userId: user.id,
+      tokenHash: hashToken(rawToken),
+      expiresAt: addHours(requestedAt, 24)
+    });
+
+    const resetUrl = new URL("/reset-password", appOrigin);
+    resetUrl.searchParams.set("token", rawToken);
+
+    await options.emailSender.sendPasswordResetEmail({
+      to: user.email,
+      displayName: user.displayName,
+      resetUrl: resetUrl.toString()
+    });
+  }
+
   return {
     async registerWithEmail(input: { email: string; password: string; displayName: string }) {
       const emailNormalized = normalizeEmail(input.email);
@@ -203,6 +250,41 @@ export function createAuthService(options: AuthServiceOptions) {
 
     async logout(sessionToken: string) {
       await options.repository.deleteSessionByTokenHash(hashToken(sessionToken));
+    },
+
+    async requestPasswordReset(input: { email: string }) {
+      const user = await options.repository.findUserByEmailNormalized(normalizeEmail(input.email));
+      if (!user || user.status !== "ACTIVE") {
+        return;
+      }
+
+      await requestPasswordReset(user.id);
+    },
+
+    async confirmPasswordReset(input: { token: string; password: string }) {
+      if (input.password.length < 8) {
+        throw new ApiError(400, "PASSWORD_TOO_SHORT", "Password must be at least 8 characters.");
+      }
+
+      const token = await options.repository.findPasswordResetTokenByHash(hashToken(input.token));
+      if (!token || token.usedAt || token.expiresAt <= now()) {
+        throw new ApiError(400, "INVALID_OR_EXPIRED_TOKEN", "Password reset link is invalid or expired.");
+      }
+
+      const user = await options.repository.findUserById(token.userId);
+      if (!user) {
+        throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+      }
+
+      assertActiveUser(user);
+
+      const usedAt = now();
+      await options.repository.markUnusedPasswordResetTokensUsed(user.id, usedAt);
+      await options.repository.updateUser(user.id, {
+        passwordHash: await hashPassword(input.password, passwordPepper)
+      });
+      await options.repository.deleteSessionsByUserId(user.id);
+      await options.repository.markPasswordResetTokenUsed(token.id, usedAt);
     },
 
     async updateProfile(user: AuthUserRecord, input: { displayName: string }) {
@@ -338,6 +420,9 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
     async createSession(data) {
       return client.session.create({ data });
     },
+    async deleteSessionsByUserId(userId) {
+      await client.session.deleteMany({ where: { userId } });
+    },
     async deleteSessionByTokenHash(tokenHash) {
       await client.session.deleteMany({ where: { tokenHash } });
     },
@@ -355,6 +440,24 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
     },
     async markVerificationTokenUsed(id, usedAt) {
       return client.emailVerificationToken.update({
+        where: { id },
+        data: { usedAt }
+      });
+    },
+    async markUnusedPasswordResetTokensUsed(userId, usedAt) {
+      await client.passwordResetToken.updateMany({
+        where: { userId, usedAt: null },
+        data: { usedAt }
+      });
+    },
+    async createPasswordResetToken(data) {
+      return client.passwordResetToken.create({ data });
+    },
+    async findPasswordResetTokenByHash(tokenHash) {
+      return client.passwordResetToken.findUnique({ where: { tokenHash } });
+    },
+    async markPasswordResetTokenUsed(id, usedAt) {
+      return client.passwordResetToken.update({
         where: { id },
         data: { usedAt }
       });
@@ -389,5 +492,5 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
 
 export const authService = createAuthService({
   repository: createPrismaAuthRepository(),
-  emailSender: { sendVerificationEmail }
+  emailSender: { sendVerificationEmail, sendPasswordResetEmail }
 });

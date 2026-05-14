@@ -17,6 +17,43 @@ function readEmailVerified(value: unknown) {
   return value === true || value === "true";
 }
 
+async function exchangeGoogleAuthorizationCode(code: string) {
+  if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
+    throw new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured.");
+  }
+
+  const body = new URLSearchParams({
+    client_id: env.GOOGLE_CLIENT_ID,
+    client_secret: env.GOOGLE_CLIENT_SECRET,
+    code,
+    grant_type: "authorization_code",
+    redirect_uri: env.GOOGLE_REDIRECT_URI
+  });
+
+  const response = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/x-www-form-urlencoded"
+    },
+    body: body.toString()
+  });
+
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    throw new ApiError(
+      401,
+      "INVALID_OAUTH_TOKEN",
+      data?.error_description || data?.error || "Google authorization code exchange failed."
+    );
+  }
+
+  if (typeof data?.id_token !== "string" || !data.id_token) {
+    throw new ApiError(401, "INVALID_OAUTH_TOKEN", "Google token response did not include an id_token.");
+  }
+
+  return data.id_token as string;
+}
+
 export async function verifyGoogleIdToken(idToken: string): Promise<VerifiedOAuthClaims> {
   if (!env.GOOGLE_CLIENT_ID) {
     throw new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured.");
@@ -38,6 +75,11 @@ export async function verifyGoogleIdToken(idToken: string): Promise<VerifiedOAut
     emailVerified: readEmailVerified(payload.email_verified),
     displayName: typeof payload.name === "string" ? payload.name : payload.email
   };
+}
+
+export async function verifyGoogleAuthorizationCode(code: string): Promise<VerifiedOAuthClaims> {
+  const idToken = await exchangeGoogleAuthorizationCode(code);
+  return verifyGoogleIdToken(idToken);
 }
 
 export async function verifyAppleIdToken(idToken: string): Promise<VerifiedOAuthClaims> {
