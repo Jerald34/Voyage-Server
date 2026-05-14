@@ -28,6 +28,7 @@ router.post("/threads/:id/approve-itinerary", agentController.approveItineraryTh
 router.post("/threads/:id/approve", agentController.approveItineraryThread);
 router.post("/threads/:id/messages", agentController.createMessage);
 router.get("/runs/:id/stream", agentController.runStream);
+router.post("/runs/:id/cancel", agentController.cancelRun);
 router.get("/runs/:id/events", agentController.listRunEvents);
 
 export { router as agentRoutes };

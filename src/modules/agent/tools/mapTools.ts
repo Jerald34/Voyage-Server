@@ -143,8 +143,10 @@ export function createRouteLogisticsTool(options: {
       const payload = {
         origin: mapPinpointPayload(originSnapshot.id, originPlace),
         destination: mapPinpointPayload(destinationSnapshot.id, destinationPlace),
+        travelMode: parsed.travelMode,
         distanceMeters: route.distanceMeters ?? null,
         durationSeconds: route.durationSeconds ?? null,
+        staticDurationSeconds: route.staticDurationSeconds ?? null,
         polyline: route.polyline ?? null
       };
 
@@ -297,11 +299,15 @@ export function createEstimateRouteTool(options: {
       let origin: { latitude: number; longitude: number };
       let destination: { latitude: number; longitude: number };
       let travelMode: "DRIVE" | "BICYCLE" | "WALK" | "TWO_WHEELER" | "TRANSIT";
+      let originPayload: unknown;
+      let destinationPayload: unknown;
 
       if ("origin" in parsed) {
         origin = parsed.origin;
         destination = parsed.destination;
         travelMode = parsed.travelMode;
+        originPayload = origin;
+        destinationPayload = destination;
       } else {
         console.log(
           `[Maps] estimate_route resolving origin: "${parsed.originPlaceName}" and destination: "${parsed.destinationPlaceName}"`
@@ -318,11 +324,16 @@ export function createEstimateRouteTool(options: {
         ]);
 
         const client = options.placeSnapshotClient ?? prisma;
-        await Promise.all([upsertPlaceSnapshot(client, originPlace), upsertPlaceSnapshot(client, destinationPlace)]);
+        const [originSnapshot, destinationSnapshot] = await Promise.all([
+          upsertPlaceSnapshot(client, originPlace),
+          upsertPlaceSnapshot(client, destinationPlace)
+        ]);
 
         origin = originPlace.location;
         destination = destinationPlace.location;
         travelMode = parsed.travelMode;
+        originPayload = mapPinpointPayload(originSnapshot.id, originPlace);
+        destinationPayload = mapPinpointPayload(destinationSnapshot.id, destinationPlace);
       }
 
       console.log(`[Maps] estimateRoute via ${travelMode}`);
@@ -331,8 +342,9 @@ export function createEstimateRouteTool(options: {
         destination,
         travelMode
       });
+      const run = createRunRecord(_context);
 
-      await options.agentService.recordSources(createRunRecord(_context), [
+      await options.agentService.recordSources(run, [
         {
           sourceType: "MAP_ROUTE",
           title: "Route estimate",
@@ -354,6 +366,18 @@ export function createEstimateRouteTool(options: {
           })
         }
       ]);
+      await options.agentService.recordRunEvent(run, {
+        type: "route.estimated",
+        payload: {
+          origin: originPayload,
+          destination: destinationPayload,
+          travelMode,
+          distanceMeters: result.distanceMeters ?? null,
+          durationSeconds: result.durationSeconds ?? null,
+          staticDurationSeconds: result.staticDurationSeconds ?? null,
+          polyline: result.polyline ?? null
+        }
+      });
       return result;
     }
   };

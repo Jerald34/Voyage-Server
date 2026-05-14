@@ -1888,6 +1888,59 @@ describe("agent orchestrator", () => {
     });
   });
 
+  it("emits route estimate events when estimate_route runs", async () => {
+    const { service, events } = createFakeAgentService();
+    const registry = createAgentToolRegistry([
+      createEstimateRouteTool({
+        agentService: service,
+        maps: {
+          async searchPlaces() {
+            return [];
+          },
+          async getPlaceDetails() {
+            return null;
+          },
+          async getPlacePhotos() {
+            return [];
+          },
+          async searchNearby() {
+            return [];
+          },
+          async resolvePlace() {
+            throw new Error("not used");
+          },
+          async estimateRoute() {
+            return {
+              distanceMeters: 1200,
+              durationSeconds: 600,
+              staticDurationSeconds: 540,
+              polyline: "encoded-route"
+            };
+          }
+        }
+      })
+    ]);
+
+    await registry.execute("estimate_route", createRunInput(), {
+      origin: { latitude: 14.763, longitude: 120.223 },
+      destination: { latitude: 14.775, longitude: 120.236 },
+      travelMode: "DRIVE"
+    });
+
+    expect(events).toContainEqual({
+      type: "route.estimated",
+      payload: expect.objectContaining({
+        origin: { latitude: 14.763, longitude: 120.223 },
+        destination: { latitude: 14.775, longitude: 120.236 },
+        travelMode: "DRIVE",
+        distanceMeters: 1200,
+        durationSeconds: 600,
+        staticDurationSeconds: 540,
+        polyline: "encoded-route"
+      })
+    });
+  });
+
   it("persists sources for web search", async () => {
     const { service, sources, events } = createFakeAgentService();
     const registry = createAgentToolRegistry([

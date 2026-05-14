@@ -1,4 +1,5 @@
 import { existsSync } from "node:fs";
+import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { env } from "../config/env";
 import { ApiError } from "../http/errors";
@@ -474,6 +475,7 @@ function encodeGoogleModel(model: string) {
 function normalizeModelMessages(messages: ModelMessage[]) {
   const systemMessages = messages.filter((message) => message.role === "system").map((message) => message.content).filter(Boolean);
   const conversationMessages = messages.filter((message) => message.role !== "system");
+  const systemInstructionText = systemMessages.length > 0 ? systemMessages.join("\n\n") : undefined;
 
   const contents = conversationMessages.map((message) => ({
     role: message.role === "assistant" ? ("model" as const) : ("user" as const),
@@ -481,17 +483,17 @@ function normalizeModelMessages(messages: ModelMessage[]) {
   }));
 
   const systemInstruction =
-    systemMessages.length > 0
+    systemInstructionText
       ? {
           parts: [
             {
-              text: systemMessages.join("\n\n")
+              text: systemInstructionText
             }
           ]
         }
       : undefined;
 
-  return { contents, systemInstruction };
+  return { contents, systemInstruction, systemInstructionText };
 }
 
 function extractVertexText(responseBody: unknown): string {
@@ -753,6 +755,28 @@ function buildExpressVertexEndpoint(model: string, apiKey: string, stream = fals
   return `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${encodeGoogleModel(model)}:${method}?key=${encodeURIComponent(apiKey)}`;
 }
 
+function buildVertexCountTokensEndpoint(model: string, projectId: string, location: string) {
+  return `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeGoogleModel(model)}:countTokens`;
+}
+
+function buildExpressVertexCountTokensEndpoint(model: string, apiKey: string) {
+  return `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${encodeGoogleModel(model)}:countTokens?key=${encodeURIComponent(apiKey)}`;
+}
+
+function buildVertexCachedContentsEndpoint(projectId: string, location: string, apiKey?: string) {
+  const version = apiKey ? "v1beta1" : "v1";
+  const keyParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : "";
+  return `https://aiplatform.googleapis.com/${version}/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/cachedContents${keyParam}`;
+}
+
+function buildVertexModelResource(model: string, projectId: string, location: string) {
+  return `projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeGoogleModel(model)}`;
+}
+
+function getVertexCacheMinimumTokens(model: string) {
+  return /^gemini-3(?:\.1)?-/i.test(model) ? 4096 : 2048;
+}
+
 export function createGoogleVertexModelProvider(options: VertexAiModelProviderOptions = {}): ModelProvider {
   const model = options.model ?? env.GOOGLE_AI_MODEL ?? DEFAULT_GOOGLE_AI_MODEL;
   const hasAdc = hasLocalAdcCredentials() || Boolean(options.auth);
@@ -769,8 +793,162 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
     throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Configure a Google Cloud API key.");
   }
 
+  function makePromptCacheKey(systemInstructionText: string, resolvedProjectId: string) {
+    return createHash("sha256")
+      .update(model)
+      .update("\0")
+      .update(resolvedProjectId)
+      .update("\0")
+      .update(location)
+      .update("\0")
+      .update(systemInstructionText)
+      .digest("hex");
+  }
+
+  const loggedApiKeyCacheWarning = new Set<string>();
+
+  function logApiKeyCacheWarningOnce(systemInstructionText: string) {
+    const warningKey = createHash("sha256").update(model).update("\0").update(systemInstructionText).digest("hex");
+    if (loggedApiKeyCacheWarning.has(warningKey)) {
+      return;
+    }
+
+    loggedApiKeyCacheWarning.add(warningKey);
+    console.warn(
+      "[Vertex Cache] disabled: explicit cachedContent creation requires ADC/OAuth standard Vertex; API-key express mode will generate without explicit cache."
+    );
+  }
+
+  async function resolveVertexProjectId() {
+    const resolvedProjectId = projectId || (await auth.getProjectId()) || "";
+    if (!resolvedProjectId) {
+      throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Configure GOOGLE_CLOUD_PROJECT or ADC project metadata.");
+    }
+    return resolvedProjectId;
+  }
+
+  async function getVertexAccessTokenIfNeeded() {
+    if (apiKey) {
+      return null;
+    }
+
+    const accessToken = await auth.getAccessToken();
+    if (!accessToken) {
+      throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. No ADC access token could be resolved.");
+    }
+
+    return accessToken;
+  }
+
+  async function countVertexTokens(systemInstructionText: string, resolvedProjectId: string) {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+
+    if (!apiKey) {
+      headers.Authorization = `Bearer ${await getVertexAccessTokenIfNeeded()}`;
+    }
+
+    const response = await fetchImpl(
+      apiKey
+        ? buildExpressVertexCountTokensEndpoint(model, apiKey)
+        : buildVertexCountTokensEndpoint(model, resolvedProjectId, location),
+      {
+        method: "POST",
+        headers,
+        body: JSON.stringify({
+          model: buildVertexModelResource(model, resolvedProjectId, location),
+          systemInstruction: {
+            parts: [{ text: systemInstructionText }]
+          }
+        })
+      }
+    );
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "Could not read error body");
+      console.warn(`[Vertex Cache] count_failed: ${response.status} ${errorBody}`);
+      return null;
+    }
+
+    const body = (await response.json()) as { totalTokens?: unknown };
+    return typeof body.totalTokens === "number" ? body.totalTokens : null;
+  }
+
+  async function createVertexCachedContent(systemInstructionText: string, resolvedProjectId: string) {
+    const headers: Record<string, string> = {
+      "Content-Type": "application/json"
+    };
+
+    if (!apiKey) {
+      headers.Authorization = `Bearer ${await getVertexAccessTokenIfNeeded()}`;
+    }
+
+    const response = await fetchImpl(buildVertexCachedContentsEndpoint(resolvedProjectId, location, apiKey || undefined), {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model: buildVertexModelResource(model, resolvedProjectId, location),
+        systemInstruction: {
+          parts: [{ text: systemInstructionText }]
+        }
+      })
+    });
+
+    if (!response.ok) {
+      const errorBody = await response.text().catch(() => "Could not read error body");
+      console.warn(`[Vertex Cache] create_failed: ${response.status} ${errorBody}`);
+      return null;
+    }
+
+    const body = (await response.json()) as { name?: unknown };
+    const cacheName = typeof body.name === "string" && body.name.length > 0 ? body.name : null;
+    if (cacheName) {
+      console.info(`[Vertex Cache] created: ${cacheName}`);
+    }
+    return cacheName;
+  }
+
+  const cachedContentByPromptKey = new Map<string, Promise<string | null>>();
+
+  async function getCachedContentForPrompt(systemInstructionText: string | undefined) {
+    if (!systemInstructionText) {
+      return undefined;
+    }
+
+    if (apiKey) {
+      if (systemInstructionText.length >= 16_000) {
+        logApiKeyCacheWarningOnce(systemInstructionText);
+      }
+      return undefined;
+    }
+
+    const resolvedProjectId = await resolveVertexProjectId();
+    const cacheKey = makePromptCacheKey(systemInstructionText, resolvedProjectId);
+    const existing = cachedContentByPromptKey.get(cacheKey);
+    if (existing) {
+      return existing;
+    }
+
+    const minimumTokens = getVertexCacheMinimumTokens(model);
+    const promise = (async () => {
+      const totalTokens = await countVertexTokens(systemInstructionText, resolvedProjectId);
+      if (typeof totalTokens !== "number" || totalTokens < minimumTokens) {
+        console.info(
+          `[Vertex Cache] skipped: systemInstructionTokens=${totalTokens ?? "unknown"} minimum=${minimumTokens}`
+        );
+        return null;
+      }
+
+      return createVertexCachedContent(systemInstructionText, resolvedProjectId);
+    })().catch(() => null);
+
+    cachedContentByPromptKey.set(cacheKey, promise);
+    return promise;
+  }
+
   async function fetchVertexCompletion(input: ModelCompletionInput) {
-    const { contents, systemInstruction } = normalizeModelMessages(input.messages);
+    const { contents, systemInstruction, systemInstructionText } = normalizeModelMessages(input.messages);
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -779,31 +957,35 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
         "Content-Type": "application/json"
       };
       let requestUrl: string;
+      const cachedContent = await getCachedContentForPrompt(systemInstructionText);
       if (!apiKey) {
-        const accessToken = await auth.getAccessToken();
-        if (!accessToken) {
-          throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. No ADC access token could be resolved.");
-        }
-        headers.Authorization = `Bearer ${accessToken}`;
-        const effectiveProjectId = projectId || (await auth.getProjectId()) || "";
-        if (!effectiveProjectId) {
-          throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Configure GOOGLE_CLOUD_PROJECT or ADC project metadata.");
-        }
+        headers.Authorization = `Bearer ${await getVertexAccessTokenIfNeeded()}`;
+        const effectiveProjectId = await resolveVertexProjectId();
         requestUrl = buildVertexEndpoint(model, effectiveProjectId, location);
       } else {
         requestUrl = buildExpressVertexEndpoint(model, apiKey);
       }
 
+      const requestBody = cachedContent
+        ? {
+            contents,
+            cachedContent,
+            generationConfig: {
+              temperature: input.temperature ?? 0.2
+            }
+          }
+        : {
+            contents,
+            ...(systemInstruction ? { systemInstruction } : {}),
+            generationConfig: {
+              temperature: input.temperature ?? 0.2
+            }
+          };
+
       const response = await fetchImpl(requestUrl, {
         method: "POST",
         headers,
-        body: JSON.stringify({
-          contents,
-          ...(systemInstruction ? { systemInstruction } : {}),
-          generationConfig: {
-            temperature: input.temperature ?? 0.2
-          }
-        }),
+        body: JSON.stringify(requestBody),
         signal: controller.signal
       });
 
@@ -838,7 +1020,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
     },
 
     async *completeStream(input) {
-      const { contents, systemInstruction } = normalizeModelMessages(input.messages);
+      const { contents, systemInstruction, systemInstructionText } = normalizeModelMessages(input.messages);
       const controller = new AbortController();
       const timeout = setTimeout(() => controller.abort(), timeoutMs);
 
@@ -847,31 +1029,35 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
           "Content-Type": "application/json"
         };
         let requestUrl: string;
+        const cachedContent = await getCachedContentForPrompt(systemInstructionText);
         if (!apiKey) {
-          const accessToken = await auth.getAccessToken();
-          if (!accessToken) {
-            throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. No ADC access token could be resolved.");
-          }
-          headers.Authorization = `Bearer ${accessToken}`;
-          const effectiveProjectId = projectId || (await auth.getProjectId()) || "";
-          if (!effectiveProjectId) {
-            throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Configure GOOGLE_CLOUD_PROJECT or ADC project metadata.");
-          }
+          headers.Authorization = `Bearer ${await getVertexAccessTokenIfNeeded()}`;
+          const effectiveProjectId = await resolveVertexProjectId();
           requestUrl = buildVertexEndpoint(model, effectiveProjectId, location, true);
         } else {
           requestUrl = buildExpressVertexEndpoint(model, apiKey, true);
         }
 
+        const requestBody = cachedContent
+          ? {
+              contents,
+              cachedContent,
+              generationConfig: {
+                temperature: input.temperature ?? 0.2
+              }
+            }
+          : {
+              contents,
+              ...(systemInstruction ? { systemInstruction } : {}),
+              generationConfig: {
+                temperature: input.temperature ?? 0.2
+              }
+            };
+
         const response = await fetchImpl(requestUrl, {
           method: "POST",
           headers,
-          body: JSON.stringify({
-            contents,
-            ...(systemInstruction ? { systemInstruction } : {}),
-            generationConfig: {
-              temperature: input.temperature ?? 0.2
-            }
-          }),
+          body: JSON.stringify(requestBody),
           signal: controller.signal
         });
 

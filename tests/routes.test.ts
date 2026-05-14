@@ -73,4 +73,40 @@ describe("app routes", () => {
       }
     });
   });
+
+  it("requires auth for current user profile updates", async () => {
+    const app = createApp();
+
+    const response = await request(app).patch("/auth/me").send({
+      displayName: "Updated User"
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
+
+  it("requires auth for agency settings updates", async () => {
+    const app = createApp();
+
+    const response = await request(app).patch("/agencies/agency-1/settings").send({
+      name: "Updated Agency",
+      businessPhone: "+63 900 333 4444",
+      businessEmail: "hello@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+
+    expect(response.status).toBe(401);
+    expect(response.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
 });

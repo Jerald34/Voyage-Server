@@ -18,10 +18,6 @@ const OPEN_RUN_STATUSES: AgentRunStatus[] = ["QUEUED", "RUNNING"];
 function includeThreadDetails() {
   return {
     messages: { orderBy: { createdAt: "asc" as const } },
-    runs: { orderBy: { createdAt: "asc" as const } },
-    tasks: { orderBy: { sortOrder: "asc" as const } },
-    toolCalls: { orderBy: { createdAt: "asc" as const } },
-    sources: { orderBy: { createdAt: "asc" as const } },
     events: { orderBy: { createdAt: "asc" as const } }
   } as const;
 }
@@ -487,6 +483,15 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       if (update.count === 0) {
         return null;
       }
+      return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
+    },
+
+    async cancelRunIfOpen(id) {
+      const update = await client.agentRun.updateMany({
+        where: { id, status: { in: OPEN_RUN_STATUSES } },
+        data: { status: "CANCELLED" }
+      });
+      if (update.count === 0) return null;
       return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
     }
   };
