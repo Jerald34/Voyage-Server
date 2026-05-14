@@ -10,23 +10,27 @@ import { hashToken } from "../src/services/tokens";
 
 type UserRecord = Awaited<ReturnType<AuthRepository["createUser"]>>;
 type VerificationRecord = Awaited<ReturnType<AuthRepository["createVerificationToken"]>>;
+type PasswordResetRecord = Awaited<ReturnType<AuthRepository["createPasswordResetToken"]>>;
 type SessionRecord = Awaited<ReturnType<AuthRepository["createSession"]>>;
 type ProviderAccountRecord = NonNullable<Awaited<ReturnType<AuthRepository["findProviderAccount"]>>>;
 
 function createMemoryAuthRepository(): AuthRepository & {
   users: UserRecord[];
   verificationTokens: VerificationRecord[];
+  passwordResetTokens: PasswordResetRecord[];
   sessions: SessionRecord[];
   providerAccounts: ProviderAccountRecord[];
 } {
   const users: UserRecord[] = [];
   const verificationTokens: VerificationRecord[] = [];
+  const passwordResetTokens: PasswordResetRecord[] = [];
   const sessions: SessionRecord[] = [];
   const providerAccounts: ProviderAccountRecord[] = [];
 
   return {
     users,
     verificationTokens,
+    passwordResetTokens,
     sessions,
     providerAccounts,
     async findUserByEmailNormalized(emailNormalized) {
@@ -66,6 +70,13 @@ function createMemoryAuthRepository(): AuthRepository & {
       sessions.push(session);
       return session;
     },
+    async deleteSessionsByUserId(userId) {
+      for (let index = sessions.length - 1; index >= 0; index -= 1) {
+        if (sessions[index].userId === userId) {
+          sessions.splice(index, 1);
+        }
+      }
+    },
     async deleteSessionByTokenHash(tokenHash) {
       const index = sessions.findIndex((session) => session.tokenHash === tokenHash);
       if (index >= 0) {
@@ -100,6 +111,34 @@ function createMemoryAuthRepository(): AuthRepository & {
       token.usedAt = usedAt;
       return token;
     },
+    async markUnusedPasswordResetTokensUsed(userId, usedAt) {
+      for (const token of passwordResetTokens) {
+        if (token.userId === userId && !token.usedAt) {
+          token.usedAt = usedAt;
+        }
+      }
+    },
+    async createPasswordResetToken(data) {
+      const token = {
+        id: `password-reset-${passwordResetTokens.length + 1}`,
+        createdAt: new Date("2026-04-27T00:00:00.000Z"),
+        usedAt: null,
+        ...data
+      };
+      passwordResetTokens.push(token);
+      return token;
+    },
+    async findPasswordResetTokenByHash(tokenHash) {
+      return passwordResetTokens.find((token) => token.tokenHash === tokenHash) ?? null;
+    },
+    async markPasswordResetTokenUsed(id, usedAt) {
+      const token = passwordResetTokens.find((candidate) => candidate.id === id);
+      if (!token) {
+        throw new Error(`Missing token ${id}`);
+      }
+      token.usedAt = usedAt;
+      return token;
+    },
     async findProviderAccount(provider, providerAccountId) {
       return (
         providerAccounts.find(
@@ -124,7 +163,8 @@ function createMemoryAuthRepository(): AuthRepository & {
 function createService() {
   const repository = createMemoryAuthRepository();
   const emailSender: EmailSender = {
-    sendVerificationEmail: vi.fn().mockResolvedValue(undefined)
+    sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+    sendPasswordResetEmail: vi.fn().mockResolvedValue(undefined)
   };
   const now = () => new Date("2026-04-27T12:00:00.000Z");
   const service = createAuthService({
@@ -182,6 +222,40 @@ describe("auth service", () => {
     expect(result.sessionToken).toEqual(expect.any(String));
   });
 
+  it("updates a user's display name", async () => {
+    const { service } = createService();
+    const registration = await service.registerWithEmail({
+      email: "profile@example.com",
+      password: "password123",
+      displayName: "Old Name"
+    });
+
+    const updated = await service.updateProfile(registration.user, {
+      displayName: "New Name"
+    });
+
+    expect(updated.displayName).toBe("New Name");
+    expect(updated.email).toBe("profile@example.com");
+  });
+
+  it("rejects a blank display name update", async () => {
+    const { service } = createService();
+    const registration = await service.registerWithEmail({
+      email: "blank-name@example.com",
+      password: "password123",
+      displayName: "Valid Name"
+    });
+
+    await expect(
+      service.updateProfile(registration.user, {
+        displayName: "   "
+      })
+    ).rejects.toMatchObject({
+      code: "DISPLAY_NAME_REQUIRED",
+      statusCode: 400
+    });
+  });
+
   it("stores hashed email verification tokens", async () => {
     const { service, repository, emailSender } = createService();
     const registration = await service.registerWithEmail({
@@ -224,6 +298,79 @@ describe("auth service", () => {
       code: "INVALID_OR_EXPIRED_TOKEN",
       statusCode: 400
     });
+  });
+
+  it("sends a password reset email with a hashed token", async () => {
+    const { service, repository, emailSender } = createService();
+    const registration = await service.registerWithEmail({
+      email: "reset@example.com",
+      password: "password123",
+      displayName: "Reset Me"
+    });
+
+    await service.requestPasswordReset({
+      email: registration.user.email
+    });
+
+    const token = repository.passwordResetTokens.at(-1);
+    expect(token?.tokenHash).toEqual(expect.any(String));
+
+    const emailCall = vi.mocked(emailSender.sendPasswordResetEmail).mock.calls.at(-1);
+    const resetUrl = new URL(emailCall?.[0].resetUrl ?? "");
+    const rawToken = resetUrl.searchParams.get("token");
+
+    expect(rawToken).toEqual(expect.any(String));
+    expect(token?.tokenHash).toBe(hashToken(rawToken ?? ""));
+    expect(token?.tokenHash).not.toBe(rawToken);
+  });
+
+  it("resets a password, invalidates sessions, and rejects the old password", async () => {
+    const { service, repository, emailSender } = createService();
+    const registration = await service.registerWithEmail({
+      email: "change@example.com",
+      password: "password123",
+      displayName: "Change Me"
+    });
+
+    repository.sessions.push({
+      id: "session-extra",
+      userId: registration.user.id,
+      tokenHash: "hash-extra",
+      expiresAt: new Date("2026-05-27T00:00:00.000Z"),
+      createdAt: new Date("2026-04-27T00:00:00.000Z"),
+      updatedAt: new Date("2026-04-27T00:00:00.000Z")
+    });
+
+    await service.requestPasswordReset({
+      email: registration.user.email
+    });
+
+    const emailCall = vi.mocked(emailSender.sendPasswordResetEmail).mock.calls.at(-1);
+    const resetUrl = new URL(emailCall?.[0].resetUrl ?? "");
+    const token = resetUrl.searchParams.get("token") ?? "";
+
+    await service.confirmPasswordReset({
+      token,
+      password: "newpassword123"
+    });
+
+    expect(repository.sessions).toHaveLength(0);
+
+    await expect(
+      service.loginWithEmail({
+        email: registration.user.email,
+        password: "password123"
+      })
+    ).rejects.toMatchObject({
+      code: "INVALID_CREDENTIALS",
+      statusCode: 401
+    });
+
+    const login = await service.loginWithEmail({
+      email: registration.user.email,
+      password: "newpassword123"
+    });
+    expect(login.user.id).toBe(registration.user.id);
   });
 
   it("creates a verified user from Google sign-in", async () => {
