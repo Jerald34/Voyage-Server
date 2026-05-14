@@ -20,31 +20,49 @@ function formatMoney(value: number) {
   return `$${value.toFixed(6)}`;
 }
 
+const MESSAGE_PREVIEW_CHARS = 250;
+
+function truncateMessage(content: string) {
+  if (!content) {
+    return "(empty)";
+  }
+  const trimmed = content.trim();
+  if (trimmed.length <= MESSAGE_PREVIEW_CHARS) {
+    return trimmed;
+  }
+  return `${trimmed.slice(0, MESSAGE_PREVIEW_CHARS)}… [+${trimmed.length - MESSAGE_PREVIEW_CHARS} chars]`;
+}
+
+function formatCacheStatus(usage: ModelUsage) {
+  const cached = usage.cachedContentTokenCount ?? 0;
+  const prompt = usage.promptTokenCount ?? 0;
+
+  if (cached > 0 && prompt > 0) {
+    const ratio = Math.round((cached / prompt) * 100);
+    return `${COLORS.green}💾 Cache HIT${COLORS.reset} ${cached}/${prompt} prompt tokens cached (${ratio}%)`;
+  }
+  if (prompt > 0) {
+    return `${COLORS.yellow}💾 Cache MISS${COLORS.reset} 0/${prompt} prompt tokens cached`;
+  }
+  return `${COLORS.dim}💾 Cache n/a${COLORS.reset}`;
+}
+
 function formatModelUsage(usage: ModelUsage) {
-  return JSON.stringify(
-    {
-      model: usage.model,
-      promptTokenCount: usage.promptTokenCount ?? null,
-      candidatesTokenCount: usage.candidatesTokenCount ?? null,
-      totalTokenCount: usage.totalTokenCount ?? null,
-      cachedContentTokenCount: usage.cachedContentTokenCount ?? null,
-      toolUsePromptTokenCount: usage.toolUsePromptTokenCount ?? null,
-      thoughtsTokenCount: usage.thoughtsTokenCount ?? null,
-      trafficType: usage.trafficType ?? null,
-      promptTokensDetails: usage.promptTokensDetails ?? null,
-      cacheTokensDetails: usage.cacheTokensDetails ?? null,
-      candidatesTokensDetails: usage.candidatesTokensDetails ?? null,
-      estimatedCostUsd: usage.estimatedCostUsd
-        ? {
-            prompt: formatMoney(usage.estimatedCostUsd.prompt),
-            output: formatMoney(usage.estimatedCostUsd.output),
-            total: formatMoney(usage.estimatedCostUsd.total)
-          }
-        : null
-    },
-    null,
-    2
-  );
+  const cacheStatus = formatCacheStatus(usage);
+  const cost = usage.estimatedCostUsd
+    ? `cost ${formatMoney(usage.estimatedCostUsd.total)} (in ${formatMoney(usage.estimatedCostUsd.prompt)}, out ${formatMoney(usage.estimatedCostUsd.output)})`
+    : "cost n/a";
+  const tokens = [
+    `prompt=${usage.promptTokenCount ?? "?"}`,
+    `output=${usage.candidatesTokenCount ?? "?"}`,
+    usage.thoughtsTokenCount ? `thoughts=${usage.thoughtsTokenCount}` : null,
+    usage.toolUsePromptTokenCount ? `toolUse=${usage.toolUsePromptTokenCount}` : null,
+    `total=${usage.totalTokenCount ?? "?"}`
+  ]
+    .filter(Boolean)
+    .join(" ");
+
+  return `${cacheStatus}\n${COLORS.dim}tokens:${COLORS.reset} ${tokens}\n${COLORS.dim}${cost}${COLORS.reset}`;
 }
 
 export const agentLogger = {
@@ -66,17 +84,17 @@ export const agentLogger = {
   },
   modelOutput: (runId: string, content: string, usage?: ModelUsage) => {
     console.log(
-      `\n${COLORS.dim}[${formatTimestamp()}]${COLORS.reset} ${COLORS.yellow}🤖 [Model Output]${COLORS.reset} ${COLORS.dim}(Run: ${runId})${COLORS.reset}\n${COLORS.yellow}--- CONTENT START ---${COLORS.reset}\n${content}\n${COLORS.yellow}--- CONTENT END ---${COLORS.reset}${usage ? `\n${COLORS.cyan}--- USAGE START ---${COLORS.reset}\n${formatModelUsage(usage)}\n${COLORS.cyan}--- USAGE END ---${COLORS.reset}` : ""}`
+      `\n${COLORS.dim}[${formatTimestamp()}]${COLORS.reset} ${COLORS.yellow}🤖 [Model Output]${COLORS.reset} ${COLORS.dim}(Run: ${runId})${COLORS.reset}\n${COLORS.dim}preview:${COLORS.reset} ${truncateMessage(content)}${usage ? `\n${formatModelUsage(usage)}` : ""}`
     );
   },
   synthesisOutput: (runId: string, content: string, usage?: ModelUsage) => {
     console.log(
-      `${COLORS.dim}[${formatTimestamp()}]${COLORS.reset} ${COLORS.blue}✍️  [Synthesis]${COLORS.reset} ${COLORS.dim}(Run: ${runId})${COLORS.reset}\n${content}${usage ? `\n${COLORS.cyan}${formatModelUsage(usage)}${COLORS.reset}` : ""}\n`
+      `${COLORS.dim}[${formatTimestamp()}]${COLORS.reset} ${COLORS.blue}✍️  [Synthesis]${COLORS.reset} ${COLORS.dim}(Run: ${runId})${COLORS.reset}\n${COLORS.dim}preview:${COLORS.reset} ${truncateMessage(content)}${usage ? `\n${formatModelUsage(usage)}` : ""}\n`
     );
   },
   agentResponse: (runId: string, content: string) => {
     console.log(
-      `${COLORS.dim}[${formatTimestamp()}]${COLORS.reset} ${COLORS.green}💬 [Agent Response]${COLORS.reset} ${COLORS.dim}(Run: ${runId})${COLORS.reset}\n${COLORS.green}Final Content:${COLORS.reset} ${content}\n`
+      `${COLORS.dim}[${formatTimestamp()}]${COLORS.reset} ${COLORS.green}💬 [Agent Response]${COLORS.reset} ${COLORS.dim}(Run: ${runId})${COLORS.reset}\n${COLORS.dim}preview:${COLORS.reset} ${truncateMessage(content)}\n`
     );
   },
   error: (context: string, runId: string, error: any) => {

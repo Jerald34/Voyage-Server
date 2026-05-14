@@ -290,6 +290,50 @@ function availableToolSet(toolNames: string[]) {
   return new Set(toolNames.map((name) => canonicalToolName(name)));
 }
 
+// Variable runtime context (active-itinerary prompt + UUID block) is intentionally folded
+// into a user message rather than a system message so that the systemInstruction sent to
+// Gemini is byte-identical across turns. Stable systemInstruction is a prerequisite for
+// implicit / explicit cachedContent reuse.
+function buildRuntimeContextBlock(
+  activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null
+): string {
+  if (!activeItineraryContext) {
+    return "";
+  }
+  const parts: string[] = [activeItineraryContext.prompt];
+  const idBlock = buildItineraryIdentifierBlock(activeItineraryContext.itinerary);
+  if (idBlock) {
+    parts.push(idBlock);
+  }
+  return parts.join("\n\n");
+}
+
+function injectRuntimeContextIntoLastUser(
+  messages: Array<{ role: "system" | "user" | "assistant"; content: string }>,
+  runtimeContext: string
+) {
+  if (!runtimeContext) {
+    return messages;
+  }
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") {
+      const next = messages.slice();
+      next[i] = {
+        ...messages[i],
+        content: `${runtimeContext}\n\n---\n\n${messages[i].content}`
+      };
+      return next;
+    }
+  }
+  return messages;
+}
+
+// Cap kept per continuation turn so the prompt grows linearly with the latest few results
+// instead of accumulating every prior add_itinerary_item echo. The full itinerary state is
+// still passed via activeItineraryContext.itinerary, so trimming history does not lose truth.
+const CONTINUATION_TOOL_RESULTS_TAIL = 3;
+const SYNTHESIS_TOOL_RESULTS_TAIL = 5;
+
 export function createAgentOrchestrator(options: {
   modelProvider: ModelProvider;
   agentService: AgentOrchestratorAgentService;
@@ -375,32 +419,18 @@ export function createAgentOrchestrator(options: {
                 }
               ];
 
-          const initialIdentifierBlock = activeItineraryContext
-            ? buildItineraryIdentifierBlock(activeItineraryContext.itinerary)
-            : "";
+          const initialRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
+          const historyWithContext = injectRuntimeContextIntoLastUser(
+            historyOrCurrent,
+            initialRuntimeContext
+          );
 
           const initialMessages = [
             {
               role: "system" as const,
               content: buildVoyageSystemPrompt(toolListForPrompt)
             },
-            ...(activeItineraryContext
-              ? [
-                {
-                  role: "system" as const,
-                  content: activeItineraryContext.prompt
-                }
-              ]
-              : []),
-            ...(initialIdentifierBlock
-              ? [
-                {
-                  role: "system" as const,
-                  content: initialIdentifierBlock
-                }
-              ]
-              : []),
-            ...historyOrCurrent
+            ...historyWithContext
           ];
           if (options.modelProvider.completeStream) {
             const streamed = await streamModelCompletion({
@@ -648,21 +678,15 @@ export function createAgentOrchestrator(options: {
           const { dayCount: currentDayCount, itemCount: currentItemCount } = countItineraryItems(activeItineraryContext?.itinerary);
           const itineraryIsEmptySkeleton = currentDayCount > 0 && currentItemCount === 0;
 
-          const continuationIdentifierBlock = activeItineraryContext
-            ? buildItineraryIdentifierBlock(activeItineraryContext.itinerary)
-            : "";
+          const continuationRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
+          const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
+          const omittedToolResults = Math.max(0, toolResults.length - recentToolResults.length);
 
           const continuationMessages: Array<{ role: "system" | "user" | "assistant"; content: string }> = [
             {
               role: "system" as const,
               content: buildVoyageSystemPrompt(toolListForPrompt)
             },
-            ...(activeItineraryContext
-              ? [{ role: "system" as const, content: activeItineraryContext.prompt }]
-              : []),
-            ...(continuationIdentifierBlock
-              ? [{ role: "system" as const, content: continuationIdentifierBlock }]
-              : []),
             {
               role: "user" as const,
               content: input.userContent
@@ -674,8 +698,12 @@ export function createAgentOrchestrator(options: {
             {
               role: "user" as const,
               content: [
-                "Tool results so far (most recent last):",
-                stringifyToolResults(toolResults),
+                continuationRuntimeContext,
+                continuationRuntimeContext ? "---" : "",
+                omittedToolResults > 0
+                  ? `Recent tool results (last ${recentToolResults.length} of ${toolResults.length}; ${omittedToolResults} older result(s) omitted — see current itinerary draft state below for cumulative truth):`
+                  : "Tool results so far (most recent last):",
+                stringifyToolResults(recentToolResults),
                 "",
                 activeItineraryContext
                   ? `Current itinerary draft state:\n${JSON.stringify(activeItineraryContext.itinerary)}`
@@ -761,6 +789,12 @@ export function createAgentOrchestrator(options: {
         let synthesisUsage: ModelUsage | undefined;
         let streamedSynthesis = false;
         try {
+          const synthesisToolResults = toolResults.slice(-SYNTHESIS_TOOL_RESULTS_TAIL);
+          const synthesisOmittedCount = Math.max(0, toolResults.length - synthesisToolResults.length);
+          const finalItineraryJson = activeItineraryContext
+            ? JSON.stringify(activeItineraryContext.itinerary)
+            : "";
+
           const synthesisMessages = [
             {
               role: "system" as const,
@@ -776,7 +810,15 @@ export function createAgentOrchestrator(options: {
             },
             {
               role: "user" as const,
-              content: `Tool results JSON:\n${stringifyToolResults(toolResults)}`
+              content: [
+                finalItineraryJson
+                  ? `Final itinerary draft state (cumulative truth — summarize this, do not echo it):\n${finalItineraryJson}`
+                  : "",
+                synthesisOmittedCount > 0
+                  ? `Recent tool results JSON (last ${synthesisToolResults.length} of ${toolResults.length}; ${synthesisOmittedCount} older itinerary-streaming result(s) omitted because the cumulative state is above):`
+                  : "Tool results JSON:",
+                stringifyToolResults(synthesisToolResults)
+              ].filter(Boolean).join("\n\n")
             }
           ];
 
