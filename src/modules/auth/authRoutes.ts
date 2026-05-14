@@ -7,7 +7,6 @@ import { ApiError } from "../../http/errors";
 import { env } from "../../config/env";
 import { verifyAppleIdToken, verifyGoogleAuthorizationCode } from "../../services/oauth";
 import {
-  confirmVerificationSchema,
   emailCheckSchema,
   loginSchema,
   registerSchema,
@@ -93,13 +92,8 @@ authRoutes.post("/email/check", async (request, response, next) => {
   }
 });
 
-authRoutes.post("/email/verification/request", requireAuth, async (request, response, next) => {
-  try {
-    await authService.requestEmailVerification(request.authUser!.id);
-    response.status(204).send();
-  } catch (error) {
-    next(error);
-  }
+authRoutes.post("/email/verification/request", (_request, _response, next) => {
+  next(new ApiError(501, "EMAIL_VERIFICATION_UNAVAILABLE", "Email verification is not available in this deployment."));
 });
 
 authRoutes.post("/password/reset/request", (_request, _response, next) => {
@@ -110,14 +104,8 @@ authRoutes.post("/password/reset/confirm", (_request, _response, next) => {
   next(new ApiError(501, "PASSWORD_RESET_UNAVAILABLE", "Password reset is not available in this deployment."));
 });
 
-authRoutes.post("/email/verification/confirm", async (request, response, next) => {
-  try {
-    const input = confirmVerificationSchema.parse(request.body);
-    const user = await authService.confirmEmailVerification(input.token);
-    response.json({ user: serializeUser(user as NonNullable<Express.Request["authUser"]>) });
-  } catch (error) {
-    next(error);
-  }
+authRoutes.post("/email/verification/confirm", (_request, _response, next) => {
+  next(new ApiError(501, "EMAIL_VERIFICATION_UNAVAILABLE", "Email verification is not available in this deployment."));
 });
 
 authRoutes.get("/google/start", (_request, response, next) => {

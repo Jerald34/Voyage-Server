@@ -4,7 +4,6 @@ import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import {
   sendPasswordResetEmail,
-  sendVerificationEmail,
   type VerificationEmailPayload
 } from "../../services/email";
 import { hashPassword, verifyPassword } from "../../services/password";
@@ -146,37 +145,12 @@ export function createAuthService(options: AuthServiceOptions) {
   }
 
   async function requestEmailVerification(userId: string) {
-    const user = await options.repository.findUserById(userId);
-    if (!user) {
-      throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
-    }
-
-    assertActiveUser(user);
-
-    if (user.emailVerifiedAt) {
-      return user;
-    }
-
-    const requestedAt = now();
-    await options.repository.markUnusedVerificationTokensUsed(user.id, requestedAt);
-
-    const rawToken = createRandomToken();
-    await options.repository.createVerificationToken({
-      userId: user.id,
-      tokenHash: hashToken(rawToken),
-      expiresAt: addHours(requestedAt, 24)
-    });
-
-    const verificationUrl = new URL("/verify-email", appOrigin);
-    verificationUrl.searchParams.set("token", rawToken);
-
-    await options.emailSender.sendVerificationEmail({
-      to: user.email,
-      displayName: user.displayName,
-      verificationUrl: verificationUrl.toString()
-    });
-
-    return user;
+    void userId;
+    throw new ApiError(
+      501,
+      "EMAIL_VERIFICATION_UNAVAILABLE",
+      "Email verification is not available in this deployment."
+    );
   }
 
   async function requestPasswordReset(userId: string) {
@@ -223,10 +197,9 @@ export function createAuthService(options: AuthServiceOptions) {
         email: input.email.trim(),
         emailNormalized,
         passwordHash: await hashPassword(input.password, passwordPepper),
-        displayName: input.displayName.trim()
+        displayName: input.displayName.trim(),
+        emailVerifiedAt: now()
       });
-
-      await requestEmailVerification(user.id);
       const { sessionToken, session } = await createSession(user.id);
       return { user, session, sessionToken };
     },
@@ -301,14 +274,12 @@ export function createAuthService(options: AuthServiceOptions) {
     requestEmailVerification,
 
     async confirmEmailVerification(rawToken: string) {
-      const token = await options.repository.findVerificationTokenByHash(hashToken(rawToken));
-      if (!token || token.usedAt || token.expiresAt <= now()) {
-        throw new ApiError(400, "INVALID_OR_EXPIRED_TOKEN", "Email verification link is invalid or expired.");
-      }
-
-      const usedAt = now();
-      await options.repository.markVerificationTokenUsed(token.id, usedAt);
-      return options.repository.updateUser(token.userId, { emailVerifiedAt: usedAt });
+      void rawToken;
+      throw new ApiError(
+        501,
+        "EMAIL_VERIFICATION_UNAVAILABLE",
+        "Email verification is not available in this deployment."
+      );
     },
 
     async checkEmail(email: string) {
@@ -492,5 +463,8 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
 
 export const authService = createAuthService({
   repository: createPrismaAuthRepository(),
-  emailSender: { sendVerificationEmail, sendPasswordResetEmail }
+  emailSender: {
+    sendVerificationEmail: async () => undefined,
+    sendPasswordResetEmail
+  }
 });

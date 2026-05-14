@@ -90,6 +90,20 @@ describe("app routes", () => {
     });
   });
 
+  it("disables email verification requests in this deployment", async () => {
+    const app = createApp();
+
+    const response = await request(app).post("/auth/email/verification/request").send({});
+
+    expect(response.status).toBe(501);
+    expect(response.body).toEqual({
+      error: {
+        code: "EMAIL_VERIFICATION_UNAVAILABLE",
+        message: "Email verification is not available in this deployment."
+      }
+    });
+  });
+
   it("requires auth for agency settings updates", async () => {
     const app = createApp();
 
