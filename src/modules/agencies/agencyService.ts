@@ -129,7 +129,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     async createAgencyApplication(user: AgencyUser, input: {
       name: string;
       businessPhone: string;
-      businessEmail?: string;
+      businessEmail: string;
       country: string;
       city: string;
       logoImageId?: string;
@@ -145,8 +145,8 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         name,
         slug: slugifyAgencyName(name),
         ownerUserId: user.id,
-        businessPhone: input.businessPhone.trim(),
-        businessEmail: input.businessEmail?.trim(),
+        businessPhone: normalizeDigitsOnlyBusinessPhone(input.businessPhone),
+        businessEmail: input.businessEmail.trim(),
         country: input.country.trim(),
         city: input.city.trim(),
         logoImageId: input.logoImageId,
@@ -169,7 +169,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       assertAgencyOwnerMembership(membership);
 
       const name = input.name.trim();
-      const businessPhone = input.businessPhone.trim();
+      const businessPhone = normalizeDigitsOnlyBusinessPhone(input.businessPhone);
       const businessEmail = normalizeBusinessEmail(input.businessEmail);
       const country = input.country.trim();
       const city = input.city.trim();
@@ -315,6 +315,17 @@ function normalizeBusinessEmail(businessEmail: string | null | undefined) {
 
   const trimmed = businessEmail.trim();
   return trimmed === "" ? null : trimmed;
+}
+
+function normalizeDigitsOnlyBusinessPhone(businessPhone: string) {
+  const trimmed = businessPhone.trim();
+  if (!trimmed) {
+    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_REQUIRED", "Business phone is required.");
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_INVALID", "Business phone must contain digits only.");
+  }
+  return trimmed;
 }
 
 const ownerSelect = { id: true, email: true, displayName: true } as const;

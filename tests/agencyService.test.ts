@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { updateAgencySettingsSchema } from "../src/modules/agencies/agencySchemas";
+import { createAgencySchema, updateAgencySettingsSchema } from "../src/modules/agencies/agencySchemas";
 import {
   createAgencyService,
   type AgencyRepository,
@@ -96,12 +96,75 @@ function createService() {
 }
 
 describe("agency service", () => {
+  it("requires businessEmail when creating an agency application", () => {
+    const parsed = createAgencySchema.safeParse({
+      name: "Missing Email Travel",
+      businessPhone: "639001112222",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    if (parsed.success) {
+      throw new Error("Expected createAgencySchema to reject a missing businessEmail.");
+    }
+
+    expect(parsed.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["businessEmail"]
+        })
+      ])
+    );
+  });
+
+  it.each([
+    ["createAgencySchema", createAgencySchema],
+    ["updateAgencySettingsSchema", updateAgencySettingsSchema]
+  ])("rejects non-digit businessPhone in %s", (_schemaName, schema) => {
+    const parsed = schema.safeParse({
+      name: "Travel Studio",
+      businessPhone: "+63 900 111 2222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    if (parsed.success) {
+      throw new Error("Expected schema to reject a non-digit businessPhone.");
+    }
+
+    expect(parsed.error.issues).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          path: ["businessPhone"]
+        })
+      ])
+    );
+  });
+
+  it("rejects non-digit businessPhone at the service boundary", async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createAgencyApplication(createUser(), {
+        name: "Invalid Phone Travel",
+        businessPhone: "+63 900 111 2222",
+        businessEmail: "owner@example.com",
+        city: "Subic",
+        country: "Philippines"
+      })
+    ).rejects.toMatchObject({
+      code: "AGENCY_BUSINESS_PHONE_INVALID",
+      statusCode: 400
+    });
+  });
+
   it("creates agency applications without adding an email verification gate", async () => {
     const { service } = createService();
 
     const agency = await service.createAgencyApplication(createUser({ emailVerifiedAt: null }), {
       name: "Unverified Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -119,7 +182,7 @@ describe("agency service", () => {
 
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
       name: "North Star Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -152,7 +215,7 @@ describe("agency service", () => {
     const { service, repository } = createService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
       name: "Review Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -178,7 +241,7 @@ describe("agency service", () => {
     const { service } = createService();
     const agency = await service.createAgencyApplication(createUser(), {
       name: "Reject Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -199,7 +262,7 @@ describe("agency service", () => {
     const { service } = createService();
     const agency = await service.createAgencyApplication(createUser(), {
       name: "Suspend Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -221,7 +284,7 @@ describe("agency service", () => {
     const owner = createUser({ id: "owner-1" });
     const agency = await service.createAgencyApplication(owner, {
       name: "Original Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -229,7 +292,7 @@ describe("agency service", () => {
 
     const updated = await service.updateAgencySettings(owner, agency.id, {
       name: "Updated Travel",
-      businessPhone: "+63 900 333 4444",
+      businessPhone: "639003334444",
       businessEmail: "hello@example.com",
       city: "Olongapo City",
       country: "Philippines"
@@ -239,7 +302,7 @@ describe("agency service", () => {
       id: agency.id,
       name: "Updated Travel",
       slug: "original-travel",
-      businessPhone: "+63 900 333 4444",
+      businessPhone: "639003334444",
       businessEmail: "hello@example.com",
       city: "Olongapo City",
       country: "Philippines"
@@ -252,7 +315,7 @@ describe("agency service", () => {
     const owner = createUser({ id: "owner-1" });
     const agency = await service.createAgencyApplication(owner, {
       name: "Blank Email Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -260,7 +323,7 @@ describe("agency service", () => {
 
     const updated = await service.updateAgencySettings(owner, agency.id, {
       name: "Blank Email Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail,
       city: "Subic",
       country: "Philippines"
@@ -272,7 +335,7 @@ describe("agency service", () => {
   it("trims padded businessEmail before validation", () => {
     const parsed = updateAgencySettingsSchema.parse({
       name: "Trimmed Email Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: " hello@example.com ",
       city: "Subic",
       country: "Philippines"
@@ -285,7 +348,7 @@ describe("agency service", () => {
     const { service, repository } = createService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
       name: "Owner Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -301,7 +364,7 @@ describe("agency service", () => {
     await expect(
       service.updateAgencySettings(createUser({ id: "staff-1" }), agency.id, {
         name: "Staff Travel",
-        businessPhone: "+63 900 333 4444",
+        businessPhone: "639003334444",
         businessEmail: "hello@example.com",
         city: "Olongapo City",
         country: "Philippines"
@@ -317,7 +380,7 @@ describe("agency service", () => {
     const owner = createUser({ id: "owner-1" });
     const agency = await service.createAgencyApplication(owner, {
       name: "Disabled Owner Travel",
-      businessPhone: "+63 900 111 2222",
+      businessPhone: "639001112222",
       businessEmail: "owner@example.com",
       city: "Subic",
       country: "Philippines"
@@ -327,7 +390,7 @@ describe("agency service", () => {
     await expect(
       service.updateAgencySettings(owner, agency.id, {
         name: "Disabled Owner Update",
-        businessPhone: "+63 900 333 4444",
+        businessPhone: "639003334444",
         businessEmail: "hello@example.com",
         city: "Olongapo City",
         country: "Philippines"
