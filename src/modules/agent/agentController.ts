@@ -2,11 +2,14 @@ import type { Request, Response, NextFunction } from "express";
 import { agentService } from "./agentService";
 import { cancelAgentRun, getAgentOrchestrator, startAgentRunInBackground } from "./agentFactory";
 import { subscribeToAgentRun } from "./agentEvents";
-import { 
-  createAgentRunStreamController, 
-  replayPersistedAgentRunEvents, 
-  writeAgentEvent 
+import {
+  createAgentRunStreamController,
+  replayPersistedAgentRunEvents,
+  writeAgentEvent
 } from "./agentStream";
+import { createPrismaAgentRepository } from "./agentRepository";
+
+const agentRepository = createPrismaAgentRepository();
 
 function getAgencyId(req: Request): string {
   return (req as any).resolvedAgencyId ?? String((req.params as Record<string, string | undefined>).agencyId);
@@ -152,6 +155,24 @@ export async function listRunEvents(req: Request, res: Response, next: NextFunct
   try {
     const events = await agentService.listRunEvents(String(req.params.id));
     res.json(events);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listThreadMessages(req: Request, res: Response, next: NextFunction) {
+  try {
+    const agencyId = getAgencyId(req);
+    const threadId = String(req.params.id);
+    const cursor = typeof req.query.cursor === "string" && req.query.cursor ? req.query.cursor : null;
+    const rawLimit = Number(req.query.limit ?? 50);
+    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+
+    // Throws 404 if thread doesn't belong to agencyId — matches getThread behavior.
+    await agentService.getThread(agencyId, threadId);
+
+    const result = await agentRepository.listThreadMessages({ threadId, agencyId, cursor, limit });
+    res.json(result);
   } catch (error) {
     next(error);
   }

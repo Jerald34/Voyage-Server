@@ -286,4 +286,20 @@ export interface AgentRepository {
     }
   ): Promise<AgentRunRecord | null>;
   cancelRunIfOpen(id: string): Promise<AgentRunRecord | null>;
+  listThreadMessages(params: {
+    threadId: string;
+    agencyId: string;
+    cursor?: string | null;
+    limit: number;
+  }): Promise<{
+    messages: Array<{
+      id: string;
+      role: AgentMessageRole;
+      content: string;
+      createdAt: Date;
+      runId: string | null;
+      metadata: unknown;
+    }>;
+    nextCursor: string | null;
+  }>;
 }

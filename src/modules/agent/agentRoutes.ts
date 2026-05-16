@@ -23,6 +23,7 @@ router.use(async (request, _response, next) => {
 router.get("/threads", agentController.listThreads);
 router.post("/threads", agentController.createThread);
 router.get("/threads/:id", agentController.getThread);
+router.get("/threads/:id/messages", agentController.listThreadMessages);
 router.delete("/threads/:id", agentController.deleteThread);
 router.post("/threads/:id/approve-itinerary", agentController.approveItineraryThread);
 router.post("/threads/:id/approve", agentController.approveItineraryThread);

@@ -392,6 +392,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
           itineraries: {
             select: { id: true, status: true, version: true },
             orderBy: { createdAt: "desc" },
+            take: 1,
           },
         },
       });

@@ -336,6 +336,7 @@ model ClientTrip {
   updatedAt               DateTime         @updatedAt
 
   @@index([agencyId])
+  @@index([agencyId, createdAt])
   @@unique([id, agencyId])
   @@index([createdByUserId])
   @@index([assignedOrganizerUserId])
@@ -361,6 +362,7 @@ model Itinerary {
 
   @@index([agencyId])
   @@index([tripId])
+  @@index([tripId, createdAt])
   @@index([createdByUserId])
   @@index([status])
 }
@@ -446,6 +448,7 @@ model AgentThread {
   updatedAt       DateTime          @updatedAt
 
   @@index([agencyId])
+  @@index([agencyId, updatedAt])
   @@unique([id, agencyId])
   @@index([tripId])
   @@index([createdByUserId])
@@ -467,6 +470,7 @@ model AgentMessage {
   createdAt    DateTime         @default(now())
 
   @@index([threadId])
+  @@index([threadId, createdAt])
   @@index([runId])
   @@index([authorUserId])
   @@index([role])
@@ -578,6 +582,7 @@ model AgentRunEvent {
   @@index([runId, createdAt])
   @@index([runId, sequence])
   @@index([threadId])
+  @@index([threadId, type, createdAt])
   @@index([type])
 }
 
