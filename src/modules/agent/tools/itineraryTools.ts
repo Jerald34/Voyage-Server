@@ -282,7 +282,7 @@ export function createCreateItineraryTool(options: {
       const createdItinerary = (result as { itinerary?: { id?: string; version?: number; status?: string } } | null)?.itinerary;
       if (createdItinerary?.id && options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
-          type: "itinerary.updated",
+          type: "itinerary.created",
           payload: {
             itineraryId: createdItinerary.id,
             version: createdItinerary.version ?? null,
