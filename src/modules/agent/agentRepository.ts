@@ -49,11 +49,21 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
     },
 
     async listThreadsByAgency(agencyId) {
-      return client.agentThread.findMany({
+      const rows = await client.agentThread.findMany({
         where: { agencyId },
         orderBy: { updatedAt: "desc" },
-        include: includeThreadDetails()
-      }) as Promise<AgentThreadRecord[]>;
+        select: {
+          id: true,
+          agencyId: true,
+          tripId: true,
+          createdByUserId: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      return rows.map((row) => ({ ...row, messages: [], events: [] })) as AgentThreadRecord[];
     },
 
     async findThreadByAgency(id, agencyId) {
