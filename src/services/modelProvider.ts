@@ -848,14 +848,14 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "Could not read error body");
-      console.warn(`[Vertex Cache] create_failed: ${response.status} ${errorBody}`);
+      console.log(`[Vertex Cache] create_failed: ${response.status} ${errorBody}`);
       return null;
     }
 
     const body = (await response.json()) as { name?: unknown };
     const cacheName = typeof body.name === "string" && body.name.length > 0 ? body.name : null;
     if (cacheName) {
-      console.info(`[Vertex Cache] created: ${cacheName}`);
+      console.log(`[Vertex Cache] created: ${cacheName}`);
     }
     return cacheName;
   }
@@ -887,7 +887,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
       })
       .catch((err) => {
         cachedContentByPromptKey.delete(cacheKey);
-        console.warn(`[Vertex Cache] error: ${err?.message ?? err}`);
+        console.log(`[Vertex Cache] error: ${err?.message ?? err}`);
         return null;
       });
 
