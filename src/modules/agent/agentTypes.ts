@@ -157,6 +157,7 @@ export type AgentOrchestratorRunInput = {
   runId: string;
   userId: string;
   userContent: string;
+  imageUrls?: string[];
   signal?: AbortSignal;
 };
 
@@ -224,6 +225,7 @@ export interface AgentRepository {
     agencyId: string;
     authorUserId: string;
     content: string;
+    metadata?: unknown;
     modelProvider: string;
     modelName: string;
   }): Promise<{ message: AgentMessageRecord; run: AgentRunRecord }>;

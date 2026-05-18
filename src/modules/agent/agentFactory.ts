@@ -178,6 +178,7 @@ export async function startAgentRunInBackground(
     runId: string;
     userId: string;
     userContent: string;
+    imageUrls?: string[];
   },
   dependencies: {
     agentService?: Pick<typeof agentService, "failRun">;

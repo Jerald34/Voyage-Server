@@ -127,15 +127,18 @@ export function createAgentService(options: {
       agencyId: string,
       threadId: string,
       userId: string,
-      content: string
+      content: string,
+      imageUrls?: string[]
     ) {
-      const parsed = createMessageSchema.parse({ content });
+      const parsed = createMessageSchema.parse({ content, imageUrls });
       await this.getThread(agencyId, threadId);
+      const metadata = parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : undefined;
       const result = await options.repository.createUserMessageAndRun({
         agencyId,
         threadId,
         authorUserId: userId,
         content: parsed.content,
+        metadata,
         modelProvider,
         modelName
       });

@@ -6,7 +6,8 @@ export const createThreadSchema = z.object({
 });
 
 export const createMessageSchema = z.object({
-  content: z.string().min(1).max(12000)
+  content: z.string().min(1).max(12000),
+  imageUrls: z.array(z.string().url()).max(3).optional()
 });
 
 const optionalNullableDateSchema = z.preprocess(

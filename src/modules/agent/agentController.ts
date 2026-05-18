@@ -8,6 +8,8 @@ import {
   writeAgentEvent
 } from "./agentStream";
 import { createPrismaAgentRepository } from "./agentRepository";
+import { ApiError } from "../../http/errors";
+import { isCloudinaryConfigured, uploadChatImage } from "../../services/cloudinary";
 
 const agentRepository = createPrismaAgentRepository();
 
@@ -71,11 +73,14 @@ export async function createMessage(req: Request, res: Response, next: NextFunct
   try {
     const agencyId = getAgencyId(req);
     const userId = getUserId(req);
+    const imageUrls: string[] | undefined = Array.isArray(req.body.imageUrls) ? req.body.imageUrls : undefined;
+
     const { message, run } = await agentService.appendUserMessageAndCreateRun(
       agencyId,
       String(req.params.id),
       userId,
-      req.body.content
+      req.body.content,
+      imageUrls
     );
 
     // Background run initiation
@@ -84,7 +89,8 @@ export async function createMessage(req: Request, res: Response, next: NextFunct
       threadId: String(req.params.id),
       runId: run.id,
       userId,
-      userContent: message.content
+      userContent: message.content,
+      imageUrls
     });
 
     res.status(201).json({
@@ -93,6 +99,52 @@ export async function createMessage(req: Request, res: Response, next: NextFunct
       runId: run.id,
       threadId: String(req.params.id),
       streamUrl: `/agencies/${agencyId}/agent/runs/${run.id}/stream`
+    });
+  } catch (error) {
+    next(error);
+  }
+}
+
+const ALLOWED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp", "image/gif"]);
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+
+export async function uploadChatImages(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!isCloudinaryConfigured()) {
+      throw new ApiError(503, "IMAGE_UPLOAD_UNAVAILABLE", "Image uploads are not configured.");
+    }
+
+    const agencyId = getAgencyId(req);
+    getUserId(req); // ensure authenticated
+
+    const files = (req as any).files as Express.Multer.File[] | undefined;
+    if (!files || files.length === 0) {
+      throw new ApiError(400, "NO_IMAGES", "At least one image file is required.");
+    }
+    if (files.length > 3) {
+      throw new ApiError(400, "TOO_MANY_IMAGES", "A maximum of 3 images per message is allowed.");
+    }
+
+    for (const file of files) {
+      if (!ALLOWED_IMAGE_MIME_TYPES.has(file.mimetype)) {
+        throw new ApiError(400, "UNSUPPORTED_IMAGE_TYPE", `Unsupported image type: ${file.mimetype}. Only JPEG, PNG, WebP, and GIF are allowed.`);
+      }
+      if (file.size > MAX_IMAGE_SIZE_BYTES) {
+        throw new ApiError(400, "IMAGE_TOO_LARGE", `Image exceeds the 5MB size limit.`);
+      }
+    }
+
+    const results = await Promise.all(
+      files.map((file) => uploadChatImage(file.buffer, file.mimetype, agencyId))
+    );
+
+    res.status(201).json({
+      images: results.map((r) => ({
+        url: r.url,
+        publicId: r.publicId,
+        width: r.width,
+        height: r.height
+      }))
     });
   } catch (error) {
     next(error);

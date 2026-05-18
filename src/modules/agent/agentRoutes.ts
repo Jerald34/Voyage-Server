@@ -1,7 +1,13 @@
 import { Router } from "express";
+import multer from "multer";
 import { requireAuth } from "../../http/authMiddleware";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import * as agentController from "./agentController";
+
+const upload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 3 }
+});
 
 const router = Router({ mergeParams: true });
 
@@ -28,6 +34,7 @@ router.delete("/threads/:id", agentController.deleteThread);
 router.post("/threads/:id/approve-itinerary", agentController.approveItineraryThread);
 router.post("/threads/:id/approve", agentController.approveItineraryThread);
 router.post("/threads/:id/messages", agentController.createMessage);
+router.post("/threads/:id/images", upload.array("images", 3), agentController.uploadChatImages);
 router.get("/runs/:id/stream", agentController.runStream);
 router.post("/runs/:id/cancel", agentController.cancelRun);
 router.get("/runs/:id/events", agentController.listRunEvents);

@@ -48,7 +48,10 @@ const envSchema = z.object({
   NOMINATIM_BASE_URL: z.string().default("https://nominatim.openstreetmap.org"),
   NOMINATIM_USER_AGENT: z.string().default("Voyage-Travel-Agent/1.0"),
   SERPER_API_KEY: z.string().default(""),
-  WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5)
+  WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5),
+  CLOUDINARY_CLOUD_NAME: z.string().default(""),
+  CLOUDINARY_API_KEY: z.string().default(""),
+  CLOUDINARY_API_SECRET: z.string().default("")
 });
 
 export const env = envSchema.parse(process.env);
