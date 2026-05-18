@@ -476,7 +476,9 @@ export function createAgentOrchestrator(options: {
               onDelta: async (delta) => {
                 modelContent += delta;
                 initialMode = detectInitialOutputMode(modelContent);
-                const isRecoveryCandidate = initialMode === "text" && shouldRecoverPlainItinerary({
+                // Require at least 200 chars before considering recovery — early chunks
+                // like "Before I draft the itinerary..." are conversational, not actual itineraries.
+                const isRecoveryCandidate = initialMode === "text" && modelContent.length >= 200 && shouldRecoverPlainItinerary({
                   tools,
                   userContent: input.userContent,
                   modelContent
@@ -705,6 +707,20 @@ export function createAgentOrchestrator(options: {
         let remediationAttempts = 0;
         const maxRemediationAttempts = 3;
 
+        // Build conversation history prefix for continuation context.
+        // Without this, the continuation only sees the latest user message and loses
+        // preferences from earlier turns (e.g., "1 week", "public transpo", "relaxed pace").
+        const priorHistory = conversationHistory.filter(m => m.role !== "system").slice(0, -1);
+        const maxPriorMessages = 10;
+        let historyPrefix = priorHistory.slice(-maxPriorMessages);
+        // Ensure valid alternation: starts with user, ends with assistant
+        if (historyPrefix.length > 0 && historyPrefix[0].role !== "user") {
+          historyPrefix = historyPrefix.slice(1);
+        }
+        if (historyPrefix.length > 0 && historyPrefix[historyPrefix.length - 1].role !== "assistant") {
+          historyPrefix = historyPrefix.slice(0, -1);
+        }
+
         while (shouldContinueLoop && continuationsRun < maxContinuations && toolCallsExecuted < maxToolCallsPerRun) {
           checkCancelled();
           continuationsRun += 1;
@@ -721,6 +737,12 @@ export function createAgentOrchestrator(options: {
               role: "system" as const,
               content: buildVoyageSystemPrompt(toolListForPrompt)
             },
+            // Include earlier conversation turns so the model retains user preferences
+            // (trip duration, transport, pace, interests) from prior messages.
+            ...historyPrefix.map(msg => ({
+              role: msg.role as "system" | "user" | "assistant",
+              content: msg.content
+            })),
             {
               role: "user" as const,
               content: input.userContent

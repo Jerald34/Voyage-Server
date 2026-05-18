@@ -10,6 +10,16 @@ export function looksLikeTripPlanningRequest(content: string) {
   return /\b(itinerary|trip|travel|tour|plan|draft)\b/i.test(content);
 }
 
+/**
+ * Stricter check for model output — requires actual itinerary structure patterns
+ * (day numbers or clock times), not just the keyword "itinerary".
+ * Prevents false positives on conversational responses like
+ * "Before I draft the itinerary, let me ask a few questions..."
+ */
+function looksLikeActualItineraryOutput(content: string) {
+  return /\bday\s+\d+\b/i.test(content) || /\b\d{1,2}:\d{2}\s*(AM|PM)\b/i.test(content);
+}
+
 export function shouldRecoverPlainItinerary(options: {
   tools: Set<string>;
   userContent: string;
@@ -17,7 +27,7 @@ export function shouldRecoverPlainItinerary(options: {
 }) {
   return (
     options.tools.has("create_itinerary") &&
-    looksLikeItineraryText(options.modelContent) &&
+    looksLikeActualItineraryOutput(options.modelContent) &&
     (looksLikeTripPlanningRequest(options.userContent) || looksLikeItineraryText(options.userContent))
   );
 }
