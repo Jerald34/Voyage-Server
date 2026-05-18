@@ -251,7 +251,8 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             threadId: data.threadId,
             authorUserId: data.authorUserId,
             role: "USER",
-            content: data.content
+            content: data.content,
+            metadata: toJsonInput(data.metadata)
           }
         });
         const run = await tx.agentRun.create({

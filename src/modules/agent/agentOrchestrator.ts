@@ -1,5 +1,5 @@
 import { ApiError } from "../../http/errors";
-import type { ModelProvider, ModelUsage } from "../../services/modelProvider";
+import type { ModelProvider, ModelUsage, ModelMessage, ModelMessagePart } from "../../services/modelProvider";
 import type { AgentRunRecord, AgentMessageRecord, AgentRunEventRecord } from "./agentTypes";
 import { agentLogger } from "./agentLogger";
 import type { AgentEvent } from "./agentSchemas";
@@ -383,7 +383,7 @@ export function createAgentOrchestrator(options: {
           payload: { runId: input.runId }
         });
 
-        let conversationHistory: Array<{ role: "system" | "user" | "assistant"; content: string }> = [];
+        let conversationHistory: ModelMessage[] = [];
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
@@ -404,12 +404,31 @@ export function createAgentOrchestrator(options: {
           // If history lookup fails, continue with the current message only.
         }
 
+        // Build multimodal image parts for the current user message if images were attached.
+        let userImageParts: ModelMessagePart[] = [];
+        if (input.imageUrls?.length) {
+          try {
+            const fetched = await Promise.all(
+              input.imageUrls.map(async (url) => {
+                const response = await fetch(url);
+                if (!response.ok) return null;
+                const buffer = Buffer.from(await response.arrayBuffer());
+                const mimeType = response.headers.get("content-type") || "image/jpeg";
+                return { inlineData: { mimeType, data: buffer.toString("base64") } } as ModelMessagePart;
+              })
+            );
+            userImageParts = fetched.filter((part): part is ModelMessagePart => part !== null);
+          } catch {
+            // If image fetch fails, continue with text-only — don't block the run.
+          }
+        }
+
         let modelContent = "";
         let modelUsage: ModelUsage | undefined;
         let initialMode: "text" | "json" = "text";
         let recoveryNotified = false;
         try {
-          const historyOrCurrent =
+          const historyOrCurrent: ModelMessage[] =
             conversationHistory.length > 0
               ? conversationHistory
               : [
@@ -418,6 +437,21 @@ export function createAgentOrchestrator(options: {
                   content: input.userContent
                 }
               ];
+
+          // Attach image parts to the last user message in the conversation.
+          if (userImageParts.length > 0) {
+            let lastUserIdx = -1;
+            for (let i = historyOrCurrent.length - 1; i >= 0; i--) {
+              if (historyOrCurrent[i].role === "user") { lastUserIdx = i; break; }
+            }
+            if (lastUserIdx >= 0) {
+              const lastUserMsg = historyOrCurrent[lastUserIdx];
+              historyOrCurrent[lastUserIdx] = {
+                ...lastUserMsg,
+                parts: [{ text: lastUserMsg.content }, ...userImageParts]
+              };
+            }
+          }
 
           const initialRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
           const historyWithContext = injectRuntimeContextIntoLastUser(

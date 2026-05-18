@@ -26,3 +26,14 @@ publicShareRoutes.post("/:token/comments", async (request, response, next) => {
     next(error);
   }
 });
+
+// GET /shared/:token/comments — list comments on a shared itinerary (no auth required)
+publicShareRoutes.get("/:token/comments", async (request, response, next) => {
+  try {
+    const token = String(request.params.token);
+    const comments = await shareService.listPublicComments(token);
+    response.json({ comments });
+  } catch (error) {
+    next(error);
+  }
+});

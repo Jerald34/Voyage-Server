@@ -64,6 +64,18 @@ shareRoutes.get("/unread-count", async (request, response, next) => {
   }
 });
 
+// GET /agencies/:agencyId/shares/unread-counts-by-trip — per-trip unread counts
+// NOTE: this route must be declared before /:shareId to avoid param shadowing
+shareRoutes.get("/unread-counts-by-trip", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const counts = await shareService.getUnreadCommentCountsByTrip(agencyId);
+    response.json({ counts });
+  } catch (error) {
+    next(error);
+  }
+});
+
 // DELETE /agencies/:agencyId/shares/:shareId — revoke a share
 shareRoutes.delete("/:shareId", async (request, response, next) => {
   try {

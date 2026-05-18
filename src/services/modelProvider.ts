@@ -5,9 +5,14 @@ import { env } from "../config/env";
 import { ApiError } from "../http/errors";
 import { GoogleAuth } from "google-auth-library";
 
+export type ModelMessagePart =
+  | { text: string }
+  | { inlineData: { mimeType: string; data: string } };
+
 export type ModelMessage = {
   role: "system" | "user" | "assistant";
   content: string;
+  parts?: ModelMessagePart[];
 };
 
 export type ModelUsage = {
@@ -479,7 +484,9 @@ function normalizeModelMessages(messages: ModelMessage[]) {
 
   const contents = conversationMessages.map((message) => ({
     role: message.role === "assistant" ? ("model" as const) : ("user" as const),
-    parts: [{ text: message.content }]
+    parts: message.parts && message.parts.length > 0
+      ? message.parts
+      : [{ text: message.content }]
   }));
 
   const systemInstruction =
