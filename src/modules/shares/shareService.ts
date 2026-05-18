@@ -100,6 +100,7 @@ export interface ShareRepository {
   listSharesForTrip(agencyId: string, tripId: string): Promise<ShareRecord[]>;
   listAllSharesForAgency(agencyId: string): Promise<ShareRecord[]>;
   addComment(shareId: string, input: AddCommentInput): Promise<CommentRecord>;
+  listCommentsByShareId(shareId: string): Promise<CommentRecord[]>;
   listComments(agencyId: string, shareId: string): Promise<CommentRecord[]>;
   replyToComment(
     agencyId: string,
@@ -107,6 +108,7 @@ export interface ShareRepository {
     content: string
   ): Promise<CommentRecord>;
   getUnreadCommentCount(agencyId: string): Promise<number>;
+  getUnreadCommentCountsByTrip(agencyId: string): Promise<Array<{ tripId: string; count: number }>>;
 }
 
 // ---------- Service factory ----------
@@ -176,6 +178,25 @@ export function createShareService(options: { repository: ShareRepository }) {
       return options.repository.addComment(share.id, input);
     },
 
+    async listPublicComments(token: string) {
+      const data = await options.repository.findShareByToken(token);
+      if (!data) {
+        throw new ApiError(404, "SHARE_NOT_FOUND", "Share link not found.");
+      }
+
+      const { share } = data;
+
+      if (share.revokedAt !== null) {
+        throw new ApiError(410, "SHARE_REVOKED", "This share link has been revoked.");
+      }
+
+      if (share.expiresAt !== null && share.expiresAt <= new Date()) {
+        throw new ApiError(410, "SHARE_EXPIRED", "This share link has expired.");
+      }
+
+      return options.repository.listCommentsByShareId(share.id);
+    },
+
     async listComments(agencyId: string, shareId: string) {
       assertUuid(agencyId, "agencyId");
       return options.repository.listComments(agencyId, shareId);
@@ -189,6 +210,11 @@ export function createShareService(options: { repository: ShareRepository }) {
     async getUnreadCommentCount(agencyId: string) {
       assertUuid(agencyId, "agencyId");
       return options.repository.getUnreadCommentCount(agencyId);
+    },
+
+    async getUnreadCommentCountsByTrip(agencyId: string) {
+      assertUuid(agencyId, "agencyId");
+      return options.repository.getUnreadCommentCountsByTrip(agencyId);
     }
   };
 }
@@ -385,6 +411,14 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
       return comment as CommentRecord;
     },
 
+    async listCommentsByShareId(shareId) {
+      const comments = await client.itineraryComment.findMany({
+        where: { shareId },
+        orderBy: { createdAt: "asc" }
+      });
+      return comments as CommentRecord[];
+    },
+
     async listComments(agencyId, shareId) {
       // Verify the share belongs to this agency
       const share = await client.itineraryShare.findFirst({
@@ -437,6 +471,26 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
           share: { agencyId }
         }
       });
+    },
+
+    async getUnreadCommentCountsByTrip(agencyId) {
+      const shares = await client.itineraryShare.findMany({
+        where: { agencyId },
+        select: {
+          tripId: true,
+          _count: {
+            select: { comments: { where: { status: "PENDING" } } }
+          }
+        }
+      });
+      const perTrip = new Map<string, number>();
+      for (const share of shares) {
+        const prev = perTrip.get(share.tripId) ?? 0;
+        perTrip.set(share.tripId, prev + share._count.comments);
+      }
+      return [...perTrip.entries()]
+        .filter(([, count]) => count > 0)
+        .map(([tripId, count]) => ({ tripId, count }));
     }
   };
 }
