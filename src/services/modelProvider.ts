@@ -704,6 +704,24 @@ function hasLocalAdcCredentials() {
   return candidates.some((filePath) => existsSync(filePath));
 }
 
+function resolveServiceAccountAuth(): GoogleAuth | null {
+  const saJson = env.GOOGLE_SA_CREDENTIALS;
+  if (!saJson) {
+    return null;
+  }
+
+  try {
+    const credentials = JSON.parse(saJson);
+    return new GoogleAuth({
+      credentials,
+      scopes: ["https://www.googleapis.com/auth/cloud-platform"]
+    });
+  } catch {
+    console.log("[Vertex Auth] Failed to parse GOOGLE_SA_CREDENTIALS, falling back to API key.");
+    return null;
+  }
+}
+
 function estimateVertexCost(model: string, usage: ReturnType<typeof extractVertexUsage>) {
   if (!usage) {
     return undefined;
@@ -778,18 +796,23 @@ function buildVertexModelResource(model: string, projectId: string, location: st
 
 export function createGoogleVertexModelProvider(options: VertexAiModelProviderOptions = {}): ModelProvider {
   const model = options.model ?? env.GOOGLE_AI_MODEL ?? DEFAULT_GOOGLE_AI_MODEL;
-  const hasAdc = hasLocalAdcCredentials() || Boolean(options.auth);
+  const resolvedAuth = options.auth ?? resolveServiceAccountAuth();
+  const hasAdc = resolvedAuth !== null || hasLocalAdcCredentials();
   const apiKey = hasAdc ? "" : (options.apiKey ?? env.GOOGLE_CLOUD_API_KEY).trim();
   const projectId = (options.projectId ?? env.GOOGLE_CLOUD_PROJECT).trim();
   const location = (options.location ?? env.GOOGLE_CLOUD_LOCATION).trim() || "global";
   const timeoutMs = options.timeoutMs ?? 120000;
   const fetchImpl = options.fetchImpl ?? fetch;
-  const auth = options.auth ?? new GoogleAuth({
+  const auth = resolvedAuth ?? new GoogleAuth({
     scopes: ["https://www.googleapis.com/auth/cloud-platform"]
   });
 
-  if (!apiKey && !hasLocalAdcCredentials() && !options.auth) {
-    throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Configure a Google Cloud API key.");
+  if (!apiKey && !hasAdc) {
+    throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Configure a Google Cloud API key or GOOGLE_SA_CREDENTIALS.");
+  }
+
+  if (hasAdc && !apiKey) {
+    console.log(`[Vertex Auth] Using ${resolvedAuth ? "service account" : "ADC"} authentication (caching enabled)`);
   }
 
   function makePromptCacheKey(systemInstructionText: string, resolvedProjectId: string) {
@@ -1162,7 +1185,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
 }
 
 export function createGoogleModelProvider(options: GoogleModelProviderOptions = {}): ModelProvider {
-  if (options.apiKey || env.GOOGLE_CLOUD_API_KEY || hasLocalAdcCredentials() || options.auth) {
+  if (options.apiKey || env.GOOGLE_CLOUD_API_KEY || env.GOOGLE_SA_CREDENTIALS || hasLocalAdcCredentials() || options.auth) {
     return createGoogleVertexModelProvider(options);
   }
 
@@ -1248,7 +1271,7 @@ function resolveModelProviderSelection() {
     };
   }
 
-  if (env.GOOGLE_CLOUD_API_KEY || hasLocalAdcCredentials()) {
+  if (env.GOOGLE_CLOUD_API_KEY || env.GOOGLE_SA_CREDENTIALS || hasLocalAdcCredentials()) {
     return {
       provider: "vertex" as const,
       model: env.GOOGLE_AI_MODEL ?? DEFAULT_GOOGLE_AI_MODEL,

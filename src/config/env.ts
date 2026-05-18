@@ -41,6 +41,7 @@ const envSchema = z.object({
   GOOGLE_CLOUD_API_KEY: z.string().default(""),
   GOOGLE_CLOUD_PROJECT: z.string().default(""),
   GOOGLE_CLOUD_LOCATION: z.string().default("global"),
+  GOOGLE_SA_CREDENTIALS: z.string().default(""),
   GOOGLE_AI_API_KEY: z.string().default(""),
   GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-3-flash-preview"),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
