@@ -707,7 +707,11 @@ function estimateVertexCost(model: string, usage: ReturnType<typeof extractVerte
     return undefined;
   }
 
-  const promptCost = (usage.promptTokenCount / 1_000_000) * pricing.inputPerMillionTokens;
+  const cachedTokens = usage.cachedContentTokenCount ?? 0;
+  const uncachedPromptTokens = usage.promptTokenCount - cachedTokens;
+  const promptCost =
+    (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillionTokens +
+    (cachedTokens / 1_000_000) * pricing.inputPerMillionTokens * 0.25;
   const outputCost = (usage.candidatesTokenCount / 1_000_000) * pricing.outputPerMillionTokens;
 
   return {
@@ -755,14 +759,6 @@ function buildExpressVertexEndpoint(model: string, apiKey: string, stream = fals
   return `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${encodeGoogleModel(model)}:${method}?key=${encodeURIComponent(apiKey)}`;
 }
 
-function buildVertexCountTokensEndpoint(model: string, projectId: string, location: string) {
-  return `https://aiplatform.googleapis.com/v1/projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeGoogleModel(model)}:countTokens`;
-}
-
-function buildExpressVertexCountTokensEndpoint(model: string, apiKey: string) {
-  return `https://aiplatform.googleapis.com/v1beta1/publishers/google/models/${encodeGoogleModel(model)}:countTokens?key=${encodeURIComponent(apiKey)}`;
-}
-
 function buildVertexCachedContentsEndpoint(projectId: string, location: string, apiKey?: string) {
   const version = apiKey ? "v1beta1" : "v1";
   const keyParam = apiKey ? `?key=${encodeURIComponent(apiKey)}` : "";
@@ -771,10 +767,6 @@ function buildVertexCachedContentsEndpoint(projectId: string, location: string, 
 
 function buildVertexModelResource(model: string, projectId: string, location: string) {
   return `projects/${encodeURIComponent(projectId)}/locations/${encodeURIComponent(location)}/publishers/google/models/${encodeGoogleModel(model)}`;
-}
-
-function getVertexCacheMinimumTokens(model: string) {
-  return /^gemini-3(?:\.1)?-/i.test(model) ? 4096 : 2048;
 }
 
 export function createGoogleVertexModelProvider(options: VertexAiModelProviderOptions = {}): ModelProvider {
@@ -805,20 +797,6 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
       .digest("hex");
   }
 
-  const loggedApiKeyCacheWarning = new Set<string>();
-
-  function logApiKeyCacheWarningOnce(systemInstructionText: string) {
-    const warningKey = createHash("sha256").update(model).update("\0").update(systemInstructionText).digest("hex");
-    if (loggedApiKeyCacheWarning.has(warningKey)) {
-      return;
-    }
-
-    loggedApiKeyCacheWarning.add(warningKey);
-    console.warn(
-      "[Vertex Cache] disabled: explicit cachedContent creation requires ADC/OAuth standard Vertex; API-key express mode will generate without explicit cache."
-    );
-  }
-
   async function resolveVertexProjectId() {
     const resolvedProjectId = projectId || (await auth.getProjectId()) || "";
     if (!resolvedProjectId) {
@@ -840,41 +818,6 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
     return accessToken;
   }
 
-  async function countVertexTokens(systemInstructionText: string, resolvedProjectId: string) {
-    const headers: Record<string, string> = {
-      "Content-Type": "application/json"
-    };
-
-    if (!apiKey) {
-      headers.Authorization = `Bearer ${await getVertexAccessTokenIfNeeded()}`;
-    }
-
-    const response = await fetchImpl(
-      apiKey
-        ? buildExpressVertexCountTokensEndpoint(model, apiKey)
-        : buildVertexCountTokensEndpoint(model, resolvedProjectId, location),
-      {
-        method: "POST",
-        headers,
-        body: JSON.stringify({
-          model: buildVertexModelResource(model, resolvedProjectId, location),
-          systemInstruction: {
-            parts: [{ text: systemInstructionText }]
-          }
-        })
-      }
-    );
-
-    if (!response.ok) {
-      const errorBody = await response.text().catch(() => "Could not read error body");
-      console.warn(`[Vertex Cache] count_failed: ${response.status} ${errorBody}`);
-      return null;
-    }
-
-    const body = (await response.json()) as { totalTokens?: unknown };
-    return typeof body.totalTokens === "number" ? body.totalTokens : null;
-  }
-
   async function createVertexCachedContent(systemInstructionText: string, resolvedProjectId: string) {
     const headers: Record<string, string> = {
       "Content-Type": "application/json"
@@ -891,7 +834,8 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
         model: buildVertexModelResource(model, resolvedProjectId, location),
         systemInstruction: {
           parts: [{ text: systemInstructionText }]
-        }
+        },
+        ttl: "1800s"
       })
     });
 
@@ -911,15 +855,10 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
 
   const cachedContentByPromptKey = new Map<string, Promise<string | null>>();
 
-  async function getCachedContentForPrompt(systemInstructionText: string | undefined) {
-    if (!systemInstructionText) {
-      return undefined;
-    }
+  const MIN_CHARS_FOR_CACHING = 3000;
 
-    if (apiKey) {
-      if (systemInstructionText.length >= 16_000) {
-        logApiKeyCacheWarningOnce(systemInstructionText);
-      }
+  async function getCachedContentForPrompt(systemInstructionText: string | undefined) {
+    if (!systemInstructionText || systemInstructionText.length < MIN_CHARS_FOR_CACHING) {
       return undefined;
     }
 
@@ -930,18 +869,20 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
       return existing;
     }
 
-    const minimumTokens = getVertexCacheMinimumTokens(model);
-    const promise = (async () => {
-      const totalTokens = await countVertexTokens(systemInstructionText, resolvedProjectId);
-      if (typeof totalTokens !== "number" || totalTokens < minimumTokens) {
-        console.info(
-          `[Vertex Cache] skipped: systemInstructionTokens=${totalTokens ?? "unknown"} minimum=${minimumTokens}`
-        );
-        return null;
-      }
+    const EVICT_BEFORE_TTL_MS = 25 * 60 * 1000;
 
-      return createVertexCachedContent(systemInstructionText, resolvedProjectId);
-    })().catch(() => null);
+    const promise = createVertexCachedContent(systemInstructionText, resolvedProjectId)
+      .then((cacheName) => {
+        if (cacheName) {
+          setTimeout(() => cachedContentByPromptKey.delete(cacheKey), EVICT_BEFORE_TTL_MS);
+        }
+        return cacheName;
+      })
+      .catch((err) => {
+        cachedContentByPromptKey.delete(cacheKey);
+        console.warn(`[Vertex Cache] error: ${err?.message ?? err}`);
+        return null;
+      });
 
     cachedContentByPromptKey.set(cacheKey, promise);
     return promise;

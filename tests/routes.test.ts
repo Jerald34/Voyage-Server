@@ -90,6 +90,31 @@ describe("app routes", () => {
     });
   });
 
+  it("rejects registration when the password matches the display name", async () => {
+    const app = createApp();
+
+    const response = await request(app).post("/auth/register").send({
+      email: "new-user@example.com",
+      password: "New User",
+      displayName: "New User"
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Request validation failed.",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "custom",
+            path: ["password"],
+            message: "Password must be different from your name and email."
+          })
+        ])
+      }
+    });
+  });
+
   it("disables email verification requests in this deployment", async () => {
     const app = createApp();
 
@@ -109,7 +134,7 @@ describe("app routes", () => {
 
     const response = await request(app).patch("/agencies/agency-1/settings").send({
       name: "Updated Agency",
-      businessPhone: "+63 900 333 4444",
+      businessPhone: "639003334444",
       businessEmail: "hello@example.com",
       city: "Olongapo City",
       country: "Philippines"

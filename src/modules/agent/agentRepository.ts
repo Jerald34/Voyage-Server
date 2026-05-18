@@ -49,11 +49,21 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
     },
 
     async listThreadsByAgency(agencyId) {
-      return client.agentThread.findMany({
+      const rows = await client.agentThread.findMany({
         where: { agencyId },
         orderBy: { updatedAt: "desc" },
-        include: includeThreadDetails()
-      }) as Promise<AgentThreadRecord[]>;
+        select: {
+          id: true,
+          agencyId: true,
+          tripId: true,
+          createdByUserId: true,
+          title: true,
+          status: true,
+          createdAt: true,
+          updatedAt: true,
+        },
+      });
+      return rows.map((row) => ({ ...row, messages: [], events: [] })) as AgentThreadRecord[];
     },
 
     async findThreadByAgency(id, agencyId) {
@@ -493,6 +503,20 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       });
       if (update.count === 0) return null;
       return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
+    },
+
+    async listThreadMessages({ threadId, agencyId, cursor, limit }) {
+      const rows = await client.agentMessage.findMany({
+        where: { threadId, thread: { agencyId } },
+        orderBy: { createdAt: "desc" },
+        take: limit + 1,
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
+        select: { id: true, role: true, content: true, createdAt: true, runId: true, metadata: true },
+      });
+      const hasMore = rows.length > limit;
+      const messages = hasMore ? rows.slice(0, limit) : rows;
+      const nextCursor = hasMore ? rows[limit - 1]?.id ?? null : null;
+      return { messages, nextCursor };
     }
   };
 }

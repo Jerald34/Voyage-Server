@@ -12,6 +12,7 @@ import { imageRoutes } from "./modules/images/imageRoutes";
 import { itineraryRoutes } from "./modules/itineraries/itineraryRoutes";
 import { shareRoutes } from "./modules/shares/shareRoutes";
 import { publicShareRoutes } from "./modules/shares/publicShareRoutes";
+import { workspaceRoutes } from "./modules/workspace/workspaceRoutes";
 
 export function createApp() {
   const app = express();
@@ -39,6 +40,7 @@ export function createApp() {
   app.use("/agencies", agencyRoutes);
   app.use("/agencies/:agencyId/agent", agentRoutes);
   app.use("/agencies/:agencyId/itineraries", itineraryRoutes);
+  app.use("/agencies/:agencyId/workspace", workspaceRoutes);
   app.use("/agencies/:agencyId/shares", shareRoutes);
   app.use("/shared", publicShareRoutes);
   app.use("/admin", adminRoutes);
