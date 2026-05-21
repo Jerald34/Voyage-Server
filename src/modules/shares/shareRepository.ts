@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
@@ -266,23 +267,26 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
     },
 
     async getUnreadCommentCountsByTrip(agencyId) {
-      const shares = await client.itineraryShare.findMany({
-        where: { agencyId },
-        select: {
-          tripId: true,
-          _count: {
-            select: { comments: { where: { status: "PENDING" } } }
-          }
-        }
-      });
-      const perTrip = new Map<string, number>();
-      for (const share of shares) {
-        const prev = perTrip.get(share.tripId) ?? 0;
-        perTrip.set(share.tripId, prev + share._count.comments);
-      }
-      return [...perTrip.entries()]
-        .filter(([, count]) => count > 0)
-        .map(([tripId, count]) => ({ tripId, count }));
+      // Aggregate at the database. The previous implementation pulled one row per share
+      // and reduced in JS — for agencies with thousands of shares that's an unbounded
+      // wire payload on a hot endpoint (the dashboard's unread-badge poller). Doing the
+      // GROUP BY in SQL returns at most one row per trip with a pending comment.
+      //
+      // We use `$queryRaw` because Prisma's typed `groupBy` cannot group across a relation
+      // (`tripId` lives on ItineraryShare, the count lives on ItineraryComment). The cast
+      // to ::int avoids the bigint-string serialization Prisma applies to raw COUNT(*).
+      const rows = await client.$queryRaw<Array<{ tripId: string; count: number }>>(
+        Prisma.sql`
+          SELECT s."tripId" AS "tripId", COUNT(*)::int AS "count"
+          FROM "ItineraryComment" c
+          INNER JOIN "ItineraryShare" s ON s."id" = c."shareId"
+          WHERE s."agencyId" = ${agencyId}::uuid
+            AND c."status" = 'PENDING'
+          GROUP BY s."tripId"
+          HAVING COUNT(*) > 0
+        `
+      );
+      return rows;
     }
   };
 }

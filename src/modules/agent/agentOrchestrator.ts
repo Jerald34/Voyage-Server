@@ -40,7 +40,8 @@ import {
   countItineraryItems,
   availableToolSet,
   buildRuntimeContextBlock,
-  injectRuntimeContextIntoLastUser
+  injectRuntimeContextIntoLastUser,
+  makeCompactToolOutput
 } from "./agentContextBuilder";
 
 async function streamModelCompletion(options: {
@@ -355,12 +356,18 @@ export function createAgentOrchestrator(options: {
 
             try {
               const output = await options.toolRegistry.execute(toolCall.name, context, normalizedToolInput);
-              toolResults.push({ name: toolCall.name, output });
+              // Update the in-memory active itinerary BEFORE compacting, so the running
+              // state captures the full snapshot. After that, the orchestrator only needs a
+              // compact delta in `toolResults` — the full itinerary is reachable via
+              // `activeItineraryContext` for in-loop prompts and via the persisted
+              // `tool.completed` event for cross-message recovery.
               activeItineraryContext = applyToolResultToItineraryContext(
                 activeItineraryContext,
                 toolCall.name,
                 output
               );
+              const compactOutput = makeCompactToolOutput(toolCall.name, output);
+              toolResults.push({ name: toolCall.name, output: compactOutput });
               await options.agentService.completeToolCall(persistedToolCall.id, output, now());
               await options.agentService.recordRunEvent(run, {
                 type: "tool.completed",

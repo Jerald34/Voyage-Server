@@ -165,6 +165,50 @@ export function applyToolResultToItineraryContext(
   };
 }
 
+// Compact form of an itinerary-mutating tool's output for in-memory accumulation in the
+// orchestrator's `toolResults` array. The full itinerary snapshot is large (tens of KB for
+// a 30-stop trip) and the model only needs the cumulative state once per turn — the
+// orchestrator already injects that via `activeItineraryContext`. Keeping the full snapshot
+// in every entry of `toolResults[]` causes O(turns × itinerary-size) memory growth and
+// bloats the synthesis prompt's tail.
+//
+// IMPORTANT: We ONLY compact the granular Approach-B tools (`add_itinerary_item`, etc.) —
+// those are the ones invoked dozens of times per run. The one-shot tools `create_itinerary`
+// and `update_itinerary` keep their full output because `recoverSynthesizedMessage`
+// (agentUtils.ts) reads `output.itinerary.title` / `.days[].items[]` from them to build a
+// readable fallback summary when synthesis degenerates into placeholder text. Stripping
+// those fields would silently break the fallback.
+//
+// For the granular tools we replace `output.itinerary` with a tiny `{ id, version,
+// dayCount, itemCount }` marker. The tools' delta fields (`dayId`, `itemId`, `item`,
+// `routeFromPrevious`, etc.) are preserved — those are precisely the per-turn signal the
+// model needs to know what just changed.
+//
+// The full output is still persisted in the `tool.completed` AgentRunEvent so cross-message
+// recovery via `buildActiveItineraryContext` continues to work.
+export function makeCompactToolOutput(toolName: string, output: unknown): unknown {
+  if (!GRANULAR_ITINERARY_TOOL_NAMES.has(toolName) || !isRecordLike(output)) {
+    return output;
+  }
+
+  const fullItinerary = output.itinerary;
+  if (!isRecordLike(fullItinerary)) {
+    return output;
+  }
+
+  const { dayCount, itemCount } = countItineraryItems(fullItinerary);
+  const summary: Record<string, unknown> = {
+    id: typeof fullItinerary.id === "string" ? fullItinerary.id : undefined,
+    version: typeof fullItinerary.version === "number" ? fullItinerary.version : undefined,
+    status: typeof fullItinerary.status === "string" ? fullItinerary.status : undefined,
+    dayCount,
+    itemCount,
+    _compact: true
+  };
+
+  return { ...output, itinerary: summary };
+}
+
 // Count items across all days. Used to detect premature termination after plan_itinerary
 // (model jumps to plain text before populating any stops).
 export function countItineraryItems(itinerary: Record<string, unknown> | undefined | null): { dayCount: number; itemCount: number } {
