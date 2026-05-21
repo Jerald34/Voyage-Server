@@ -26,6 +26,26 @@ function toJsonInput(value: unknown): Prisma.InputJsonValue | undefined {
   return value === undefined ? undefined : (value as Prisma.InputJsonValue);
 }
 
+/**
+ * Acquire a per-run advisory lock for the lifetime of the current transaction.
+ *
+ * `nextRunEventSequence` performs a read-then-write (`MAX(sequence) + 1`) and is therefore
+ * vulnerable to a race when two transactions for the same run interleave: both observe the
+ * same max value and both write the same next sequence, producing duplicate `sequence`
+ * numbers within the run. Postgres' default READ COMMITTED isolation does not protect us
+ * here because the read is against pre-existing rows, not the row we are about to insert.
+ *
+ * Calling this at the top of any transaction that uses `nextRunEventSequence` serializes
+ * concurrent transactions on the same `runId`. The lock is released automatically when the
+ * transaction commits or rolls back (that's what `_xact_` means). Different runIds do not
+ * block each other because the lock key is derived from the runId via `hashtext`.
+ */
+async function lockRunForSequence(client: Prisma.TransactionClient, runId: string) {
+  // `hashtext` returns int; cast to bigint so we use the single-key `pg_advisory_xact_lock`
+  // signature unambiguously.
+  await client.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${runId})::bigint)`;
+}
+
 async function nextRunEventSequence(client: Prisma.TransactionClient, runId: string) {
   const aggregate = await client.agentRunEvent.aggregate({
     where: { runId },
@@ -289,6 +309,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
 
     async createRunEvent(data) {
       return client.$transaction(async (tx) => {
+        await lockRunForSequence(tx, data.runId);
         const sequence = await nextRunEventSequence(tx, data.runId);
         return tx.agentRunEvent.create({
           data: {
@@ -338,6 +359,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
 
     async createTaskAndEvent(data) {
       return client.$transaction(async (tx) => {
+        await lockRunForSequence(tx, data.runId);
         const resolvedSortOrder =
           data.sortOrder ??
           ((await tx.agentTask.aggregate({
@@ -375,6 +397,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
 
     async createSourcesAndEvents(data) {
       return client.$transaction(async (tx) => {
+        await lockRunForSequence(tx, data.runId);
         const created: AgentSourceRecord[] = [];
         const events: AgentRunEventRecord[] = [];
         let sequence = await nextRunEventSequence(tx, data.runId);
@@ -419,6 +442,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
 
     async completeRunIfOpen(id, data) {
       return client.$transaction(async (tx) => {
+        await lockRunForSequence(tx, id);
         const update = await tx.agentRun.updateMany({
           where: {
             id,
