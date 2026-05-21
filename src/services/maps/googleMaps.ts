@@ -1,4 +1,4 @@
-import { env } from "../../config/env";
+import { env, publicApiOrigin } from "../../config/env";
 import { ApiError } from "../../http/errors";
 import type { GeoPoint, MapsProvider, PlaceDetailsResult, PlaceSearchResult, RouteEstimateResult, ResolvedPlace } from "./types";
 import { parseNumber, parseDurationSeconds, parseRoute, parsePlace, parseResponseArray, isRecord, parseString, readJsonResponse } from "./parsing";
@@ -7,7 +7,17 @@ type GoogleMapsProviderOptions = {
   apiKey?: string;
   timeoutMs?: number;
   fetchImpl?: typeof fetch;
+  /**
+   * Base origin to use when building `photoUri` proxy URLs. Defaults to the resolved
+   * `publicApiOrigin` env value. Override only in tests.
+   */
+  photoProxyOrigin?: string;
 };
+
+// Default photo dimensions requested from the upstream Google Places media endpoint.
+// These match the previous behavior of the direct-URL implementation.
+const DEFAULT_PHOTO_WIDTH_PX = 1000;
+const DEFAULT_PHOTO_HEIGHT_PX = 1000;
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
@@ -27,6 +37,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
   const apiKey = (options.apiKey ?? env.GOOGLE_MAPS_API_KEY).trim();
   const timeoutMs = options.timeoutMs ?? DEFAULT_PROVIDER_TIMEOUT_MS;
   const fetchImpl = options.fetchImpl ?? fetch;
+  const photoProxyOrigin = (options.photoProxyOrigin ?? publicApiOrigin).replace(/\/+$/, "");
 
   if (!apiKey) {
     throw mapsUnavailable("Google Maps provider is not configured.");
@@ -175,10 +186,18 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
       const photos = response.photos.slice(0, maxResults);
       return photos.map((photo: any) => {
         const name = photo.name; // e.g. "places/PLACE_ID/photos/PHOTO_ID"
-        // New API uses photo names directly for media requests
+        // Route through our server-side proxy instead of embedding the API key in the URL.
+        // The proxy fetches the upstream media with the server's key and streams the bytes
+        // back. The `name` is opaque to the client — it can only resolve to a Google photo
+        // we've already resolved server-side.
+        const proxyQuery = new URLSearchParams({
+          name,
+          w: String(DEFAULT_PHOTO_WIDTH_PX),
+          h: String(DEFAULT_PHOTO_HEIGHT_PX)
+        }).toString();
         return {
           name,
-          photoUri: `https://places.googleapis.com/v1/${name}/media?key=${apiKey}&maxHeightPx=1000&maxWidthPx=1000`
+          photoUri: `${photoProxyOrigin}/images/place-photo?${proxyQuery}`
         };
       });
     },

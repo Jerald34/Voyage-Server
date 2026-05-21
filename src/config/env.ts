@@ -6,6 +6,10 @@ const envSchema = z.object({
   PORT: z.coerce.number().int().positive().default(4000),
   DATABASE_URL: z.string().default("postgresql://postgres:postgres@localhost:5432/voyage"),
   APP_ORIGIN: z.string().default("http://localhost:3000"),
+  // Public origin of THIS API server, used to build absolute URLs (e.g. the photo proxy)
+  // that get embedded in tool outputs and persisted in PlaceSnapshot metadata. Defaults to
+  // the loopback PORT so local dev works; production must set this to the deployed URL.
+  PUBLIC_API_ORIGIN: z.string().default(""),
   SESSION_COOKIE_NAME: z.string().default("voyage_session"),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   PASSWORD_PEPPER: z.string().default(""),
@@ -60,3 +64,8 @@ export const env = envSchema.parse(process.env);
 export function isProduction() {
   return env.NODE_ENV === "production";
 }
+
+// Resolved post-parse because the default depends on PORT (which is itself parsed from env).
+export const publicApiOrigin = env.PUBLIC_API_ORIGIN.trim() !== ""
+  ? env.PUBLIC_API_ORIGIN.replace(/\/+$/, "")
+  : `http://localhost:${env.PORT}`;
