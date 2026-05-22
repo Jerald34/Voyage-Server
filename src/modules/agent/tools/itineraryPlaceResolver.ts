@@ -109,6 +109,10 @@ export async function resolveItineraryItemPlaces<T extends StructuredItineraryIn
     return routedItems;
   }
 
+  // In-run dedup: if the same place appears multiple times in one itinerary
+  // (e.g., a hotel used on day 1 and day 3), resolve it once and reuse the snapshot.
+  const resolveDedup = new Map<string, Promise<{ snapshot: { id: string }; enriched: ResolvedPlace } | null>>();
+
   const days = await Promise.all(
     options.input.days.map(async (day) => {
       const resolvedItems = await Promise.all(
@@ -117,27 +121,62 @@ export async function resolveItineraryItemPlaces<T extends StructuredItineraryIn
             return { item, point: null, placeSnapshotId: item.placeSnapshotId ?? null };
           }
 
+          const cityContext = item.cityContext ?? options.input.title;
+
+          // Pre-lookup: check if we already have a PlaceSnapshot for this name+city.
           try {
-            console.log(`[Maps] Resolving place: "${item.placeName}" in context: "${item.cityContext ?? options.input.title}"`);
-            const resolved = await options.maps.resolvePlace({
-              placeName: item.placeName,
-              cityContext: item.cityContext ?? options.input.title
+            const cached = await options.client.placeSnapshot.findFirst({
+              where: {
+                name: { equals: item.placeName, mode: "insensitive" },
+                ...(cityContext ? { formattedAddress: { contains: cityContext, mode: "insensitive" } } : {})
+              }
             });
-            console.log(`[Maps] Successfully resolved "${item.placeName}" to ${resolved.location.latitude}, ${resolved.location.longitude}`);
-            const enriched = await enrichResolvedPlaceForSnapshot(options.maps, resolved);
-            const snapshot = await upsertPlaceSnapshot(options.client, enriched);
-            return {
-              item: {
-                ...item,
-                placeSnapshotId: snapshot.id
-              },
-              point: enriched.location,
-              placeSnapshotId: snapshot.id
-            };
-          } catch (error) {
-            console.error(`[Maps] Failed to resolve place: "${item.placeName}"`, error);
+            if (cached) {
+              const point = (typeof cached.latitude === "number" && typeof cached.longitude === "number")
+                ? { latitude: cached.latitude, longitude: cached.longitude }
+                : null;
+              return {
+                item: { ...item, placeSnapshotId: cached.id },
+                point,
+                placeSnapshotId: cached.id
+              };
+            }
+          } catch {
+            // Pre-lookup is best-effort.
+          }
+
+          // In-run dedup: coalesce identical resolve calls within this itinerary build.
+          const placeName = item.placeName;
+          const dedupKey = `${placeName.toLowerCase()}|${cityContext.toLowerCase()}`;
+          if (!resolveDedup.has(dedupKey)) {
+            resolveDedup.set(dedupKey, (async () => {
+              try {
+                console.log(`[Maps] Resolving place: "${placeName}" in context: "${cityContext}"`);
+                const resolved = await options.maps.resolvePlace({
+                  placeName,
+                  cityContext
+                });
+                console.log(`[Maps] Successfully resolved "${placeName}" to ${resolved.location.latitude}, ${resolved.location.longitude}`);
+                const enriched = await enrichResolvedPlaceForSnapshot(options.maps, resolved);
+                const snapshot = await upsertPlaceSnapshot(options.client, enriched);
+                return { snapshot, enriched };
+              } catch (error) {
+                console.error(`[Maps] Failed to resolve place: "${placeName}"`, error);
+                return null;
+              }
+            })());
+          }
+
+          const result = await resolveDedup.get(dedupKey)!;
+          if (!result) {
             return { item, point: null, placeSnapshotId: item.placeSnapshotId ?? null };
           }
+
+          return {
+            item: { ...item, placeSnapshotId: result.snapshot.id },
+            point: result.enriched.location,
+            placeSnapshotId: result.snapshot.id
+          };
         })
       );
 
@@ -159,10 +198,33 @@ export async function resolveSingleItemPlace(options: {
   cityContextFallback?: string;
   maps: MapsProvider;
   client: PrismaClient;
+  /** Skip enrichment (getPlaceDetails) to reduce latency during streaming.
+   *  The post-run backfill job will enrich unenriched snapshots afterwards. */
+  skipEnrichment?: boolean;
 }): Promise<{ item: z.infer<typeof structuredItineraryItemSchema>; resolved: ResolvedPlace | null }> {
   const { item } = options;
   if (item.placeSnapshotId || !item.placeName) {
     return { item, resolved: null };
+  }
+
+  // Pre-lookup: check if we already have a PlaceSnapshot for this name+city
+  // before making any Google API calls. Saves ~$0.04 per cache hit.
+  try {
+    const cityContext = item.cityContext ?? options.cityContextFallback ?? "";
+    const cached = await options.client.placeSnapshot.findFirst({
+      where: {
+        name: { equals: item.placeName, mode: "insensitive" },
+        ...(cityContext ? { formattedAddress: { contains: cityContext, mode: "insensitive" } } : {})
+      }
+    });
+    if (cached) {
+      return {
+        item: { ...item, placeSnapshotId: cached.id },
+        resolved: null
+      };
+    }
+  } catch {
+    // Pre-lookup is best-effort; fall through to Google resolution.
   }
 
   try {
@@ -170,11 +232,16 @@ export async function resolveSingleItemPlace(options: {
       placeName: item.placeName,
       cityContext: item.cityContext ?? options.cityContextFallback
     });
-    const enriched = await enrichResolvedPlaceForSnapshot(options.maps, resolved);
-    const snapshot = await upsertPlaceSnapshot(options.client, enriched);
+    // When skipEnrichment is true, persist the basic resolved data immediately
+    // (coordinates are enough for map pins). Full enrichment (rating, photos,
+    // etc.) runs in the post-run backfill job.
+    const finalPlace = options.skipEnrichment
+      ? resolved
+      : await enrichResolvedPlaceForSnapshot(options.maps, resolved);
+    const snapshot = await upsertPlaceSnapshot(options.client, finalPlace);
     return {
       item: { ...item, placeSnapshotId: snapshot.id },
-      resolved: enriched
+      resolved: finalPlace
     };
   } catch (error) {
     console.error(`[Maps] Failed to resolve item place: "${item.placeName}"`, error);

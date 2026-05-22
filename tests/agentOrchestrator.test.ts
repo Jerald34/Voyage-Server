@@ -685,7 +685,11 @@ describe("agent orchestrator", () => {
               userRatingCount: 321,
               types: ["park", "tourist_attraction"],
               phoneNumber: "+63 74 111 2222",
-              websiteUri: "https://example.com/baguio-place"
+              websiteUri: "https://example.com/baguio-place",
+              photos: [
+                { name: `${placeId}/photos/1`, photoUri: "https://example.com/photo-1.jpg" },
+                { name: `${placeId}/photos/2`, photoUri: "https://example.com/photo-2.jpg" }
+              ]
             };
           },
           async getPlacePhotos(placeId, maxResults) {
@@ -743,14 +747,13 @@ describe("agent orchestrator", () => {
       "google:burnham-park-boating",
       "google:mines-view-park-views"
     ]);
-    expect(photoCalls).toEqual([
-      { placeId: "google:burnham-park-boating", maxResults: 3 },
-      { placeId: "google:mines-view-park-views", maxResults: 3 }
-    ]);
-    expect(upsertedPlaces).toEqual([
+    // getPlacePhotos is no longer called — photos are merged into getPlaceDetails.
+    expect(photoCalls).toEqual([]);
+    expect(upsertedPlaces).toHaveLength(2);
+    expect(upsertedPlaces).toEqual(expect.arrayContaining([
       "google:burnham-park-boating detailed name",
       "google:mines-view-park-views detailed name"
-    ]);
+    ]));
     expect(upsertCreateInputs).toHaveLength(2);
     expect(upsertCreateInputs[0]).toMatchObject({
       rating: 4.7,
@@ -759,7 +762,7 @@ describe("agent orchestrator", () => {
       metadata: {
         source: "resolved",
         primaryPhotoUrl: "https://example.com/photo-1.jpg",
-        photoUrls: ["https://example.com/photo-1.jpg", "https://example.com/photo-2.jpg"],
+        photoUrls: ["https://example.com/photo-1.jpg"],
         googleTypes: ["park", "tourist_attraction"],
         userRatingCount: 321
       }
@@ -1766,13 +1769,16 @@ describe("agent orchestrator", () => {
         })
       }
     });
+    // The itinerary.item.added event fires immediately (before the route resolves)
+    // so the item does NOT contain routeFromPrevious in the SSE event. The route
+    // update arrives later via updateItem. Verify the event still fires correctly.
     expect(events).toContainEqual({
       type: "itinerary.item.added",
       payload: expect.objectContaining({
+        itineraryId: "itinerary-1",
+        dayId: "day-1",
         item: expect.objectContaining({
-          routeFromPrevious: expect.objectContaining({
-            polyline: "encoded-route"
-          })
+          id: "item-current"
         })
       })
     });

@@ -49,7 +49,7 @@ const envSchema = z.object({
   GOOGLE_AI_API_KEY: z.string().default(""),
   GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-3-flash-preview"),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
-  GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(80),
+  GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   NOMINATIM_BASE_URL: z.string().default("https://nominatim.openstreetmap.org"),
   NOMINATIM_USER_AGENT: z.string().default("Voyage-Travel-Agent/1.0"),
   SERPER_API_KEY: z.string().default(""),
