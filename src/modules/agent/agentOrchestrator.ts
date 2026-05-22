@@ -40,7 +40,8 @@ import {
   countItineraryItems,
   availableToolSet,
   buildRuntimeContextBlock,
-  injectRuntimeContextIntoLastUser
+  injectRuntimeContextIntoLastUser,
+  makeCompactToolOutput
 } from "./agentContextBuilder";
 
 async function streamModelCompletion(options: {
@@ -86,6 +87,9 @@ export function createAgentOrchestrator(options: {
   availableToolNames?: string[];
   now?: () => Date;
   maxToolCallsPerRun?: number;
+  /** Awaited before completeRun so enriched PlaceSnapshots (photos, ratings)
+   *  are in the DB when the client re-fetches. */
+  onBeforeRunComplete?: (itinerary: Record<string, unknown>) => Promise<void>;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
   // Packed Approach B with research + clustering + per-stop estimate_route fans out to ~3 tool calls per stop on a multi-day plan.
@@ -342,38 +346,50 @@ export function createAgentOrchestrator(options: {
                   activeItinerary: activeItineraryContext.itinerary
                 })
                 : toolInput;
-            const persistedToolCall = await options.agentService.recordToolCallStarted(
-              run,
-              { toolName: toolCall.name, input: normalizedToolInput },
-              startedAt
-            );
-            await options.agentService.recordRunEvent(run, {
-              type: "tool.started",
-              payload: { name: toolCall.name, input: normalizedToolInput }
-            });
+            const [persistedToolCall] = await Promise.all([
+              options.agentService.recordToolCallStarted(
+                run,
+                { toolName: toolCall.name, input: normalizedToolInput },
+                startedAt
+              ),
+              options.agentService.recordRunEvent(run, {
+                type: "tool.started",
+                payload: { name: toolCall.name, input: normalizedToolInput }
+              })
+            ]);
             toolCallsExecuted += 1;
 
             try {
               const output = await options.toolRegistry.execute(toolCall.name, context, normalizedToolInput);
-              toolResults.push({ name: toolCall.name, output });
+              // Update the in-memory active itinerary BEFORE compacting, so the running
+              // state captures the full snapshot. After that, the orchestrator only needs a
+              // compact delta in `toolResults` — the full itinerary is reachable via
+              // `activeItineraryContext` for in-loop prompts and via the persisted
+              // `tool.completed` event for cross-message recovery.
               activeItineraryContext = applyToolResultToItineraryContext(
                 activeItineraryContext,
                 toolCall.name,
                 output
               );
-              await options.agentService.completeToolCall(persistedToolCall.id, output, now());
-              await options.agentService.recordRunEvent(run, {
-                type: "tool.completed",
-                payload: { name: toolCall.name, output }
-              });
+              const compactOutput = makeCompactToolOutput(toolCall.name, output);
+              toolResults.push({ name: toolCall.name, output: compactOutput });
+              await Promise.all([
+                options.agentService.completeToolCall(persistedToolCall.id, output, now()),
+                options.agentService.recordRunEvent(run, {
+                  type: "tool.completed",
+                  payload: { name: toolCall.name, output }
+                })
+              ]);
             } catch (error) {
               agentLogger.error(`Tool Execution Failed: ${toolCall.name}`, input.runId, error);
               const details = errorDetails(error);
-              await options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now());
-              await options.agentService.recordRunEvent(run, {
-                type: "tool.failed",
-                payload: { name: toolCall.name, code: details.code, message: details.message }
-              });
+              await Promise.all([
+                options.agentService.failToolCall(persistedToolCall.id, details.code, details.message, now()),
+                options.agentService.recordRunEvent(run, {
+                  type: "tool.failed",
+                  payload: { name: toolCall.name, code: details.code, message: details.message }
+                })
+              ]);
 
               const isRecoverableToolFailure =
                 (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
@@ -674,6 +690,12 @@ export function createAgentOrchestrator(options: {
             payload: { delta: synthesizedMessage }
           });
         }
+        // Enrich PlaceSnapshots (photos, ratings) BEFORE completing the run
+        // so the client's post-completion re-fetch gets fully populated data.
+        if (activeItineraryContext?.itinerary && options.onBeforeRunComplete) {
+          try { await options.onBeforeRunComplete(activeItineraryContext.itinerary); } catch { /* best-effort */ }
+        }
+
         await options.agentService.completeRun(run.id, synthesizedMessage);
 
       } catch (error) {

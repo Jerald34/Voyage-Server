@@ -538,7 +538,29 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
     return cacheName;
   }
 
+  // LRU-bounded prompt-cache map. Under normal load the number of unique stable system
+  // prompts is small (single digits), so the cap is generous; the bound exists only to
+  // protect long-lived processes against a worst case where prompt entropy grows (e.g.
+  // a future change accidentally injects per-user data into the cacheable prefix).
+  //
+  // JavaScript's `Map` preserves insertion order, so deleting and re-inserting moves an
+  // entry to the "most-recent" end — that gives us LRU semantics with no extra structure.
+  const CACHE_MAX_ENTRIES = 64;
   const cachedContentByPromptKey = new Map<string, Promise<string | null>>();
+
+  function touchCacheEntry(cacheKey: string, value: Promise<string | null>) {
+    if (cachedContentByPromptKey.has(cacheKey)) {
+      cachedContentByPromptKey.delete(cacheKey);
+    } else if (cachedContentByPromptKey.size >= CACHE_MAX_ENTRIES) {
+      // Evict the oldest (insertion-order first) entry. Its TTL timer will still fire and
+      // be a no-op delete on a now-empty key, which is harmless.
+      const oldest = cachedContentByPromptKey.keys().next().value;
+      if (oldest !== undefined) {
+        cachedContentByPromptKey.delete(oldest);
+      }
+    }
+    cachedContentByPromptKey.set(cacheKey, value);
+  }
 
   const MIN_CHARS_FOR_CACHING = 3000;
 
@@ -551,6 +573,8 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
     const cacheKey = makePromptCacheKey(systemInstructionText, resolvedProjectId);
     const existing = cachedContentByPromptKey.get(cacheKey);
     if (existing) {
+      // Refresh LRU position so frequently-used entries don't age out under churn.
+      touchCacheEntry(cacheKey, existing);
       return existing;
     }
 
@@ -569,7 +593,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
         return null;
       });
 
-    cachedContentByPromptKey.set(cacheKey, promise);
+    touchCacheEntry(cacheKey, promise);
     return promise;
   }
 

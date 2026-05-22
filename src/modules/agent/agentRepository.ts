@@ -15,10 +15,25 @@ import type {
 
 const OPEN_RUN_STATUSES: AgentRunStatus[] = ["QUEUED", "RUNNING"];
 
+// Cap the number of run events loaded per thread read. `buildActiveItineraryContext` does
+// a reverse-scan to find the latest itinerary tool output, which is almost always within
+// the last few dozen events — capping at 200 keeps even pathological long-running threads
+// well under the recovery cutoff while preventing megabytes of historical events (each
+// payload can hold a full itinerary snapshot) from being deserialized on every message.
+//
+// Messages are NOT capped here because the orchestrator uses the full message list as the
+// model's conversation history. Truncating would silently lose user context. If thread
+// growth becomes a problem there, the right fix is explicit pagination in the orchestrator,
+// not a quiet cap here.
+const THREAD_EVENT_TAIL_LIMIT = 200;
+
 function includeThreadDetails() {
   return {
     messages: { orderBy: { createdAt: "asc" as const } },
-    events: { orderBy: { createdAt: "asc" as const } }
+    // `take: -N` with an `asc` orderBy returns the LAST N rows in that order — i.e. the
+    // most recent events, still oldest-first. This preserves consumer iteration semantics
+    // (e.g. `[...thread.events].reverse()` in buildActiveItineraryContext).
+    events: { orderBy: { createdAt: "asc" as const }, take: -THREAD_EVENT_TAIL_LIMIT }
   } as const;
 }
 

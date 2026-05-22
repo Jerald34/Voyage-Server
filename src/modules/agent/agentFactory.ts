@@ -29,8 +29,10 @@ import {
   createWebSearchTool
 } from "./agentTools";
 import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../services/maps";
+import type { MapsProvider } from "../../services/maps";
 import { createWebSearchProvider } from "../../services/webSearch";
 import { getModelProvider, getModelProviderInfo } from "../../services/modelProvider";
+import { backfillUnenrichedSnapshots } from "./tools/placeSnapshotEnrichment";
 
 const GOOGLE_MAPS_TOOL_NAMES = [
   "search_google_places",
@@ -46,6 +48,8 @@ const GOOGLE_MAPS_TOOL_NAMES = [
 const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
 
 function createAgencyAgentOrchestrator() {
+  let mapsForBackfill: MapsProvider | null = null;
+
   // Tools that don't need a maps provider can be registered up front.
   const tools = [
     createRecordAgentTaskTool({ agentService }),
@@ -101,6 +105,8 @@ function createAgencyAgentOrchestrator() {
       createPlaceInsightsTool({ maps: googleMaps, agentService, placeSnapshotClient: prisma })
     ];
 
+    mapsForBackfill = googleMaps;
+
     tools.push(...googleMapsTools.filter(t => !tools.some(existing => existing.name === t.name)));
 
     rebindWithMaps(googleMaps);
@@ -150,7 +156,12 @@ function createAgencyAgentOrchestrator() {
         ...Object.fromEntries(GOOGLE_MAPS_TOOL_NAMES.map((toolName) => [toolName, "google_maps"])),
         ...Object.fromEntries(WEB_SEARCH_TOOL_NAMES.map((toolName) => [toolName, "web_search"]))
       }
-    })
+    }),
+    onBeforeRunComplete: mapsForBackfill
+      ? async (itinerary) => {
+          await backfillUnenrichedSnapshots({ itinerary, maps: mapsForBackfill!, client: prisma });
+        }
+      : undefined
   });
 }
 

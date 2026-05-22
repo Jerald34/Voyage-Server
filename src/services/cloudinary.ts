@@ -28,6 +28,47 @@ export type CloudinaryUploadResult = {
   height: number;
 };
 
+/**
+ * Upload a place photo URL to Cloudinary for caching. Subsequent views serve
+ * from Cloudinary instead of billing the Google Place Photo API every time.
+ */
+export async function uploadPlacePhoto(
+  photoUrl: string,
+  placeId: string
+): Promise<CloudinaryUploadResult> {
+  ensureConfigured();
+
+  const folder = "voyage/place-photos";
+
+  return new Promise<CloudinaryUploadResult>((resolve, reject) => {
+    cloudinary.uploader.upload(
+      photoUrl,
+      {
+        folder,
+        public_id: placeId.replace(/[^a-zA-Z0-9_-]/g, "_"),
+        resource_type: "image",
+        overwrite: false,
+        transformation: [
+          { width: 400, crop: "limit" },
+          { quality: "auto", fetch_format: "auto" }
+        ]
+      },
+      (error, result) => {
+        if (error || !result) {
+          reject(error ?? new Error("Cloudinary upload returned no result."));
+          return;
+        }
+        resolve({
+          url: result.secure_url,
+          publicId: result.public_id,
+          width: result.width,
+          height: result.height
+        });
+      }
+    );
+  });
+}
+
 export async function uploadChatImage(
   buffer: Buffer,
   mimeType: string,

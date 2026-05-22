@@ -377,7 +377,8 @@ export function createAddItineraryItemTool(options: {
         const { item: resolvedItem } = await resolveSingleItemPlace({
           item,
           maps: options.maps,
-          client: options.placeSnapshotClient ?? prisma
+          client: options.placeSnapshotClient ?? prisma,
+          skipEnrichment: true
         });
         item = resolvedItem;
       }
@@ -390,26 +391,35 @@ export function createAddItineraryItemTool(options: {
         dayId: string;
         item: Record<string, unknown>;
       };
-      if (options.maps) {
-        result = await attachRouteFromPrevious({
-          maps: options.maps,
-          itineraryService: options.itineraryService,
-          agencyId: context.agencyId,
-          itineraryId: parsed.itineraryId,
-          dayId: parsed.dayId,
-          result
-        }) as typeof result;
-      }
-      if (options.agentService) {
-        await options.agentService.recordRunEvent(createRunRecord(context), {
-          type: "itinerary.item.added",
-          payload: {
-            itineraryId: result.itinerary.id,
-            dayId: result.dayId,
-            item: result.item
-          }
-        });
-      }
+
+      // Fire the SSE event immediately (so the card appears on the client) while
+      // estimating the route from the previous item in parallel. The route update,
+      // if successful, will trigger its own SSE event via updateItem.
+      const routePromise = options.maps
+        ? attachRouteFromPrevious({
+            maps: options.maps,
+            itineraryService: options.itineraryService,
+            agencyId: context.agencyId,
+            itineraryId: parsed.itineraryId,
+            dayId: parsed.dayId,
+            result
+          })
+        : Promise.resolve(result);
+
+      const ssePromise = options.agentService
+        ? options.agentService.recordRunEvent(createRunRecord(context), {
+            type: "itinerary.item.added",
+            payload: {
+              itineraryId: result.itinerary.id,
+              dayId: result.dayId,
+              item: result.item
+            }
+          })
+        : Promise.resolve(undefined);
+
+      const [routedResult] = await Promise.all([routePromise, ssePromise]);
+      result = routedResult as typeof result;
+
       return result;
     }
   };
@@ -444,7 +454,8 @@ export function createUpdateItineraryItemTool(options: {
         const { item: resolvedItem } = await resolveSingleItemPlace({
           item: itemForResolution,
           maps: options.maps,
-          client: options.placeSnapshotClient ?? prisma
+          client: options.placeSnapshotClient ?? prisma,
+          skipEnrichment: true
         });
         if (resolvedItem.placeSnapshotId) {
           patch = { ...patch, placeSnapshotId: resolvedItem.placeSnapshotId };

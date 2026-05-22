@@ -73,6 +73,20 @@ export function createAgentService(options: {
     }
   }
 
+  // Leading-edge debounce: fires immediately on the first call, then suppresses
+  // subsequent calls for the same threadId within the debounce window.  Terminal
+  // operations (completeRun, failRun) still call `await touchThread()` directly
+  // to guarantee the final timestamp is flushed.
+  const TOUCH_DEBOUNCE_MS = 2000;
+  const _lastTouchMs = new Map<string, number>();
+
+  function debouncedTouchThread(threadId: string) {
+    const last = _lastTouchMs.get(threadId) ?? 0;
+    if (Date.now() - last < TOUCH_DEBOUNCE_MS) return;
+    _lastTouchMs.set(threadId, Date.now());
+    touchThread(threadId).catch(() => {});
+  }
+
   return {
     async createThread(agencyId: string, userId: string, input: unknown) {
       const parsed = createThreadSchema.parse(input);
@@ -174,7 +188,7 @@ export function createAgentService(options: {
         type: parsed.type,
         payload: parsed.payload
       });
-      await touchThread(run.threadId);
+      debouncedTouchThread(run.threadId);
       publishAgentRunEvent(run.id, parsed, persisted.id);
       return persisted;
     },
@@ -194,7 +208,7 @@ export function createAgentService(options: {
         input: input.input,
         startedAt
       });
-      await touchThread(run.threadId);
+      debouncedTouchThread(run.threadId);
       return toolCall;
     },
 
@@ -207,7 +221,7 @@ export function createAgentService(options: {
       });
       if (toolCall) {
         agentLogger.toolSuccess(toolCallId, toolCall.toolName, summary);
-        await touchThread(toolCall.threadId);
+        debouncedTouchThread(toolCall.threadId);
       }
       return toolCall;
     },
@@ -221,7 +235,7 @@ export function createAgentService(options: {
       });
       if (toolCall) {
         agentLogger.toolFail(toolCallId, toolCall.toolName, code, message);
-        await touchThread(toolCall.threadId);
+        debouncedTouchThread(toolCall.threadId);
       }
       return toolCall;
     },
@@ -234,7 +248,7 @@ export function createAgentService(options: {
         status: input.status,
         ...(input.sortOrder !== undefined ? { sortOrder: input.sortOrder } : {})
       });
-      await touchThread(run.threadId);
+      debouncedTouchThread(run.threadId);
       publishAgentRunEvent(run.id, { type: event.type, payload: event.payload }, event.id);
 
       return task;
@@ -246,7 +260,7 @@ export function createAgentService(options: {
         threadId: run.threadId,
         sources
       });
-      await touchThread(run.threadId);
+      debouncedTouchThread(run.threadId);
 
       for (const event of events) {
         publishAgentRunEvent(run.id, { type: event.type, payload: event.payload }, event.id);

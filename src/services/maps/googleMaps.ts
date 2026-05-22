@@ -16,8 +16,8 @@ type GoogleMapsProviderOptions = {
 
 // Default photo dimensions requested from the upstream Google Places media endpoint.
 // These match the previous behavior of the direct-URL implementation.
-const DEFAULT_PHOTO_WIDTH_PX = 1000;
-const DEFAULT_PHOTO_HEIGHT_PX = 1000;
+const DEFAULT_PHOTO_WIDTH_PX = 400;
+const DEFAULT_PHOTO_HEIGHT_PX = 400;
 
 const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 
@@ -46,12 +46,35 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
   return {
     async resolvePlace(input) {
       const query = [input.placeName, input.cityContext, input.countryCode].filter(Boolean).join(", ");
-      const results = await this.searchPlaces({
-        query,
-        languageCode: input.languageCode,
+
+      // Use a minimal field mask (Essentials tier ~$5/1k) instead of delegating to
+      // searchPlaces which carries the full Enterprise+Atmosphere mask (~$40/1k).
+      // Enrichment via getPlaceDetails fills in rating, types, etc. later.
+      const body: Record<string, unknown> = {
+        textQuery: query,
         maxResultCount: 1
-      });
-      const place = results[0];
+      };
+      if (input.languageCode) {
+        body.languageCode = input.languageCode;
+      }
+
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        "https://places.googleapis.com/v1/places:searchText",
+        {
+          method: "POST",
+          headers: providerHeaders(
+            apiKey,
+            "places.id,places.displayName,places.location"
+          ),
+          body: JSON.stringify(body)
+        },
+        timeoutMs,
+        "Google Maps API"
+      );
+
+      const places = parseResponseArray(response, "places").map(parsePlace);
+      const place = places[0];
       if (!place?.id || !place.location) {
         throw mapsUnavailable("Place could not be resolved to coordinates.");
       }
@@ -151,7 +174,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
           method: "GET",
           headers: providerHeaders(
             apiKey,
-            "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri"
+            "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri,photos"
           )
         },
         timeoutMs,
@@ -160,14 +183,39 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
       const place = parsePlace(response);
       const details = isRecord(response) ? response : {};
 
+      // Build photo proxy URLs from the photos array so callers don't need a
+      // separate getPlacePhotos call.
+      let photos: Array<{ name: string; photoUri: string }> | undefined;
+      if (Array.isArray(details.photos) && details.photos.length > 0) {
+        photos = details.photos.slice(0, 1).map((photo: any) => {
+          const name: string = photo.name ?? "";
+          const proxyQuery = new URLSearchParams({
+            name,
+            w: String(DEFAULT_PHOTO_WIDTH_PX),
+            h: String(DEFAULT_PHOTO_HEIGHT_PX)
+          }).toString();
+          return {
+            name,
+            photoUri: `${photoProxyOrigin}/images/place-photo?${proxyQuery}`
+          };
+        });
+      }
+
       return {
         ...place,
         phoneNumber: parseString(details.nationalPhoneNumber) ?? parseString(details.internationalPhoneNumber),
-        websiteUri: parseString(details.websiteUri)
+        websiteUri: parseString(details.websiteUri),
+        photos
       };
     },
 
-    async getPlacePhotos(placeId, maxResults = 5) {
+    getPhotoMediaUrl(photoName: string): string {
+      // Direct Google media URL with API key as query param so external services
+      // (Cloudinary) can fetch the image without needing custom headers.
+      return `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${DEFAULT_PHOTO_WIDTH_PX}&maxHeightPx=${DEFAULT_PHOTO_HEIGHT_PX}&key=${apiKey}`;
+    },
+
+    async getPlacePhotos(placeId, maxResults = 1) {
       const response = await readJsonResponse<unknown>(
         fetchImpl,
         `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
