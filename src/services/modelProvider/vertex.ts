@@ -658,7 +658,8 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
       if (error instanceof ApiError) {
         throw error;
       }
-      throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Check your Google Cloud API key and try again.");
+      console.error("[Vertex AI] fetchVertexCompletion failed:", error);
+      throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", `Google Vertex AI provider is unavailable: ${error instanceof Error ? error.message : String(error)}`);
     } finally {
       clearTimeout(timeout);
     }
@@ -855,7 +856,8 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
         if (error instanceof ApiError) {
           throw error;
         }
-        throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Check your Google Cloud API key and try again.");
+        console.error("[Vertex AI] completeStream failed:", error);
+        throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", `Google Vertex AI provider is unavailable: ${error instanceof Error ? error.message : String(error)}`);
       } finally {
         clearTimeout(timeout);
       }

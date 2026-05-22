@@ -325,6 +325,44 @@ export function createAgentOrchestrator(options: {
         let hadRecoverableFailure = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
 
+        // Track how many times each item is touched by editing tools to detect cascade loops
+        // where the agent repeatedly adjusts times/positions without converging.
+        // Two-tier system:
+        //   - "warning" (soft): inject guidance to wrap up — the agent may still have work to do
+        //   - "looping" (hard): force-break the loop — the agent is clearly going in circles
+        const itemTouchCounts = new Map<string, number>();
+        const EDIT_TOOL_NAMES = new Set(["update_itinerary_item", "move_itinerary_item", "remove_itinerary_item"]);
+        function trackItemTouch(toolName: string, toolInput: Record<string, unknown>) {
+          const itemId = typeof toolInput.itemId === "string" ? toolInput.itemId : null;
+          if (itemId && EDIT_TOOL_NAMES.has(toolName)) {
+            itemTouchCounts.set(itemId, (itemTouchCounts.get(itemId) || 0) + 1);
+          }
+          // Detect duplicate add_itinerary_item calls by title (e.g. adding airport arrival twice)
+          if (toolName === "add_itinerary_item") {
+            const item = typeof toolInput.item === "object" && toolInput.item !== null ? toolInput.item as Record<string, unknown> : null;
+            const title = typeof item?.title === "string" ? item.title : null;
+            if (title) {
+              const addKey = `add:${title.toLowerCase().trim()}`;
+              itemTouchCounts.set(addKey, (itemTouchCounts.get(addKey) || 0) + 1);
+            }
+          }
+        }
+        function maxItemTouches(): number {
+          let max = 0;
+          for (const count of itemTouchCounts.values()) {
+            if (count > max) max = count;
+          }
+          return max;
+        }
+        // Soft warning: agent should start wrapping up, but can finish current work
+        function isEditCascading(): boolean {
+          return maxItemTouches() >= 5;
+        }
+        // Hard loop: agent is oscillating and will never converge — force-break
+        function isEditLooping(): boolean {
+          return maxItemTouches() >= 8;
+        }
+
         async function executeToolCallsBatch(toolCalls: Array<{ name: string; input: Record<string, unknown> }>) {
           for (const toolCall of toolCalls) {
             checkCancelled();
@@ -366,6 +404,7 @@ export function createAgentOrchestrator(options: {
               // compact delta in `toolResults` — the full itinerary is reachable via
               // `activeItineraryContext` for in-loop prompts and via the persisted
               // `tool.completed` event for cross-message recovery.
+              trackItemTouch(toolCall.name, normalizedToolInput);
               activeItineraryContext = applyToolResultToItineraryContext(
                 activeItineraryContext,
                 toolCall.name,
@@ -528,7 +567,11 @@ export function createAgentOrchestrator(options: {
                 "",
                 itineraryIsEmptySkeleton
                   ? `STATE CHECK: The itinerary has ${currentDayCount} day(s) but ZERO items so far. The plan is NOT complete. Your next response MUST be a single add_itinerary_item tool call (or estimate_route to validate the route before the next add). Do NOT respond with plain text yet. Do NOT call plan_itinerary again — the skeleton already exists. Begin populating Day 1.`
-                  : "If the itinerary still needs more stops to fulfil the original request, respond with the next single tool call (preferably add_itinerary_item, one item at a time). When the itinerary is complete, respond with a brief plain-text summary and no tool call."
+                  : isEditLooping()
+                    ? "EDIT LOOP DETECTED: You have modified the same items too many times without converging. Your edits are cascading. STOP making further adjustments — minor time gaps or imperfect ordering are acceptable. Respond NOW with a brief plain-text summary of the changes you made. Do NOT make any more tool calls."
+                    : isEditCascading()
+                      ? "CAUTION: You are re-editing items you already modified. If you have completed the user's requested changes, stop now and respond with a plain-text summary. Only continue if there are still unfinished additions or edits the user explicitly asked for. Do not keep adjusting times across the whole day — small gaps are acceptable."
+                      : "If the itinerary still needs more stops or changes to fulfil the original request, respond with the next single tool call. When the requested changes are complete, respond with a brief plain-text summary and no tool call. Do not cascade time adjustments across the entire day — only adjust items that directly overlap. Small gaps between items are fine."
               ].filter(Boolean).join("\n")
             }
           ];
@@ -578,6 +621,15 @@ export function createAgentOrchestrator(options: {
           }
 
           lastAssistantMessage = nextParsed.assistantMessage || lastAssistantMessage;
+
+          // If we already warned the agent about an edit loop but it still issued a tool call,
+          // force-break the loop to prevent runaway cost and latency.
+          if (isEditLooping()) {
+            agentLogger.debug(input.runId, "Force-breaking continuation loop: edit loop detected after warning");
+            shouldContinueLoop = false;
+            break;
+          }
+
           try {
             await executeToolCallsBatch(nextParsed.toolCalls);
           } catch (error) {

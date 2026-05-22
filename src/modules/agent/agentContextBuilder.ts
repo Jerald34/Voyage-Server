@@ -270,9 +270,14 @@ export function buildItineraryIdentifierBlock(itinerary: Record<string, unknown>
       }
       const sortOrder = typeof item.sortOrder === "number" ? item.sortOrder : null;
       const title = typeof item.title === "string" ? item.title : "";
+      const startTime = typeof item.startTime === "string" ? item.startTime : null;
+      const endTime = typeof item.endTime === "string" ? item.endTime : null;
       const sortLabel = sortOrder !== null ? `sortOrder ${sortOrder}` : "(unknown order)";
+      const timeRange = startTime || endTime
+        ? `, time = ${startTime ?? "?"}–${endTime ?? "?"}`
+        : "";
       itemLines.push(
-        `  - ${label} / ${sortLabel}: itemId = ${itemId}${title ? `, title = ${title}` : ""}`
+        `  - ${label} / ${sortLabel}: itemId = ${itemId}${title ? `, title = ${title}` : ""}${timeRange}`
       );
     }
   }

@@ -178,7 +178,7 @@ export function createCreateItineraryTool(options: {
         ...parsed,
         itinerary: resolvedItinerary
       });
-      const createdItinerary = (result as { itinerary?: { id?: string; version?: number; status?: string } } | null)?.itinerary;
+      const createdItinerary = (result as { itinerary?: Record<string, unknown> & { id?: string; version?: number; status?: string } } | null)?.itinerary;
       if (createdItinerary?.id && options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
           type: "itinerary.created",
@@ -186,7 +186,8 @@ export function createCreateItineraryTool(options: {
             itineraryId: createdItinerary.id,
             version: createdItinerary.version ?? null,
             status: createdItinerary.status ?? null,
-            change: "created"
+            change: "created",
+            itinerary: createdItinerary as Record<string, unknown>
           }
         });
       }
@@ -213,7 +214,7 @@ export function createUpdateItineraryTool(options: {
         })
         : parsed.itinerary;
       const result = await options.itineraryService.replaceDraft(context.agencyId, parsed.itineraryId, itinerary);
-      const updated = result as { id?: string; version?: number; status?: string } | null;
+      const updated = result as (Record<string, unknown> & { id?: string; version?: number; status?: string }) | null;
       if (options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
           type: "itinerary.updated",
@@ -221,7 +222,8 @@ export function createUpdateItineraryTool(options: {
             itineraryId: updated?.id ?? parsed.itineraryId,
             version: updated?.version ?? null,
             status: updated?.status ?? null,
-            change: "updated"
+            change: "updated",
+            itinerary: (updated ?? undefined) as Record<string, unknown> | undefined
           }
         });
       }

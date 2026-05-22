@@ -17,6 +17,18 @@ import type {
   StructuredItineraryDay
 } from "./itineraryTypes";
 
+/**
+ * Parse a "HH:MM" (24-hour) time string into total minutes from midnight.
+ * Returns `null` for any value that doesn't match, so callers can fall back
+ * to append-at-end behaviour when times are missing or malformed.
+ */
+function parseTimeToMinutes(time: string | null | undefined): number | null {
+  if (!time) return null;
+  const match = time.match(/^(\d{1,2}):(\d{2})/);
+  if (!match) return null;
+  return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
+}
+
 function includeItineraryDetails() {
   return {
     days: {
@@ -403,12 +415,30 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         const existingItems = await tx.itineraryItem.findMany({
           where: { itineraryDayId: data.dayId },
           orderBy: { sortOrder: "asc" },
-          select: { id: true, sortOrder: true }
+          select: { id: true, sortOrder: true, startTime: true }
         });
-        const insertAt =
-          typeof data.sortOrder === "number"
-            ? Math.max(1, Math.min(data.sortOrder, existingItems.length + 1))
-            : existingItems.length + 1;
+
+        let insertAt: number;
+        if (typeof data.sortOrder === "number") {
+          // Explicit sortOrder provided — honour it.
+          insertAt = Math.max(1, Math.min(data.sortOrder, existingItems.length + 1));
+        } else {
+          // No explicit sortOrder — insert chronologically by startTime so
+          // items with later times (e.g. airport drop-off) stay at the end.
+          const newMinutes = parseTimeToMinutes(data.item.startTime);
+          if (newMinutes !== null && existingItems.length > 0) {
+            insertAt = existingItems.length + 1; // default: append
+            for (const existing of existingItems) {
+              const existingMinutes = parseTimeToMinutes(existing.startTime);
+              if (existingMinutes !== null && existingMinutes > newMinutes) {
+                insertAt = existing.sortOrder;
+                break;
+              }
+            }
+          } else {
+            insertAt = existingItems.length + 1;
+          }
+        }
 
         // Shift items at or after insertAt to make room.
         const toShift = existingItems
