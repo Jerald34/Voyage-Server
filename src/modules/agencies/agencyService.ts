@@ -1,90 +1,18 @@
-import type { PrismaClient } from "@prisma/client";
-import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
+import type { AgencyUser, AgencyRepository, AgencyMembershipRecord } from "./agencyTypes";
 
-export type AgencyUser = {
-  id: string;
-  role: "USER" | "ADMIN";
-  status: "ACTIVE" | "DISABLED";
-  emailVerifiedAt: Date | null;
-};
+import { createPrismaAgencyRepository } from "./agencyRepository";
 
-export type AgencyRecord = {
-  id: string;
-  name: string;
-  slug: string;
-  status: "PENDING_REVIEW" | "VERIFIED" | "REJECTED" | "SUSPENDED";
-  ownerUserId: string;
-  submittedAt: Date;
-  verifiedAt: Date | null;
-  verifiedByAdminUserId: string | null;
-  rejectedAt: Date | null;
-  rejectedByAdminUserId: string | null;
-  rejectionReason: string | null;
-  suspendedAt: Date | null;
-  suspendedByAdminUserId: string | null;
-  suspensionReason: string | null;
-  businessPhone: string | null;
-  businessEmail: string | null;
-  country: string | null;
-  city: string | null;
-};
-
-export type AgencyWithOwner = AgencyRecord & {
-  ownerUser: { id: string; email: string; displayName: string };
-};
-
-export type AgencyDetailRecord = AgencyWithOwner & {
-  auditEvents: AdminAuditRecord[];
-};
-
-export type AgencyMembershipRecord = {
-  id: string;
-  agencyId: string;
-  userId: string;
-  role: "OWNER" | "ADMIN" | "STAFF";
-  status: "ACTIVE" | "DISABLED";
-};
-
-export type AdminAuditRecord = {
-  id: string;
-  adminUserId: string;
-  action:
-    | "AGENCY_APPROVED"
-    | "AGENCY_REJECTED"
-    | "AGENCY_SUSPENDED"
-    | "AGENCY_UNSUSPENDED"
-    | "USER_PROMOTED_TO_ADMIN"
-    | "USER_DISABLED";
-  targetType: string;
-  targetId: string;
-  reason: string | null;
-  metadata?: unknown;
-  createdAt: Date;
-};
-
-export type AgencyRepository = {
-  createAgency(data: {
-    name: string;
-    slug: string;
-    ownerUserId: string;
-    businessPhone?: string;
-    businessEmail?: string;
-    country?: string;
-    city?: string;
-    logoImageId?: string;
-  }): Promise<AgencyRecord>;
-  createOwnerMembership(data: { agencyId: string; userId: string }): Promise<AgencyMembershipRecord>;
-  findMembership(agencyId: string, userId: string): Promise<AgencyMembershipRecord | null>;
-  listPendingAgencies(): Promise<AgencyRecord[]>;
-  listAgencies(status?: string): Promise<AgencyWithOwner[]>;
-  findAgencyById(id: string): Promise<AgencyRecord | null>;
-  findAgencyByIdWithOwner(id: string): Promise<AgencyWithOwner | null>;
-  countAgenciesByStatus(status: string): Promise<number>;
-  listAuditEventsForTarget(targetType: string, targetId: string): Promise<AdminAuditRecord[]>;
-  updateAgency(id: string, data: Partial<AgencyRecord>): Promise<AgencyRecord>;
-  createAdminAuditEvent(data: Omit<AdminAuditRecord, "id" | "createdAt">): Promise<AdminAuditRecord>;
-};
+export { createPrismaAgencyRepository } from "./agencyRepository";
+export type {
+  AgencyUser,
+  AgencyRecord,
+  AgencyWithOwner,
+  AgencyDetailRecord,
+  AgencyMembershipRecord,
+  AdminAuditRecord,
+  AgencyRepository
+} from "./agencyTypes";
 
 export function slugifyAgencyName(name: string) {
   return name
@@ -93,6 +21,26 @@ export function slugifyAgencyName(name: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
+}
+
+function normalizeBusinessEmail(businessEmail: string | null | undefined) {
+  if (businessEmail == null) {
+    return businessEmail;
+  }
+
+  const trimmed = businessEmail.trim();
+  return trimmed === "" ? null : trimmed;
+}
+
+function normalizeDigitsOnlyBusinessPhone(businessPhone: string) {
+  const trimmed = businessPhone.trim();
+  if (!trimmed) {
+    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_REQUIRED", "Business phone is required.");
+  }
+  if (!/^\d+$/.test(trimmed)) {
+    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_INVALID", "Business phone must contain digits only.");
+  }
+  return trimmed;
 }
 
 function assertActive(user: AgencyUser) {
@@ -291,7 +239,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       return options.repository.listAgencies(status);
     },
 
-    async getAgencyDetail(user: AgencyUser, agencyId: string): Promise<AgencyDetailRecord> {
+    async getAgencyDetail(user: AgencyUser, agencyId: string) {
       assertAdmin(user);
       const agency = await options.repository.findAgencyByIdWithOwner(agencyId);
       if (!agency) {
@@ -308,98 +256,4 @@ export function createAgencyService(options: { repository: AgencyRepository; now
   };
 }
 
-function normalizeBusinessEmail(businessEmail: string | null | undefined) {
-  if (businessEmail == null) {
-    return businessEmail;
-  }
-
-  const trimmed = businessEmail.trim();
-  return trimmed === "" ? null : trimmed;
-}
-
-function normalizeDigitsOnlyBusinessPhone(businessPhone: string) {
-  const trimmed = businessPhone.trim();
-  if (!trimmed) {
-    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_REQUIRED", "Business phone is required.");
-  }
-  if (!/^\d+$/.test(trimmed)) {
-    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_INVALID", "Business phone must contain digits only.");
-  }
-  return trimmed;
-}
-
-const ownerSelect = { id: true, email: true, displayName: true } as const;
-const auditInclude = { adminUser: { select: { id: true, displayName: true } } } as const;
-
-export function createPrismaAgencyRepository(client: PrismaClient = prisma): AgencyRepository {
-  return {
-    async createAgency(data) {
-      return client.agency.create({ data }) as Promise<AgencyRecord>;
-    },
-    async createOwnerMembership(data) {
-      return client.agencyMembership.create({
-        data: {
-          ...data,
-          role: "OWNER",
-          status: "ACTIVE"
-        }
-      }) as Promise<AgencyMembershipRecord>;
-    },
-    async findMembership(agencyId, userId) {
-      return client.agencyMembership.findUnique({
-        where: {
-          agencyId_userId: {
-            agencyId,
-            userId
-          }
-        }
-      }) as Promise<AgencyMembershipRecord | null>;
-    },
-    async listPendingAgencies() {
-      return client.agency.findMany({
-        where: { status: "PENDING_REVIEW" },
-        orderBy: { submittedAt: "asc" }
-      }) as Promise<AgencyRecord[]>;
-    },
-    async listAgencies(status?) {
-      const where = status ? { status: status as AgencyRecord["status"] } : {};
-      return client.agency.findMany({
-        where,
-        include: { ownerUser: { select: ownerSelect } },
-        orderBy: { submittedAt: "desc" }
-      }) as Promise<AgencyWithOwner[]>;
-    },
-    async findAgencyById(id) {
-      return client.agency.findUnique({ where: { id } }) as Promise<AgencyRecord | null>;
-    },
-    async findAgencyByIdWithOwner(id) {
-      return client.agency.findUnique({
-        where: { id },
-        include: { ownerUser: { select: ownerSelect } }
-      }) as Promise<AgencyWithOwner | null>;
-    },
-    async countAgenciesByStatus(status) {
-      return client.agency.count({ where: { status: status as AgencyRecord["status"] } });
-    },
-    async listAuditEventsForTarget(targetType, targetId) {
-      return client.adminAuditEvent.findMany({
-        where: { targetType, targetId },
-        include: auditInclude,
-        orderBy: { createdAt: "desc" }
-      }) as Promise<AdminAuditRecord[]>;
-    },
-    async updateAgency(id, data) {
-      return client.agency.update({
-        where: { id },
-        data
-      }) as Promise<AgencyRecord>;
-    },
-    async createAdminAuditEvent(data) {
-      return client.adminAuditEvent.create({ data: data as never }) as Promise<AdminAuditRecord>;
-    }
-  };
-}
-
-export const agencyService = createAgencyService({
-  repository: createPrismaAgencyRepository()
-});
+export const agencyService = createAgencyService({ repository: createPrismaAgencyRepository() });
