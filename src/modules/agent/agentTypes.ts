@@ -185,7 +185,7 @@ export type AgentOrchestratorAgentService = {
   completeRun(
     runId: string,
     assistantContent: string
-  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord }>;
+  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] }>;
   failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
 };
 
@@ -277,6 +277,7 @@ export interface AgentRepository {
     data: {
       assistantContent: string;
       completedAt: Date;
+      processSnapshot?: Record<string, unknown>;
     }
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] } | null>;
   failRunIfOpen(

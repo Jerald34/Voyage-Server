@@ -5,7 +5,7 @@ import { env } from "../../config/env";
 import { ApiError } from "../../http/errors";
 import { GoogleAuth } from "google-auth-library";
 import { createOpenAiCompatibleProvider } from "./openaiCompatible";
-import type { ModelProvider, ModelMessage, ModelCompletionInput, ModelUsage } from "./types";
+import type { ModelProvider, ModelMessage, ModelCompletionInput, ModelUsage, ModelStreamChunk } from "./types";
 
 type GoogleModelProviderOptions = {
   apiKey?: string;
@@ -158,6 +158,46 @@ function normalizeModelMessages(messages: ModelMessage[]) {
   return { contents, systemInstruction, systemInstructionText };
 }
 
+function extractVertexParts(responseBody: unknown): ModelStreamChunk[] {
+  if (Array.isArray(responseBody)) {
+    return responseBody.flatMap((entry) => extractVertexParts(entry));
+  }
+
+  if (!responseBody || typeof responseBody !== "object") {
+    return [];
+  }
+
+  const candidates = (responseBody as { candidates?: unknown }).candidates;
+  if (!Array.isArray(candidates) || candidates.length === 0) {
+    return [];
+  }
+
+  const firstCandidate = candidates[0];
+  if (!firstCandidate || typeof firstCandidate !== "object") {
+    return [];
+  }
+
+  const content = (firstCandidate as { content?: unknown }).content;
+  if (!content || typeof content !== "object") {
+    return [];
+  }
+
+  const parts = (content as { parts?: unknown }).parts;
+  if (!Array.isArray(parts)) {
+    return [];
+  }
+
+  const chunks: ModelStreamChunk[] = [];
+  for (const part of parts) {
+    if (!part || typeof part !== "object") continue;
+    const text = (part as { text?: unknown }).text;
+    if (typeof text !== "string" || text.length === 0) continue;
+    const isThought = (part as { thought?: unknown }).thought === true;
+    chunks.push(isThought ? { kind: "thought", value: text } : { kind: "text", value: text });
+  }
+  return chunks;
+}
+
 function extractVertexText(responseBody: unknown): string {
   if (Array.isArray(responseBody)) {
     return responseBody.map((entry) => extractVertexText(entry)).filter((text) => text.length > 0).join("");
@@ -188,7 +228,11 @@ function extractVertexText(responseBody: unknown): string {
   }
 
   return parts
-    .map((part) => (part && typeof part === "object" ? (part as { text?: unknown }).text : undefined))
+    .filter((part) => {
+      if (!part || typeof part !== "object") return false;
+      return (part as { thought?: unknown }).thought !== true;
+    })
+    .map((part) => (part as { text?: unknown }).text)
     .filter((text): text is string => typeof text === "string" && text.length > 0)
     .join("");
 }
@@ -694,14 +738,16 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
               contents,
               cachedContent,
               generationConfig: {
-                temperature: input.temperature ?? 0.2
+                temperature: input.temperature ?? 0.2,
+                thinkingConfig: { includeThoughts: true }
               }
             }
           : {
               contents,
               ...(systemInstruction ? { systemInstruction } : {}),
               generationConfig: {
-                temperature: input.temperature ?? 0.2
+                temperature: input.temperature ?? 0.2,
+                thinkingConfig: { includeThoughts: true }
               }
             };
 
@@ -722,7 +768,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
           ) {
             const completion = await fetchVertexCompletion(input);
             if (completion.content) {
-              yield completion.content;
+              yield { kind: "text" as const, value: completion.content };
             }
             if (completion.usage) {
               input.onUsage?.(completion.usage);
@@ -763,8 +809,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
                 if (chunkUsage) {
                   latestUsage = chunkUsage;
                 }
-                const chunk = extractVertexText(payload);
-                if (chunk) {
+                for (const chunk of extractVertexParts(payload)) {
                   yield chunk;
                 }
               } catch {
@@ -788,8 +833,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
               if (chunkUsage) {
                 latestUsage = chunkUsage;
               }
-              const chunk = extractVertexText(payload);
-              if (chunk) {
+              for (const chunk of extractVertexParts(payload)) {
                 yield chunk;
               }
             } catch {
@@ -838,8 +882,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
               if (chunkUsage) {
                 latestUsage = chunkUsage;
               }
-              const chunk = extractVertexText(payload);
-              if (chunk) {
+              for (const chunk of extractVertexParts(payload)) {
                 yield chunk;
               }
             } catch {

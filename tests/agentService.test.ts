@@ -390,15 +390,17 @@ function createMemoryRepository(): AgentRepository & {
         threadId: run.threadId,
         runId: run.id,
         role: "ASSISTANT",
-        content: data.assistantContent
+        content: data.assistantContent,
+        metadata: data.processSnapshot != null ? { process: data.processSnapshot } : null
       });
+      const processPayload = data.processSnapshot != null ? { process: data.processSnapshot } : {};
       const completedEvents: AgentRunEventRecord[] = [
         {
           id: `event-${events.length + 1}`,
           runId: run.id,
           threadId: run.threadId,
           type: "message.completed",
-          payload: { messageId: message.id, content: data.assistantContent },
+          payload: { messageId: message.id, content: data.assistantContent, ...processPayload },
           sequence: events.filter((event) => event.runId === run.id).length + 1,
           createdAt: now
         },

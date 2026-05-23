@@ -213,19 +213,37 @@ function createFakeAgentService(run = createRun()) {
         type: "run.completed",
         payload: { runId }
       });
-      return {
-        run,
-        message: {
-          id: "message-1",
-          threadId: run.threadId,
+      const message = {
+        id: "message-1",
+        threadId: run.threadId,
+        runId,
+        authorUserId: null,
+        role: "ASSISTANT" as const,
+        content: assistantContent,
+        metadata: null,
+        createdAt: new Date("2026-04-28T00:00:00.000Z")
+      };
+      const completedEvents = [
+        {
+          id: "event-mc-1",
           runId,
-          authorUserId: null,
-          role: "ASSISTANT",
-          content: assistantContent,
-          metadata: null,
+          threadId: run.threadId,
+          type: "message.completed" as const,
+          payload: { messageId: message.id, content: assistantContent },
+          sequence: events.length - 1,
+          createdAt: new Date("2026-04-28T00:00:00.000Z")
+        },
+        {
+          id: "event-rc-1",
+          runId,
+          threadId: run.threadId,
+          type: "run.completed" as const,
+          payload: { runId },
+          sequence: events.length,
           createdAt: new Date("2026-04-28T00:00:00.000Z")
         }
-      };
+      ];
+      return { run, message, events: completedEvents };
     },
     async failRun(runId, code, message) {
       run.status = "FAILED";
@@ -284,7 +302,7 @@ function createStreamingModelProvider(
       calls.push(input);
       const next = contents.shift() ?? contents.at(-1) ?? "";
       for (const char of next) {
-        yield char;
+        yield { kind: "text" as const, value: char };
       }
     }
   };

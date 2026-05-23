@@ -36,7 +36,11 @@ export type ModelStreamInput = ModelCompletionInput & {
   onUsage?: (usage: ModelUsage) => void;
 };
 
+export type ModelStreamChunk =
+  | { kind: "text"; value: string }
+  | { kind: "thought"; value: string };
+
 export type ModelProvider = {
   complete(input: ModelCompletionInput): Promise<{ content: string; usage?: ModelUsage }>;
-  completeStream?(input: ModelStreamInput): AsyncIterable<string>;
+  completeStream?(input: ModelStreamInput): AsyncIterable<ModelStreamChunk>;
 };

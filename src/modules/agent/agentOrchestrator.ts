@@ -51,6 +51,7 @@ async function streamModelCompletion(options: {
     temperature?: number;
   };
   onDelta: (delta: string) => Promise<void>;
+  onThought?: (delta: string) => Promise<void>;
 }) {
   if (!options.modelProvider.completeStream) {
     return null;
@@ -58,17 +59,21 @@ async function streamModelCompletion(options: {
 
   let content = "";
   let usage: ModelUsage | undefined;
-  for await (const delta of options.modelProvider.completeStream({
+  for await (const chunk of options.modelProvider.completeStream({
     ...options.input,
     onUsage: (nextUsage) => {
       usage = nextUsage;
     }
   })) {
-    if (!delta) {
+    if (!chunk || !chunk.value) {
       continue;
     }
-    content += delta;
-    await options.onDelta(delta);
+    if (chunk.kind === "thought") {
+      await options.onThought?.(chunk.value);
+    } else {
+      content += chunk.value;
+      await options.onDelta(chunk.value);
+    }
   }
 
   return { content, usage };
@@ -222,6 +227,12 @@ export function createAgentOrchestrator(options: {
                 messages: initialMessages,
                 temperature: 0.6
               },
+              onThought: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "thought.delta",
+                  payload: { delta }
+                });
+              },
               onDelta: async (delta) => {
                 modelContent += delta;
                 initialMode = detectInitialOutputMode(modelContent);
@@ -234,7 +245,7 @@ export function createAgentOrchestrator(options: {
                 });
                 if (initialMode === "text" && !isRecoveryCandidate) {
                   await options.agentService.recordRunEvent(run, {
-                    type: "message.delta",
+                    type: "thought.delta",
                     payload: { delta }
                   });
                 } else if (isRecoveryCandidate && !recoveryNotified) {
@@ -697,6 +708,12 @@ export function createAgentOrchestrator(options: {
               input: {
                 messages: synthesisMessages,
                 temperature: 0.6
+              },
+              onThought: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "thought.delta",
+                  payload: { delta }
+                });
               },
               onDelta: async (delta) => {
                 await options.agentService.recordRunEvent(run, {

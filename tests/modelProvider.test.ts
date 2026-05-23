@@ -88,14 +88,14 @@ describe("LM Studio model provider", () => {
       fetchImpl
     });
 
-    const chunks: string[] = [];
+    const chunks: Array<{ kind: string; value: string }> = [];
     for await (const chunk of provider.completeStream!({
       messages: [{ role: "user", content: "Stream this." }]
     })) {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual(["Hello", " world"]);
+    expect(chunks).toEqual([{ kind: "text", value: "Hello" }, { kind: "text", value: " world" }]);
     expect(calls).toHaveLength(1);
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
       model: "local-test",
@@ -230,7 +230,7 @@ describe("Google Vertex AI model provider", () => {
       fetchImpl
     });
 
-    const chunks: string[] = [];
+    const chunks: Array<{ kind: string; value: string }> = [];
     const usages: Array<unknown> = [];
     for await (const chunk of provider.completeStream!({
       messages: [{ role: "user", content: "Stream this." }],
@@ -241,7 +241,7 @@ describe("Google Vertex AI model provider", () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual(["Hello", " world"]);
+    expect(chunks).toEqual([{ kind: "text", value: "Hello" }, { kind: "text", value: " world" }]);
     expect(usages).toEqual([
       expect.objectContaining({
         model: "gemini-3-flash-preview",
@@ -254,7 +254,8 @@ describe("Google Vertex AI model provider", () => {
     expect(JSON.parse(String(calls[0].init.body))).toMatchObject({
       contents: [{ role: "user", parts: [{ text: "Stream this." }] }],
       generationConfig: {
-        temperature: 0.2
+        temperature: 0.2,
+        thinkingConfig: { includeThoughts: true }
       }
     });
     expect(JSON.parse(String(calls[0].init.body))).not.toHaveProperty("stream");
@@ -323,7 +324,7 @@ describe("Google Vertex AI model provider", () => {
       fetchImpl
     });
 
-    const chunks: string[] = [];
+    const chunks: Array<{ kind: string; value: string }> = [];
     const usages: Array<unknown> = [];
     for await (const chunk of provider.completeStream!({
       messages: [{ role: "user", content: "Stream this." }],
@@ -332,7 +333,7 @@ describe("Google Vertex AI model provider", () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual(["fallback ok"]);
+    expect(chunks).toEqual([{ kind: "text", value: "fallback ok" }]);
     expect(usages).toEqual([
       expect.objectContaining({
         model: "gemini-3-flash-preview",
@@ -402,7 +403,7 @@ describe("Google Vertex AI model provider", () => {
       fetchImpl
     });
 
-    const chunks: string[] = [];
+    const chunks: Array<{ kind: string; value: string }> = [];
     const usages: Array<unknown> = [];
     for await (const chunk of provider.completeStream!({
       messages: [{ role: "user", content: "Stream this." }],
@@ -411,7 +412,7 @@ describe("Google Vertex AI model provider", () => {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual(["json stream ok"]);
+    expect(chunks).toEqual([{ kind: "text", value: "json stream ok" }]);
     expect(usages).toEqual([
       expect.objectContaining({
         model: "gemini-3-flash-preview",
@@ -465,7 +466,7 @@ describe("Google Vertex AI model provider", () => {
     ]);
 
     expect(firstChunk).toEqual({
-      value: "Hello",
+      value: { kind: "text", value: "Hello" },
       done: false
     });
 
@@ -478,7 +479,7 @@ describe("Google Vertex AI model provider", () => {
 
     const secondChunk = await iterator.next();
     expect(secondChunk).toEqual({
-      value: " world",
+      value: { kind: "text", value: " world" },
       done: false
     });
 
@@ -796,14 +797,14 @@ describe("OpenRouter model provider", () => {
       fetchImpl: async () => new Response(stream, { status: 200 })
     });
 
-    const chunks: string[] = [];
+    const chunks: Array<{ kind: string; value: string }> = [];
     for await (const chunk of provider.completeStream!({
       messages: [{ role: "user", content: "Stream this." }]
     })) {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual(["Visible", " answer"]);
+    expect(chunks).toEqual([{ kind: "text", value: "Visible" }, { kind: "text", value: " answer" }]);
   });
 
   it("retries transient OpenRouter completion failures up to 3 total attempts", async () => {
@@ -865,14 +866,14 @@ describe("OpenRouter model provider", () => {
       fetchImpl
     });
 
-    const chunks: string[] = [];
+    const chunks: Array<{ kind: string; value: string }> = [];
     for await (const chunk of provider.completeStream!({
       messages: [{ role: "user", content: "Stream after retries." }]
     })) {
       chunks.push(chunk);
     }
 
-    expect(chunks).toEqual(["Recovered stream"]);
+    expect(chunks).toEqual([{ kind: "text", value: "Recovered stream" }]);
     expect(calls).toHaveLength(3);
   });
 });

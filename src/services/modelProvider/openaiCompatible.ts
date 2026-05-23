@@ -282,12 +282,12 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
 
               const openAiDelta = payload.choices?.[0]?.delta?.content;
               if (typeof openAiDelta === "string" && openAiDelta.length > 0) {
-                yield openAiDelta;
+                yield { kind: "text" as const, value: openAiDelta };
                 continue;
               }
 
               if (payload.type === "message.delta" && typeof payload.content === "string" && payload.content.length > 0) {
-                yield payload.content;
+                yield { kind: "text" as const, value: payload.content };
               }
             } catch {
               // Ignore non-JSON or partial lines and continue consuming.

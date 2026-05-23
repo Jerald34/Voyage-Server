@@ -482,7 +482,10 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             threadId: run.threadId,
             runId: run.id,
             role: "ASSISTANT",
-            content: data.assistantContent
+            content: data.assistantContent,
+            ...(data.processSnapshot != null
+              ? { metadata: toJsonInput({ process: data.processSnapshot }) }
+              : {})
           }
         })) as AgentMessageRecord;
 
@@ -494,10 +497,11 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
               threadId: run.threadId,
               type: "message.completed",
               sequence: nextSequence,
-              payload: {
+              payload: toJsonInput({
                 messageId: message.id,
-                content: data.assistantContent
-              } satisfies Record<string, unknown>
+                content: data.assistantContent,
+                ...(data.processSnapshot != null ? { process: data.processSnapshot } : {})
+              }) as Prisma.InputJsonValue
             }
           })) as AgentRunEventRecord,
           (await tx.agentRunEvent.create({
