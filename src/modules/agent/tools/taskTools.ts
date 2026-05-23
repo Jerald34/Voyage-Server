@@ -108,17 +108,68 @@ function normalizeTaskInput(input: unknown): z.infer<typeof taskInputSchema> {
   });
 }
 
-export function createRecordAgentTaskTool(options: { agentService: AgentToolService }): AgentTool {
+const updateTaskInputSchema = z.object({
+  id: z.string().uuid(),
+  label: z.string().min(1).max(500).optional(),
+  status: z.enum(["PENDING", "RUNNING", "COMPLETED", "FAILED"]).optional(),
+  sortOrder: z.number().int().nonnegative().optional()
+}).refine(
+  (v) => v.label !== undefined || v.status !== undefined || v.sortOrder !== undefined,
+  { message: "Provide at least one of: label, status, sortOrder" }
+);
+
+export function createAddAgentTaskTool(options: { agentService: AgentToolService }): AgentTool {
   return {
-    name: "record_agent_task",
+    name: "add_agent_task",
     async execute(context, input) {
       const parsed = normalizeTaskInput(input);
       const run = createRunRecord(context);
-      return options.agentService.recordTask(run, {
+      const task = await options.agentService.recordTask(run, {
         label: parsed.label,
         status: parsed.status,
         ...(parsed.sortOrder !== undefined ? { sortOrder: parsed.sortOrder } : {})
-      });
+      }) as { id: string; label: string; status: string; sortOrder: number };
+      return { id: task.id, label: task.label, status: task.status, sortOrder: task.sortOrder };
+    }
+  };
+}
+
+export function createUpdateAgentTaskTool(options: { agentService: AgentToolService }): AgentTool {
+  return {
+    name: "update_agent_task",
+    async execute(context, input) {
+      const parsed = updateTaskInputSchema.parse(input);
+      const run = createRunRecord(context);
+      const task = await options.agentService.updateTask(run, {
+        id: parsed.id,
+        ...(parsed.label !== undefined ? { label: parsed.label } : {}),
+        ...(parsed.status !== undefined ? { status: parsed.status } : {}),
+        ...(parsed.sortOrder !== undefined ? { sortOrder: parsed.sortOrder } : {})
+      }) as { id: string; label: string; status: string; sortOrder: number };
+      return { id: task.id, label: task.label, status: task.status, sortOrder: task.sortOrder };
+    }
+  };
+}
+
+export function createListAgentTasksTool(options: { agentService: AgentToolService }): AgentTool {
+  return {
+    name: "list_agent_tasks",
+    async execute(context, _input) {
+      const tasks = await options.agentService.listOpenTasksForThread(context.threadId) as Array<{ id: string; label: string; status: string; sortOrder: number }>;
+      return { tasks: tasks.map(t => ({ id: t.id, label: t.label, status: t.status, sortOrder: t.sortOrder })) };
+    }
+  };
+}
+
+/**
+ * Legacy alias for add_agent_task — kept for one release.
+ */
+export function createRecordAgentTaskTool(options: { agentService: AgentToolService }): AgentTool {
+  const addTool = createAddAgentTaskTool(options);
+  return {
+    name: "record_agent_task",
+    async execute(context, input) {
+      return addTool.execute(context, input);
     }
   };
 }

@@ -14,6 +14,8 @@ import type {
   AgentRunEventRecord,
   AgentToolCallInput,
   AgentTaskInput,
+  AgentTaskUpdateInput,
+  AgentTaskRecord,
   AgentSourceInput,
   AgentRunStatus
 } from "./agentTypes";
@@ -32,6 +34,7 @@ export type ProcessSnapshot = {
   status: "done";
   activeLabel: string;
   timeline: ProcessTimelineEntry[];
+  tasks: Array<{ id: string; label: string; status: string }>;
   durationMs: number | null;
   defaultOpen: false;
 };
@@ -73,7 +76,8 @@ function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number 
 function buildProcessSnapshot(
   runEvents: AgentRunEventRecord[],
   startedAt: Date | null,
-  completedAt: Date
+  completedAt: Date,
+  tasks: AgentTaskRecord[] = []
 ): ProcessSnapshot | null {
   const timeline: ProcessTimelineEntry[] = [];
   let currentThoughtText: string | null = null;
@@ -85,6 +89,15 @@ function buildProcessSnapshot(
   let atToolBoundary = true; // true at start so first thought begins a new entry
 
   const sorted = [...runEvents].sort((a, b) => a.sequence - b.sequence);
+
+  // Collect task ids touched during this run via task.updated events.
+  const runTouchedTaskIds = new Set<string>();
+  for (const event of sorted) {
+    if (event.type === "task.updated") {
+      const id = typeof event.payload?.id === "string" ? event.payload.id : null;
+      if (id) runTouchedTaskIds.add(id);
+    }
+  }
 
   for (const event of sorted) {
     if (event.type === "tool.started") {
@@ -134,10 +147,15 @@ function buildProcessSnapshot(
   const durationMs =
     startedAt != null ? completedAt.getTime() - startedAt.getTime() : null;
 
+  const tasksForSnapshot = tasks
+    .filter(t => runTouchedTaskIds.has(t.id))
+    .map(t => ({ id: t.id, label: t.label, status: t.status }));
+
   return {
     status: "done",
     activeLabel: summarizeTimeline(timeline, durationMs),
     timeline,
+    tasks: tasksForSnapshot,
     durationMs,
     defaultOpen: false
   };
@@ -379,6 +397,22 @@ export function createAgentService(options: {
       return task;
     },
 
+    async updateTask(run: AgentRunRecord, input: { id: string } & AgentTaskUpdateInput) {
+      const { task, event } = await options.repository.updateTaskAndEvent({
+        id: input.id,
+        runId: run.id,
+        threadId: run.threadId,
+        patch: { label: input.label, status: input.status, sortOrder: input.sortOrder }
+      });
+      debouncedTouchThread(run.threadId);
+      publishAgentRunEvent(run.id, { type: event.type, payload: event.payload }, event.id);
+      return task;
+    },
+
+    async listOpenTasksForThread(threadId: string) {
+      return options.repository.listForThread(threadId, { openOnly: true });
+    },
+
     async recordSources(run: AgentRunRecord, sources: AgentSourceInput[]) {
       const { sources: created, events } = await options.repository.createSourcesAndEvents({
         runId: run.id,
@@ -404,7 +438,13 @@ export function createAgentService(options: {
       let processSnapshot: ProcessSnapshot | null = null;
       try {
         const runEvents = await options.repository.listRunEvents(runId);
-        processSnapshot = buildProcessSnapshot(runEvents, run.startedAt, completedAt);
+        let tasks: AgentTaskRecord[] = [];
+        try {
+          tasks = await options.repository.listForThread(run.threadId, { openOnly: false });
+        } catch {
+          // best-effort
+        }
+        processSnapshot = buildProcessSnapshot(runEvents, run.startedAt, completedAt, tasks);
       } catch {
         // Best-effort: don't let snapshot failure block message persistence.
       }

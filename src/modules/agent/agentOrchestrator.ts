@@ -40,6 +40,7 @@ import {
   countItineraryItems,
   availableToolSet,
   buildRuntimeContextBlock,
+  buildTaskListBlock,
   injectRuntimeContextIntoLastUser,
   makeCompactToolOutput
 } from "./agentContextBuilder";
@@ -177,6 +178,15 @@ export function createAgentOrchestrator(options: {
           }
         }
 
+        // Fetch open tasks for context injection — best-effort, never blocks the run.
+        let openTasks: Array<{ id: string; label: string; status: string }> = [];
+        try {
+          const records = await options.agentService.listOpenTasksForThread(input.threadId);
+          openTasks = records.map(t => ({ id: t.id, label: t.label, status: t.status }));
+        } catch {
+          // best-effort; never block the run
+        }
+
         let modelContent = "";
         let modelUsage: ModelUsage | undefined;
         let initialMode: "text" | "json" = "text";
@@ -207,7 +217,11 @@ export function createAgentOrchestrator(options: {
             }
           }
 
-          const initialRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
+          const taskBlock = buildTaskListBlock(openTasks);
+          const initialRuntimeContext = [
+            buildRuntimeContextBlock(activeItineraryContext),
+            taskBlock
+          ].filter(Boolean).join("\n\n---\n\n");
           const historyWithContext = injectRuntimeContextIntoLastUser(
             historyOrCurrent,
             initialRuntimeContext
@@ -539,7 +553,11 @@ export function createAgentOrchestrator(options: {
           const { dayCount: currentDayCount, itemCount: currentItemCount } = countItineraryItems(activeItineraryContext?.itinerary);
           const itineraryIsEmptySkeleton = currentDayCount > 0 && currentItemCount === 0;
 
-          const continuationRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
+          const continuationTaskBlock = buildTaskListBlock(openTasks);
+          const continuationRuntimeContext = [
+            buildRuntimeContextBlock(activeItineraryContext),
+            continuationTaskBlock
+          ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
           const omittedToolResults = Math.max(0, toolResults.length - recentToolResults.length);
 

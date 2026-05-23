@@ -17,6 +17,9 @@ import {
   createPlaceInsightsTool,
   createPlanItineraryTool,
   createRecordAgentTaskTool,
+  createAddAgentTaskTool,
+  createUpdateAgentTaskTool,
+  createListAgentTasksTool,
   createRemoveItineraryDayTool,
   createRemoveItineraryItemTool,
   createRouteLogisticsTool,
@@ -53,6 +56,9 @@ function createAgencyAgentOrchestrator() {
   // Tools that don't need a maps provider can be registered up front.
   const tools = [
     createRecordAgentTaskTool({ agentService }),
+    createAddAgentTaskTool({ agentService }),
+    createUpdateAgentTaskTool({ agentService }),
+    createListAgentTasksTool({ agentService }),
     createCreateItineraryTool({ itineraryService, agentService }),
     createUpdateItineraryTool({ itineraryService, agentService }),
     createPlanItineraryTool({ itineraryService, agentService }),

@@ -12,7 +12,7 @@ import type {
   UpdateItineraryDayInput,
   UpdateItineraryItemInput
 } from "../itineraries/itineraryService";
-import type { AgentRunRecord, AgentSourceInput, AgentTaskInput } from "./agentTypes";
+import type { AgentRunRecord, AgentSourceInput, AgentTaskInput, AgentTaskRecord, AgentTaskUpdateInput } from "./agentTypes";
 import type { AgentEvent } from "./agentSchemas";
 
 export type AgentToolContext = {
@@ -41,6 +41,8 @@ export type AgentToolRegistryOptions = {
 export type AgentToolService = {
   recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<unknown>;
   recordTask(run: AgentRunRecord, input: AgentTaskInput): Promise<unknown>;
+  updateTask(run: AgentRunRecord, input: { id: string } & AgentTaskUpdateInput): Promise<unknown>;
+  listOpenTasksForThread(threadId: string): Promise<AgentTaskRecord[]>;
   recordSources(run: AgentRunRecord, sources: AgentSourceInput[]): Promise<unknown>;
 };
 

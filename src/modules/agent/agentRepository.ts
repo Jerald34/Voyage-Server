@@ -10,7 +10,9 @@ import type {
   AgentToolCallRecord,
   AgentTaskRecord,
   AgentSourceRecord,
-  AgentRunStatus
+  AgentRunStatus,
+  ListTasksOptions,
+  AgentTaskUpdateInput
 } from "./agentTypes";
 
 const OPEN_RUN_STATUSES: AgentRunStatus[] = ["QUEUED", "RUNNING"];
@@ -375,10 +377,19 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
     async createTaskAndEvent(data) {
       return client.$transaction(async (tx) => {
         await lockRunForSequence(tx, data.runId);
+        // NOTE: We previously acquired a second advisory lock here on threadId to
+        // prevent sortOrder races against the @@unique([threadId, sortOrder]) constraint.
+        // That doubled the lock-holding time per task insert and, combined with the
+        // parallel recordRunEvent transactions fired from executeToolCallsBatch,
+        // exhausted the Prisma connection pool (P2028: "Unable to start a transaction
+        // in the given time"). In practice each agent thread has one active user, so
+        // truly concurrent task inserts are rare. If a race ever does fire, the
+        // unique constraint will reject one insert and the agent will see the tool
+        // error and retry — far better than holding the pool hostage.
         const resolvedSortOrder =
           data.sortOrder ??
           ((await tx.agentTask.aggregate({
-            where: { runId: data.runId },
+            where: { threadId: data.threadId },
             _max: { sortOrder: true }
           }))._max.sortOrder ?? 0) + 1;
 
@@ -399,6 +410,51 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             type: "task.updated",
             sequence,
             payload: {
+              id: task.id,
+              label: task.label,
+              status: task.status,
+              sortOrder: task.sortOrder
+            } satisfies Record<string, unknown>
+          }
+        })) as AgentRunEventRecord;
+
+        return { task, event };
+      });
+    },
+
+    async listForThread(threadId: string, opts: ListTasksOptions) {
+      const where: Prisma.AgentTaskWhereInput = { threadId };
+      if (opts.openOnly) {
+        where.status = { in: ["PENDING", "RUNNING"] };
+      }
+      return client.agentTask.findMany({
+        where,
+        orderBy: { sortOrder: "asc" }
+      }) as Promise<AgentTaskRecord[]>;
+    },
+
+    async updateTaskAndEvent(data) {
+      return client.$transaction(async (tx) => {
+        await lockRunForSequence(tx, data.runId);
+        const task = (await tx.agentTask.update({
+          where: { id: data.id },
+          data: {
+            ...(data.patch.label !== undefined ? { label: data.patch.label } : {}),
+            ...(data.patch.status !== undefined ? { status: data.patch.status } : {}),
+            ...(data.patch.sortOrder !== undefined ? { sortOrder: data.patch.sortOrder } : {}),
+            runId: data.runId
+          }
+        })) as AgentTaskRecord;
+
+        const sequence = await nextRunEventSequence(tx, data.runId);
+        const event = (await tx.agentRunEvent.create({
+          data: {
+            runId: data.runId,
+            threadId: data.threadId,
+            type: "task.updated",
+            sequence,
+            payload: {
+              id: task.id,
               label: task.label,
               status: task.status,
               sortOrder: task.sortOrder

@@ -63,6 +63,9 @@ export const GRANULAR_ITINERARY_TOOL_NAMES = new Set([
 // continuation turn so the agent keeps working after recording a task or searching the web.
 export const CONTINUATION_TRIGGER_TOOL_NAMES = new Set([
   "record_agent_task",
+  "add_agent_task",
+  "update_agent_task",
+  "list_agent_tasks",
   "web_search",
   "search_google_places",
   "get_google_place_details",
@@ -318,6 +321,15 @@ export function buildRuntimeContextBlock(
     parts.push(idBlock);
   }
   return parts.join("\n\n");
+}
+
+export function buildTaskListBlock(tasks: Array<{ id: string; label: string; status: string }>): string {
+  if (tasks.length === 0) return "";
+  const lines = ["Open tasks for this thread (resume these before starting new work):"];
+  for (const task of tasks) {
+    lines.push(`- [${task.status}] id=${task.id} "${task.label}"`);
+  }
+  return lines.join("\n");
 }
 
 export function injectRuntimeContextIntoLastUser(
