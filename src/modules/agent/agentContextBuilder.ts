@@ -63,6 +63,9 @@ export const GRANULAR_ITINERARY_TOOL_NAMES = new Set([
 // continuation turn so the agent keeps working after recording a task or searching the web.
 export const CONTINUATION_TRIGGER_TOOL_NAMES = new Set([
   "record_agent_task",
+  "add_agent_task",
+  "update_agent_task",
+  "list_agent_tasks",
   "web_search",
   "search_google_places",
   "get_google_place_details",
@@ -270,9 +273,14 @@ export function buildItineraryIdentifierBlock(itinerary: Record<string, unknown>
       }
       const sortOrder = typeof item.sortOrder === "number" ? item.sortOrder : null;
       const title = typeof item.title === "string" ? item.title : "";
+      const startTime = typeof item.startTime === "string" ? item.startTime : null;
+      const endTime = typeof item.endTime === "string" ? item.endTime : null;
       const sortLabel = sortOrder !== null ? `sortOrder ${sortOrder}` : "(unknown order)";
+      const timeRange = startTime || endTime
+        ? `, time = ${startTime ?? "?"}–${endTime ?? "?"}`
+        : "";
       itemLines.push(
-        `  - ${label} / ${sortLabel}: itemId = ${itemId}${title ? `, title = ${title}` : ""}`
+        `  - ${label} / ${sortLabel}: itemId = ${itemId}${title ? `, title = ${title}` : ""}${timeRange}`
       );
     }
   }
@@ -313,6 +321,15 @@ export function buildRuntimeContextBlock(
     parts.push(idBlock);
   }
   return parts.join("\n\n");
+}
+
+export function buildTaskListBlock(tasks: Array<{ id: string; label: string; status: string }>): string {
+  if (tasks.length === 0) return "";
+  const lines = ["Open tasks for this thread (resume these before starting new work):"];
+  for (const task of tasks) {
+    lines.push(`- [${task.status}] id=${task.id} "${task.label}"`);
+  }
+  return lines.join("\n");
 }
 
 export function injectRuntimeContextIntoLastUser(

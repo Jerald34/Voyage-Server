@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { randomUUID } from "crypto";
 import { ApiError } from "../src/http/errors";
 import { formatSseEvent, subscribeToAgentRun } from "../src/modules/agent/agentEvents";
 import {
@@ -311,10 +312,11 @@ function createMemoryRepository(): AgentRepository & {
       return toolCall;
     },
     async createTaskAndEvent(data) {
+      // Allocate sortOrder per threadId (not runId) per Phase A spec
       const sortOrder =
-        data.sortOrder ?? tasks.filter((task) => task.runId === data.runId).reduce((max, task) => Math.max(max, task.sortOrder), 0) + 1;
+        data.sortOrder ?? tasks.filter((task) => task.threadId === data.threadId).reduce((max, task) => Math.max(max, task.sortOrder), 0) + 1;
       const task: AgentTaskRecord = {
-        id: `task-${tasks.length + 1}`,
+        id: randomUUID(),
         runId: data.runId,
         threadId: data.threadId,
         label: data.label,
@@ -330,6 +332,7 @@ function createMemoryRepository(): AgentRepository & {
         threadId: data.threadId,
         type: "task.updated",
         payload: {
+          id: task.id,
           label: task.label,
           status: task.status,
           sortOrder: task.sortOrder
@@ -339,6 +342,47 @@ function createMemoryRepository(): AgentRepository & {
       };
       events.push(event);
       return { task, event };
+    },
+    async updateTaskAndEvent(data) {
+      const task = tasks.find((candidate) => candidate.id === data.id);
+      if (!task) {
+        throw new Error("Task not found");
+      }
+      if (data.patch.label !== undefined) {
+        task.label = data.patch.label;
+      }
+      if (data.patch.status !== undefined) {
+        task.status = data.patch.status;
+      }
+      if (data.patch.sortOrder !== undefined) {
+        task.sortOrder = data.patch.sortOrder;
+      }
+      task.runId = data.runId;
+      task.updatedAt = now;
+
+      const event: AgentRunEventRecord = {
+        id: `event-${events.length + 1}`,
+        runId: data.runId,
+        threadId: data.threadId,
+        type: "task.updated",
+        payload: {
+          id: task.id,
+          label: task.label,
+          status: task.status,
+          sortOrder: task.sortOrder
+        },
+        sequence: events.filter((event) => event.runId === data.runId).length + 1,
+        createdAt: now
+      };
+      events.push(event);
+      return { task, event };
+    },
+    async listForThread(threadId, opts) {
+      const filtered = tasks.filter((task) => task.threadId === threadId);
+      if (opts.openOnly) {
+        return filtered.filter((task) => task.status === "PENDING" || task.status === "RUNNING");
+      }
+      return filtered.sort((a, b) => a.sortOrder - b.sortOrder);
     },
     async createSourcesAndEvents(data) {
       const created: AgentSourceRecord[] = data.sources.map((source, index) => ({
@@ -390,15 +434,17 @@ function createMemoryRepository(): AgentRepository & {
         threadId: run.threadId,
         runId: run.id,
         role: "ASSISTANT",
-        content: data.assistantContent
+        content: data.assistantContent,
+        metadata: data.processSnapshot != null ? { process: data.processSnapshot } : null
       });
+      const processPayload = data.processSnapshot != null ? { process: data.processSnapshot } : {};
       const completedEvents: AgentRunEventRecord[] = [
         {
           id: `event-${events.length + 1}`,
           runId: run.id,
           threadId: run.threadId,
           type: "message.completed",
-          payload: { messageId: message.id, content: data.assistantContent },
+          payload: { messageId: message.id, content: data.assistantContent, ...processPayload },
           sequence: events.filter((event) => event.runId === run.id).length + 1,
           createdAt: now
         },
@@ -665,8 +711,8 @@ describe("agent service", () => {
     expect(repository.tasks.map((task) => task.sortOrder)).toEqual([1, 2]);
     expect(repository.events.map((event) => event.type)).toEqual(["task.updated", "task.updated"]);
     expect(repository.events.map((event) => event.payload)).toEqual([
-      { label: "Research hotels", status: "RUNNING", sortOrder: 1 },
-      { label: "Book transfers", status: "PENDING", sortOrder: 2 }
+      { id: first.id, label: "Research hotels", status: "RUNNING", sortOrder: 1 },
+      { id: second.id, label: "Book transfers", status: "PENDING", sortOrder: 2 }
     ]);
   });
 
@@ -1022,3 +1068,6 @@ describe("agent service", () => {
     } satisfies Partial<ApiError>);
   });
 });
+
+// Export for reuse in other test files
+export { createMemoryRepository };

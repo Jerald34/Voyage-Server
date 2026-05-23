@@ -57,13 +57,23 @@ export type AgentToolCallInput = {
 
 export type AgentTaskRecord = {
   id: string;
-  runId: string;
+  runId: string | null;
   threadId: string;
   label: string;
   status: AgentTaskStatus;
   sortOrder: number;
   createdAt: Date;
   updatedAt: Date;
+};
+
+export type AgentTaskUpdateInput = {
+  label?: string;
+  status?: AgentTaskStatus;
+  sortOrder?: number;
+};
+
+export type ListTasksOptions = {
+  openOnly: boolean;
 };
 
 export type AgentTaskInput = {
@@ -185,8 +195,9 @@ export type AgentOrchestratorAgentService = {
   completeRun(
     runId: string,
     assistantContent: string
-  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord }>;
+  ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] }>;
   failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
+  listOpenTasksForThread(threadId: string): Promise<Array<{ id: string; label: string; status: string }>>;
 };
 
 export interface AgentRepository {
@@ -267,6 +278,13 @@ export interface AgentRepository {
     status: AgentTaskStatus;
     sortOrder?: number;
   }): Promise<{ task: AgentTaskRecord; event: AgentRunEventRecord }>;
+  listForThread(threadId: string, opts: ListTasksOptions): Promise<AgentTaskRecord[]>;
+  updateTaskAndEvent(data: {
+    id: string;
+    runId: string;
+    threadId: string;
+    patch: AgentTaskUpdateInput;
+  }): Promise<{ task: AgentTaskRecord; event: AgentRunEventRecord }>;
   createSourcesAndEvents(data: {
     runId: string;
     threadId: string;
@@ -277,6 +295,7 @@ export interface AgentRepository {
     data: {
       assistantContent: string;
       completedAt: Date;
+      processSnapshot?: Record<string, unknown>;
     }
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] } | null>;
   failRunIfOpen(

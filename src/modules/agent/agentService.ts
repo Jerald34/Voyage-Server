@@ -11,12 +11,155 @@ import {
 import type {
   AgentRepository,
   AgentRunRecord,
+  AgentRunEventRecord,
   AgentToolCallInput,
   AgentTaskInput,
+  AgentTaskUpdateInput,
+  AgentTaskRecord,
   AgentSourceInput,
   AgentRunStatus
 } from "./agentTypes";
 import { createPrismaAgentRepository } from "./agentRepository";
+
+// ---------------------------------------------------------------------------
+// ProcessSnapshot — server-side representation of a completed run's process.
+// Mirrors the client-side shape expected by ProcessBubble.
+// ---------------------------------------------------------------------------
+
+type ProcessTimelineEntry =
+  | { id: string; kind: "thought"; text: string }
+  | { id: string; kind: "tool"; name: string };
+
+export type ProcessSnapshot = {
+  status: "done";
+  activeLabel: string;
+  timeline: ProcessTimelineEntry[];
+  tasks: Array<{ id: string; label: string; status: string }>;
+  durationMs: number | null;
+  defaultOpen: false;
+};
+
+function humanizeToolName(name: string): string {
+  return String(name ?? "")
+    .replace(/[_.]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number | null): string {
+  const durationStr =
+    durationMs != null ? (durationMs / 1000).toFixed(1) + "s" : "-";
+
+  const toolEntries = timeline.filter((e): e is { id: string; kind: "tool"; name: string } => e.kind === "tool");
+
+  if (toolEntries.length === 0) {
+    return `Thought for ${durationStr}`;
+  }
+
+  const hasMapPinpoint = toolEntries.some((e) => e.name === "map_pinpoint");
+  if (hasMapPinpoint) {
+    return `Researched ${toolEntries.length} places · ${durationStr}`;
+  }
+
+  const allAddItem = toolEntries.every((e) => e.name === "add_itinerary_item");
+  if (allAddItem) {
+    if (toolEntries.length >= 3) {
+      return `Built itinerary · ${durationStr}`;
+    }
+    return `Added ${toolEntries.length} items · ${durationStr}`;
+  }
+
+  return `Worked for ${durationStr}`;
+}
+
+function buildProcessSnapshot(
+  runEvents: AgentRunEventRecord[],
+  startedAt: Date | null,
+  completedAt: Date,
+  tasks: AgentTaskRecord[] = []
+): ProcessSnapshot | null {
+  const timeline: ProcessTimelineEntry[] = [];
+  let currentThoughtText: string | null = null;
+  let thoughtIndex = 0;
+  let toolIndex = 0;
+
+  // Track whether the previous event was a tool boundary (tool.started, tool.completed, tool.failed)
+  // to decide when to start a new thought entry.
+  let atToolBoundary = true; // true at start so first thought begins a new entry
+
+  const sorted = [...runEvents].sort((a, b) => a.sequence - b.sequence);
+
+  // Collect task ids touched during this run via task.updated events.
+  const runTouchedTaskIds = new Set<string>();
+  for (const event of sorted) {
+    if (event.type === "task.updated") {
+      const id = typeof event.payload?.id === "string" ? event.payload.id : null;
+      if (id) runTouchedTaskIds.add(id);
+    }
+  }
+
+  for (const event of sorted) {
+    if (event.type === "tool.started") {
+      // Flush any accumulated thought text before the tool.
+      if (currentThoughtText !== null && currentThoughtText.trim()) {
+        thoughtIndex += 1;
+        timeline.push({ id: `thought-${thoughtIndex}`, kind: "thought", text: currentThoughtText });
+      }
+      currentThoughtText = null;
+      atToolBoundary = true;
+
+      const name =
+        typeof event.payload.name === "string" ? event.payload.name : humanizeToolName(String(event.payload.name ?? ""));
+      toolIndex += 1;
+      timeline.push({ id: `tool-${event.sequence}`, kind: "tool", name });
+    } else if (event.type === "tool.completed" || event.type === "tool.failed") {
+      // Flush thought if any accumulated before this boundary.
+      if (currentThoughtText !== null && currentThoughtText.trim()) {
+        thoughtIndex += 1;
+        timeline.push({ id: `thought-${thoughtIndex}`, kind: "thought", text: currentThoughtText });
+      }
+      currentThoughtText = null;
+      atToolBoundary = true;
+    } else if (event.type === "thought.delta") {
+      const delta = typeof event.payload.delta === "string" ? event.payload.delta : "";
+      if (atToolBoundary || currentThoughtText === null) {
+        currentThoughtText = delta;
+        atToolBoundary = false;
+      } else {
+        currentThoughtText += delta;
+      }
+    }
+    // All other event types are ignored.
+  }
+
+  // Flush any trailing thought.
+  if (currentThoughtText !== null && currentThoughtText.trim()) {
+    thoughtIndex += 1;
+    timeline.push({ id: `thought-${thoughtIndex}`, kind: "thought", text: currentThoughtText });
+  }
+
+  // Skip snapshot entirely if timeline is empty.
+  if (timeline.length === 0) {
+    return null;
+  }
+
+  const durationMs =
+    startedAt != null ? completedAt.getTime() - startedAt.getTime() : null;
+
+  const tasksForSnapshot = tasks
+    .filter(t => runTouchedTaskIds.has(t.id))
+    .map(t => ({ id: t.id, label: t.label, status: t.status }));
+
+  return {
+    status: "done",
+    activeLabel: summarizeTimeline(timeline, durationMs),
+    timeline,
+    tasks: tasksForSnapshot,
+    durationMs,
+    defaultOpen: false
+  };
+}
 
 const TERMINAL_RUN_STATUSES: AgentRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
 
@@ -254,6 +397,22 @@ export function createAgentService(options: {
       return task;
     },
 
+    async updateTask(run: AgentRunRecord, input: { id: string } & AgentTaskUpdateInput) {
+      const { task, event } = await options.repository.updateTaskAndEvent({
+        id: input.id,
+        runId: run.id,
+        threadId: run.threadId,
+        patch: { label: input.label, status: input.status, sortOrder: input.sortOrder }
+      });
+      debouncedTouchThread(run.threadId);
+      publishAgentRunEvent(run.id, { type: event.type, payload: event.payload }, event.id);
+      return task;
+    },
+
+    async listOpenTasksForThread(threadId: string) {
+      return options.repository.listForThread(threadId, { openOnly: true });
+    },
+
     async recordSources(run: AgentRunRecord, sources: AgentSourceInput[]) {
       const { sources: created, events } = await options.repository.createSourcesAndEvents({
         runId: run.id,
@@ -274,9 +433,26 @@ export function createAgentService(options: {
       const run = await getRun(runId);
       assertRunOpen(run);
       const completedAt = now();
+
+      // Compute the process snapshot from persisted run events before writing the message.
+      let processSnapshot: ProcessSnapshot | null = null;
+      try {
+        const runEvents = await options.repository.listRunEvents(runId);
+        let tasks: AgentTaskRecord[] = [];
+        try {
+          tasks = await options.repository.listForThread(run.threadId, { openOnly: false });
+        } catch {
+          // best-effort
+        }
+        processSnapshot = buildProcessSnapshot(runEvents, run.startedAt, completedAt, tasks);
+      } catch {
+        // Best-effort: don't let snapshot failure block message persistence.
+      }
+
       const completed = await options.repository.completeRunIfOpen(runId, {
         assistantContent,
-        completedAt
+        completedAt,
+        processSnapshot: processSnapshot ?? undefined
       });
       if (!completed) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");

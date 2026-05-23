@@ -40,6 +40,7 @@ import {
   countItineraryItems,
   availableToolSet,
   buildRuntimeContextBlock,
+  buildTaskListBlock,
   injectRuntimeContextIntoLastUser,
   makeCompactToolOutput
 } from "./agentContextBuilder";
@@ -51,6 +52,7 @@ async function streamModelCompletion(options: {
     temperature?: number;
   };
   onDelta: (delta: string) => Promise<void>;
+  onThought?: (delta: string) => Promise<void>;
 }) {
   if (!options.modelProvider.completeStream) {
     return null;
@@ -58,17 +60,21 @@ async function streamModelCompletion(options: {
 
   let content = "";
   let usage: ModelUsage | undefined;
-  for await (const delta of options.modelProvider.completeStream({
+  for await (const chunk of options.modelProvider.completeStream({
     ...options.input,
     onUsage: (nextUsage) => {
       usage = nextUsage;
     }
   })) {
-    if (!delta) {
+    if (!chunk || !chunk.value) {
       continue;
     }
-    content += delta;
-    await options.onDelta(delta);
+    if (chunk.kind === "thought") {
+      await options.onThought?.(chunk.value);
+    } else {
+      content += chunk.value;
+      await options.onDelta(chunk.value);
+    }
   }
 
   return { content, usage };
@@ -172,6 +178,15 @@ export function createAgentOrchestrator(options: {
           }
         }
 
+        // Fetch open tasks for context injection — best-effort, never blocks the run.
+        let openTasks: Array<{ id: string; label: string; status: string }> = [];
+        try {
+          const records = await options.agentService.listOpenTasksForThread(input.threadId);
+          openTasks = records.map(t => ({ id: t.id, label: t.label, status: t.status }));
+        } catch {
+          // best-effort; never block the run
+        }
+
         let modelContent = "";
         let modelUsage: ModelUsage | undefined;
         let initialMode: "text" | "json" = "text";
@@ -202,7 +217,11 @@ export function createAgentOrchestrator(options: {
             }
           }
 
-          const initialRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
+          const taskBlock = buildTaskListBlock(openTasks);
+          const initialRuntimeContext = [
+            buildRuntimeContextBlock(activeItineraryContext),
+            taskBlock
+          ].filter(Boolean).join("\n\n---\n\n");
           const historyWithContext = injectRuntimeContextIntoLastUser(
             historyOrCurrent,
             initialRuntimeContext
@@ -222,6 +241,12 @@ export function createAgentOrchestrator(options: {
                 messages: initialMessages,
                 temperature: 0.6
               },
+              onThought: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "thought.delta",
+                  payload: { delta }
+                });
+              },
               onDelta: async (delta) => {
                 modelContent += delta;
                 initialMode = detectInitialOutputMode(modelContent);
@@ -234,7 +259,7 @@ export function createAgentOrchestrator(options: {
                 });
                 if (initialMode === "text" && !isRecoveryCandidate) {
                   await options.agentService.recordRunEvent(run, {
-                    type: "message.delta",
+                    type: "thought.delta",
                     payload: { delta }
                   });
                 } else if (isRecoveryCandidate && !recoveryNotified) {
@@ -325,6 +350,44 @@ export function createAgentOrchestrator(options: {
         let hadRecoverableFailure = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
 
+        // Track how many times each item is touched by editing tools to detect cascade loops
+        // where the agent repeatedly adjusts times/positions without converging.
+        // Two-tier system:
+        //   - "warning" (soft): inject guidance to wrap up — the agent may still have work to do
+        //   - "looping" (hard): force-break the loop — the agent is clearly going in circles
+        const itemTouchCounts = new Map<string, number>();
+        const EDIT_TOOL_NAMES = new Set(["update_itinerary_item", "move_itinerary_item", "remove_itinerary_item"]);
+        function trackItemTouch(toolName: string, toolInput: Record<string, unknown>) {
+          const itemId = typeof toolInput.itemId === "string" ? toolInput.itemId : null;
+          if (itemId && EDIT_TOOL_NAMES.has(toolName)) {
+            itemTouchCounts.set(itemId, (itemTouchCounts.get(itemId) || 0) + 1);
+          }
+          // Detect duplicate add_itinerary_item calls by title (e.g. adding airport arrival twice)
+          if (toolName === "add_itinerary_item") {
+            const item = typeof toolInput.item === "object" && toolInput.item !== null ? toolInput.item as Record<string, unknown> : null;
+            const title = typeof item?.title === "string" ? item.title : null;
+            if (title) {
+              const addKey = `add:${title.toLowerCase().trim()}`;
+              itemTouchCounts.set(addKey, (itemTouchCounts.get(addKey) || 0) + 1);
+            }
+          }
+        }
+        function maxItemTouches(): number {
+          let max = 0;
+          for (const count of itemTouchCounts.values()) {
+            if (count > max) max = count;
+          }
+          return max;
+        }
+        // Soft warning: agent should start wrapping up, but can finish current work
+        function isEditCascading(): boolean {
+          return maxItemTouches() >= 5;
+        }
+        // Hard loop: agent is oscillating and will never converge — force-break
+        function isEditLooping(): boolean {
+          return maxItemTouches() >= 8;
+        }
+
         async function executeToolCallsBatch(toolCalls: Array<{ name: string; input: Record<string, unknown> }>) {
           for (const toolCall of toolCalls) {
             checkCancelled();
@@ -366,6 +429,7 @@ export function createAgentOrchestrator(options: {
               // compact delta in `toolResults` — the full itinerary is reachable via
               // `activeItineraryContext` for in-loop prompts and via the persisted
               // `tool.completed` event for cross-message recovery.
+              trackItemTouch(toolCall.name, normalizedToolInput);
               activeItineraryContext = applyToolResultToItineraryContext(
                 activeItineraryContext,
                 toolCall.name,
@@ -489,7 +553,11 @@ export function createAgentOrchestrator(options: {
           const { dayCount: currentDayCount, itemCount: currentItemCount } = countItineraryItems(activeItineraryContext?.itinerary);
           const itineraryIsEmptySkeleton = currentDayCount > 0 && currentItemCount === 0;
 
-          const continuationRuntimeContext = buildRuntimeContextBlock(activeItineraryContext);
+          const continuationTaskBlock = buildTaskListBlock(openTasks);
+          const continuationRuntimeContext = [
+            buildRuntimeContextBlock(activeItineraryContext),
+            continuationTaskBlock
+          ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
           const omittedToolResults = Math.max(0, toolResults.length - recentToolResults.length);
 
@@ -528,7 +596,11 @@ export function createAgentOrchestrator(options: {
                 "",
                 itineraryIsEmptySkeleton
                   ? `STATE CHECK: The itinerary has ${currentDayCount} day(s) but ZERO items so far. The plan is NOT complete. Your next response MUST be a single add_itinerary_item tool call (or estimate_route to validate the route before the next add). Do NOT respond with plain text yet. Do NOT call plan_itinerary again — the skeleton already exists. Begin populating Day 1.`
-                  : "If the itinerary still needs more stops to fulfil the original request, respond with the next single tool call (preferably add_itinerary_item, one item at a time). When the itinerary is complete, respond with a brief plain-text summary and no tool call."
+                  : isEditLooping()
+                    ? "EDIT LOOP DETECTED: You have modified the same items too many times without converging. Your edits are cascading. STOP making further adjustments — minor time gaps or imperfect ordering are acceptable. Respond NOW with a brief plain-text summary of the changes you made. Do NOT make any more tool calls."
+                    : isEditCascading()
+                      ? "CAUTION: You are re-editing items you already modified. If you have completed the user's requested changes, stop now and respond with a plain-text summary. Only continue if there are still unfinished additions or edits the user explicitly asked for. Do not keep adjusting times across the whole day — small gaps are acceptable."
+                      : "If the itinerary still needs more stops or changes to fulfil the original request, respond with the next single tool call. When the requested changes are complete, respond with a brief plain-text summary and no tool call. Do not cascade time adjustments across the entire day — only adjust items that directly overlap. Small gaps between items are fine."
               ].filter(Boolean).join("\n")
             }
           ];
@@ -578,6 +650,15 @@ export function createAgentOrchestrator(options: {
           }
 
           lastAssistantMessage = nextParsed.assistantMessage || lastAssistantMessage;
+
+          // If we already warned the agent about an edit loop but it still issued a tool call,
+          // force-break the loop to prevent runaway cost and latency.
+          if (isEditLooping()) {
+            agentLogger.debug(input.runId, "Force-breaking continuation loop: edit loop detected after warning");
+            shouldContinueLoop = false;
+            break;
+          }
+
           try {
             await executeToolCallsBatch(nextParsed.toolCalls);
           } catch (error) {
@@ -645,6 +726,12 @@ export function createAgentOrchestrator(options: {
               input: {
                 messages: synthesisMessages,
                 temperature: 0.6
+              },
+              onThought: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "thought.delta",
+                  payload: { delta }
+                });
               },
               onDelta: async (delta) => {
                 await options.agentService.recordRunEvent(run, {

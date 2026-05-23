@@ -33,6 +33,7 @@ export const agentEventSchema = z.object({
     "tool.completed",
     "tool.failed",
     "message.delta",
+    "thought.delta",
     "message.completed",
     "itinerary.updated",
     "itinerary.created",
