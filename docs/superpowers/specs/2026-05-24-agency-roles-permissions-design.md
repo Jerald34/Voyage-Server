@@ -33,6 +33,8 @@ A follow-up direction, **personal user accounts** (a disjoint account type that 
 
 This is a rename of the existing `ADMIN` value. All existing rows (small number — only platform admins) migrate in the same change.
 
+**SUPER_ADMIN responsibilities are unchanged from today.** The full agency verification pipeline — `listPendingAgencies`, `approveAgency`, `rejectAgency`, `suspendAgency`, `unsuspendAgency`, `getAgencyDetail`, `getPendingCount`, and the `AdminAuditEvent` writes — keeps its current behavior. Only the role name changes (and the helper renames from `assertAdmin` to `assertSuperAdmin`, with error code `ADMIN_REQUIRED` becoming `SUPER_ADMIN_REQUIRED`).
+
 ### Agency-level roles (on `AgencyMembership.role`, unchanged enum)
 
 - `OWNER` — exactly one per agency, enforced by `Agency.ownerUserId`. Holds destructive and financial rights.
@@ -94,7 +96,25 @@ OWNER protection rules enforced server-side:
 - Membership for the OWNER user cannot be removed, disabled, or have its role changed via the normal team-management routes. The only way to change who is OWNER is the Transfer Ownership flow.
 - Transfer Ownership atomically updates `Agency.ownerUserId` and both memberships (old OWNER becomes ADMIN, new OWNER takes the role).
 
-## UI Shape
+## Super Admin UI
+
+The platform-admin UI already exists and is reused as-is. It lives at `components/admin/AdminAgenciesPage.jsx` (with `AgencyTable.jsx` and `AgencyDetailModal.jsx`) and renders as an "Admin" tab inside the existing HomePage shell. The page provides:
+
+- Status filter (ALL / PENDING_REVIEW / VERIFIED / REJECTED / SUSPENDED).
+- Search across agency name, owner email, owner display name, business email.
+- Sortable agency table (default sort: submitted-at desc).
+- Agency detail modal with *Approve* / *Reject (with reason)* / *Suspend (with reason)* / *Unsuspend* actions.
+- Pending-count badge polled on a timer.
+
+Changes for this spec:
+
+- Two string updates on the client: the gate in `components/trip-dashboard/HomePage.jsx` (the `activeTab === "admin" && user?.role === "ADMIN"` check, plus the two `user?.role !== "ADMIN"` early-returns in the polling hook) becomes `"SUPER_ADMIN"`.
+- The `/admin/...` API routes keep their paths; only their server-side gates rename from `assertAdmin` to `assertSuperAdmin` and their error codes from `ADMIN_REQUIRED` to `SUPER_ADMIN_REQUIRED`.
+- The client API layer (`app/lib/api/admin.js`) needs no changes.
+
+The visual treatment of the admin tab is **not redesigned** in this spec. The Approach C principles below (calm role pills, muted destructive colors, friendly empty states) describe the *agency-internal* UI seen by OWNER / ADMIN / STAFF. The platform-admin UI is a separate surface for Voyage staff and can be refined later if needed.
+
+## UI Shape (Agency-Internal)
 
 Follows the "Hybrid: nav-shaped + transparent member list" approach chosen during brainstorming.
 
@@ -162,10 +182,12 @@ Permission gates are the riskiest layer. Silent leaks are very bad. Tests:
 ## Migration and Rollout
 
 1. Prisma migration: rename `UserRole.ADMIN` to `SUPER_ADMIN`. Data migration updates any existing rows. Code references to `UserRole.ADMIN` are renamed in the same change.
-2. Add the new `require*` server helpers and wire them into trip, itinerary, agent-thread, settings, and team routes.
-3. Add the `/agency/[agencyId]/team` and `/agency/[agencyId]/settings` routes on the client.
-4. Update the sidebar to read membership role and render the right tree.
-5. No downtime expected. The schema change is a value rename; behavior changes are additive.
+2. Rename the server helper `assertAdmin` to `assertSuperAdmin` in `agencyService.ts` and update its error code to `SUPER_ADMIN_REQUIRED`.
+3. Update the client gates in `HomePage.jsx` (one tab gate, two polling early-returns) to compare against `"SUPER_ADMIN"`.
+4. Add the new `require*` server helpers and wire them into trip, itinerary, agent-thread, settings, and team routes.
+5. Add the `/agency/[agencyId]/team` and `/agency/[agencyId]/settings` routes on the client.
+6. Update the sidebar to read membership role and render the right tree.
+7. No downtime expected. The schema change is a value rename; behavior changes are additive.
 
 ## Future Work (Out of Scope)
 
