@@ -77,13 +77,13 @@ export function requireAuth(request: Request, _response: Response, next: NextFun
   return next();
 }
 
-export function requireAdmin(request: Request, _response: Response, next: NextFunction) {
+export function requireSuperAdmin(request: Request, _response: Response, next: NextFunction) {
   if (!request.authUser) {
     return next(new ApiError(401, "AUTH_REQUIRED", "Sign in is required."));
   }
 
-  if (request.authUser.role !== "ADMIN") {
-    return next(new ApiError(403, "ADMIN_REQUIRED", "Admin access is required."));
+  if (request.authUser.role !== "SUPER_ADMIN") {
+    return next(new ApiError(403, "SUPER_ADMIN_REQUIRED", "Super admin access is required."));
   }
 
   return next();
