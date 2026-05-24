@@ -344,6 +344,41 @@ describe("agency service", () => {
     expect(parsed.businessEmail).toBe("hello@example.com");
   });
 
+  it("ADMIN member can successfully update agency settings", async () => {
+    const { service, repository } = createService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
+      name: "Admin Edit Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+    repository.memberships.push({
+      id: "membership-2",
+      agencyId: agency.id,
+      userId: "admin-1",
+      role: "ADMIN",
+      status: "ACTIVE"
+    });
+
+    const updated = await service.updateAgencySettings(createUser({ id: "admin-1" }), agency.id, {
+      name: "Admin Edited Travel",
+      businessPhone: "639003334444",
+      businessEmail: "admin@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+
+    expect(updated).toMatchObject({
+      id: agency.id,
+      name: "Admin Edited Travel",
+      businessPhone: "639003334444",
+      businessEmail: "admin@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+  });
+
   it("STAFF member gets ApiError 403 AGENCY_ADMIN_REQUIRED", async () => {
     const { service, repository } = createService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
