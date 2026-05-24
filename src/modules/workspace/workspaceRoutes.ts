@@ -22,8 +22,15 @@ router.use(async (request, _response, next) => {
 
 router.get("/bootstrap", async (request, response, next) => {
   try {
-    const agencyId = request.resolvedAgencyId ?? String((request.params as Record<string, string | undefined>).agencyId);
-    const result = await getBootstrap(agencyId);
+    const params = request.params as Record<string, string | undefined>;
+    const access = await agencyAccessService.requireVerifiedAgencyMember(
+      request.authUser!,
+      String(params.agencyId)
+    );
+    const result = await getBootstrap(access.agency.id, {
+      role: access.membership!.role,
+      userId: request.authUser!.id
+    });
     response.json(result);
   } catch (error) {
     next(error);
