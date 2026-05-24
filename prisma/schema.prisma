@@ -21,6 +21,12 @@ enum AuthProvider {
   APPLE
 }
 
+enum UserAccountType {
+  PENDING
+  PERSONAL
+  AGENCY_USER
+}
+
 enum AgencyStatus {
   PENDING_REVIEW
   VERIFIED
@@ -136,6 +142,7 @@ model User {
   displayName         String
   role                UserRole                 @default(USER)
   status              UserStatus               @default(ACTIVE)
+  accountType         UserAccountType          @default(PENDING)
   emailVerifiedAt     DateTime?
   avatarImageId       String?                  @unique @db.Uuid
   avatarImage         ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
@@ -345,10 +352,10 @@ model ClientTrip {
 
 model Itinerary {
   id              String           @id @default(uuid()) @db.Uuid
-  agencyId        String           @db.Uuid
-  agency          Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId        String?          @db.Uuid
+  agency          Agency?          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   tripId          String           @db.Uuid
-  trip            ClientTrip       @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
+  trip            ClientTrip?      @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
   createdByUserId String           @db.Uuid
   createdByUser   User             @relation("ItineraryCreator", fields: [createdByUserId], references: [id])
   title           String
@@ -430,8 +437,8 @@ model PlaceSnapshot {
 
 model AgentThread {
   id              String            @id @default(uuid()) @db.Uuid
-  agencyId        String            @db.Uuid
-  agency          Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId        String?           @db.Uuid
+  agency          Agency?           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   tripId          String?           @db.Uuid
   trip            ClientTrip?       @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: NoAction)
   createdByUserId String            @db.Uuid
@@ -597,10 +604,10 @@ model ItineraryShare {
   token        String             @unique
   itineraryId  String             @db.Uuid
   itinerary    Itinerary          @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
-  tripId       String             @db.Uuid
-  trip         ClientTrip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  agencyId     String             @db.Uuid
-  agency       Agency             @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  tripId       String?            @db.Uuid
+  trip         ClientTrip?        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  agencyId     String?            @db.Uuid
+  agency       Agency?            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   clientName   String?
   clientEmail  String?
   expiresAt    DateTime?
