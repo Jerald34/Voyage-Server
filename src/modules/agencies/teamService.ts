@@ -53,12 +53,12 @@ export function createTeamService(options: { repository: TeamRepository }) {
     },
 
     async transferOwnership(input: { agencyId: string; currentOwnerMembershipId: string; targetMembershipId: string }) {
-      if (input.currentOwnerMembershipId === input.targetMembershipId) {
-        throw new ApiError(400, "TRANSFER_SAME_USER", "The new owner must be a different member.");
-      }
       const current = await options.repository.findMembershipById(input.currentOwnerMembershipId);
       if (!current || current.agencyId !== input.agencyId || current.role !== "OWNER") {
         throw new ApiError(400, "NOT_CURRENT_OWNER", "Source membership is not the current owner.");
+      }
+      if (input.currentOwnerMembershipId === input.targetMembershipId) {
+        throw new ApiError(400, "TRANSFER_SAME_USER", "The new owner must be a different member.");
       }
       const target = await options.repository.findMembershipById(input.targetMembershipId);
       if (!target || target.agencyId !== input.agencyId) {
