@@ -56,9 +56,9 @@ function assertSuperAdmin(user: AgencyUser) {
   }
 }
 
-function assertAgencyOwnerMembership(membership: AgencyMembershipRecord | null) {
-  if (!membership || membership.status !== "ACTIVE" || membership.role !== "OWNER") {
-    throw new ApiError(403, "AGENCY_OWNER_REQUIRED", "Only the agency owner can edit workspace settings.");
+function assertAgencyAdminMembership(membership: AgencyMembershipRecord | null) {
+  if (!membership || membership.status !== "ACTIVE" || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    throw new ApiError(403, "AGENCY_ADMIN_REQUIRED", "Only the agency owner or admin can edit workspace settings.");
   }
 }
 
@@ -114,7 +114,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       await findRequiredAgency(agencyId);
 
       const membership = await options.repository.findMembership(agencyId, user.id);
-      assertAgencyOwnerMembership(membership);
+      assertAgencyAdminMembership(membership);
 
       const name = input.name.trim();
       const businessPhone = normalizeDigitsOnlyBusinessPhone(input.businessPhone);

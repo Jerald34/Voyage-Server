@@ -1,5 +1,6 @@
 import { Router } from "express";
 import { requireAuth } from "../../http/authMiddleware";
+import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { createAgencySchema, updateAgencySettingsSchema } from "./agencySchemas";
 import { agencyService } from "./agencyService";
 
@@ -21,6 +22,7 @@ agencyRoutes.get("/me", requireAuth, (request, response) => {
 
 agencyRoutes.patch("/:agencyId/settings", requireAuth, async (request, response, next) => {
   try {
+    await agencyAccessService.requireAgencyAdmin(request.authUser!, String(request.params.agencyId));
     const input = updateAgencySettingsSchema.parse(request.body);
     const agency = await agencyService.updateAgencySettings(request.authUser!, String(request.params.agencyId), {
       ...input

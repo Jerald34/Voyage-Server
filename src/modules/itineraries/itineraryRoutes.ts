@@ -69,6 +69,7 @@ itineraryRoutes.delete("/trips/:tripId", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
     const tripId = String(request.params.tripId);
+    await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
     const result = await itineraryService.deleteTrip(agencyId, tripId);
     response.json(result);
   } catch (error) {

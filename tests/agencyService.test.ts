@@ -344,7 +344,7 @@ describe("agency service", () => {
     expect(parsed.businessEmail).toBe("hello@example.com");
   });
 
-  it("non-owner member gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
+  it("STAFF member gets ApiError 403 AGENCY_ADMIN_REQUIRED", async () => {
     const { service, repository } = createService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
       name: "Owner Travel",
@@ -370,12 +370,12 @@ describe("agency service", () => {
         country: "Philippines"
       })
     ).rejects.toMatchObject({
-      code: "AGENCY_OWNER_REQUIRED",
+      code: "AGENCY_ADMIN_REQUIRED",
       statusCode: 403
     });
   });
 
-  it("disabled owner membership gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
+  it("disabled owner membership gets ApiError 403 AGENCY_ADMIN_REQUIRED", async () => {
     const { service, repository } = createService();
     const owner = createUser({ id: "owner-1" });
     const agency = await service.createAgencyApplication(owner, {
@@ -396,7 +396,7 @@ describe("agency service", () => {
         country: "Philippines"
       })
     ).rejects.toMatchObject({
-      code: "AGENCY_OWNER_REQUIRED",
+      code: "AGENCY_ADMIN_REQUIRED",
       statusCode: 403
     });
   });
