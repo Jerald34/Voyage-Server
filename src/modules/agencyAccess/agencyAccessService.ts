@@ -13,6 +13,7 @@ export type AgencyAccess = {
     status: "PENDING_REVIEW" | "VERIFIED" | "REJECTED" | "SUSPENDED";
   };
   membership: {
+    id: string;
     userId: string;
     agencyId: string;
     role: "OWNER" | "ADMIN" | "STAFF";

@@ -21,6 +21,7 @@ function createAgencyAccess(overrides: Partial<AgencyAccess> = {}): AgencyAccess
       status: "VERIFIED"
     },
     membership: {
+      id: "membership-1",
       agencyId: "agency-1",
       userId: "user-1",
       role: "OWNER",
@@ -114,6 +115,7 @@ describe("agency access service", () => {
       "agency-1",
       createAgencyAccess({
         membership: {
+          id: "membership-1",
           agencyId: "agency-1",
           userId: "user-1",
           role: "ADMIN",
@@ -146,6 +148,7 @@ describe("agency access service", () => {
       "agency-1",
       createAgencyAccess({
         membership: {
+          id: "membership-1",
           agencyId: "agency-1",
           userId: "user-1",
           role: "STAFF",
@@ -180,7 +183,7 @@ describe("requireAgencyOwner", () => {
   it("returns access for an OWNER member", async () => {
     const { service, repository } = createService();
     const access = createAgencyAccess({
-      membership: { agencyId: "agency-1", userId: "user-1", role: "OWNER", status: "ACTIVE" }
+      membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "OWNER", status: "ACTIVE" }
     });
     repository.accessByAgencyId.set("agency-1", access);
     await expect(service.requireAgencyOwner(createUser(), "agency-1")).resolves.toEqual(access);
@@ -191,7 +194,7 @@ describe("requireAgencyOwner", () => {
     repository.accessByAgencyId.set(
       "agency-1",
       createAgencyAccess({
-        membership: { agencyId: "agency-1", userId: "user-1", role: "ADMIN", status: "ACTIVE" }
+        membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "ADMIN", status: "ACTIVE" }
       })
     );
     await expect(service.requireAgencyOwner(createUser(), "agency-1")).rejects.toMatchObject({
@@ -205,7 +208,7 @@ describe("requireAgencyOwner", () => {
     repository.accessByAgencyId.set(
       "agency-1",
       createAgencyAccess({
-        membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+        membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
       })
     );
     await expect(service.requireAgencyOwner(createUser(), "agency-1")).rejects.toMatchObject({
@@ -219,7 +222,7 @@ describe("requireAgencyAdmin", () => {
   it.each(["OWNER", "ADMIN"] as const)("returns access for a(n) %s member", async (role) => {
     const { service, repository } = createService();
     const access = createAgencyAccess({
-      membership: { agencyId: "agency-1", userId: "user-1", role, status: "ACTIVE" }
+      membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role, status: "ACTIVE" }
     });
     repository.accessByAgencyId.set("agency-1", access);
     await expect(service.requireAgencyAdmin(createUser(), "agency-1")).resolves.toEqual(access);
@@ -230,7 +233,7 @@ describe("requireAgencyAdmin", () => {
     repository.accessByAgencyId.set(
       "agency-1",
       createAgencyAccess({
-        membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+        membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
       })
     );
     await expect(service.requireAgencyAdmin(createUser(), "agency-1")).rejects.toMatchObject({
@@ -262,7 +265,7 @@ describe("requireTripAccess", () => {
   it("allows ADMIN access to any trip in the agency", async () => {
     const { service, repository } = createService();
     repository.accessByAgencyId.set("agency-1", createAgencyAccess({
-      membership: { agencyId: "agency-1", userId: "user-1", role: "ADMIN", status: "ACTIVE" }
+      membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "ADMIN", status: "ACTIVE" }
     }));
     withTripOrganizer(repository, "trip-1", "other-staff");
     await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).resolves.toBeDefined();
@@ -271,7 +274,7 @@ describe("requireTripAccess", () => {
   it("allows STAFF to access their own trip", async () => {
     const { service, repository } = createService();
     repository.accessByAgencyId.set("agency-1", createAgencyAccess({
-      membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+      membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
     }));
     withTripOrganizer(repository, "trip-1", "user-1");
     await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).resolves.toBeDefined();
@@ -280,7 +283,7 @@ describe("requireTripAccess", () => {
   it("returns 404 (not 403) when STAFF probes another organizer's trip", async () => {
     const { service, repository } = createService();
     repository.accessByAgencyId.set("agency-1", createAgencyAccess({
-      membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+      membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
     }));
     withTripOrganizer(repository, "trip-1", "other-staff");
     await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).rejects.toMatchObject({
@@ -292,7 +295,7 @@ describe("requireTripAccess", () => {
   it("returns 404 when the trip does not exist at all", async () => {
     const { service, repository } = createService();
     repository.accessByAgencyId.set("agency-1", createAgencyAccess({
-      membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+      membership: { id: "membership-1", agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
     }));
     // no withTripOrganizer call — repo returns null
     (repository as any).findTripOrganizer = async () => null;
