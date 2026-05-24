@@ -11,6 +11,7 @@ function createUser(overrides: Partial<AgencyUser> = {}): AgencyUser {
     id: "user-1",
     role: "USER",
     status: "ACTIVE",
+    accountType: "AGENCY_USER",
     emailVerifiedAt: new Date("2026-04-27T00:00:00.000Z"),
     ...overrides
   };
@@ -92,6 +93,12 @@ function createMemoryAgencyRepository(): AgencyRepository & {
       if (index !== -1) {
         agencies.splice(index, 1);
       }
+    },
+    async updateUser(_userId: string, _data: any) {
+      return { id: _userId, accountType: "AGENCY_USER" } as any;
+    },
+    async findUserById(_userId: string) {
+      return { id: _userId, accountType: "AGENCY_USER" } as any;
     }
   };
 }
@@ -504,5 +511,124 @@ describe("agency service", () => {
       code: "AGENCY_ADMIN_REQUIRED",
       statusCode: 403
     });
+  });
+});
+
+function validAgencyInput() {
+  return {
+    name: "Test Agency",
+    businessPhone: "639001112222",
+    businessEmail: "owner@example.com",
+    city: "Manila",
+    country: "Philippines"
+  };
+}
+
+function createServiceWithUser(opts: { accountType: "PENDING" | "PERSONAL" | "AGENCY_USER" }) {
+  const accountTypeByUserId = new Map<string, string>();
+  accountTypeByUserId.set("u-1", opts.accountType);
+
+  const agencies: Awaited<ReturnType<AgencyRepository["createAgency"]>>[] = [];
+  const memberships: Awaited<ReturnType<AgencyRepository["createOwnerMembership"]>>[] = [];
+  const audits: Awaited<ReturnType<AgencyRepository["createAdminAuditEvent"]>>[] = [];
+  const deleted: string[] = [];
+
+  const repository = {
+    agencies,
+    memberships,
+    audits,
+    deleted,
+    accountTypeByUserId,
+    async createAgency(data: any) {
+      const agency = {
+        id: `agency-${agencies.length + 1}`,
+        status: "PENDING_REVIEW" as const,
+        submittedAt: new Date("2026-04-27T12:00:00.000Z"),
+        verifiedAt: null,
+        verifiedByAdminUserId: null,
+        rejectedAt: null,
+        rejectedByAdminUserId: null,
+        rejectionReason: null,
+        suspendedAt: null,
+        suspendedByAdminUserId: null,
+        suspensionReason: null,
+        ...data
+      };
+      agencies.push(agency);
+      return agency;
+    },
+    async createOwnerMembership(data: any) {
+      const membership = {
+        id: `membership-${memberships.length + 1}`,
+        role: "OWNER" as const,
+        status: "ACTIVE" as const,
+        ...data
+      };
+      memberships.push(membership);
+      return membership;
+    },
+    async findMembership(agencyId: string, userId: string) {
+      return memberships.find((m) => m.agencyId === agencyId && m.userId === userId) ?? null;
+    },
+    async listPendingAgencies() { return agencies.filter((a) => a.status === "PENDING_REVIEW"); },
+    async findAgencyById(id: string) { return agencies.find((a) => a.id === id) ?? null; },
+    async updateAgency(id: string, data: any) {
+      const agency = agencies.find((a) => a.id === id);
+      if (!agency) throw new Error(`Missing agency ${id}`);
+      Object.assign(agency, data);
+      return agency;
+    },
+    async createAdminAuditEvent(data: any) {
+      const audit = { id: `audit-${audits.length + 1}`, createdAt: new Date(), ...data };
+      audits.push(audit);
+      return audit;
+    },
+    async deleteAgencyCascade(agencyId: string) {
+      deleted.push(agencyId);
+    },
+    async updateUser(userId: string, data: any) {
+      if (data.accountType) accountTypeByUserId.set(userId, data.accountType);
+      return { id: userId, accountType: accountTypeByUserId.get(userId) } as any;
+    },
+    async findUserById(userId: string) {
+      return { id: userId, accountType: accountTypeByUserId.get(userId) } as any;
+    },
+    findUserAccountTypeForTest(userId: string) {
+      return accountTypeByUserId.get(userId);
+    }
+  };
+
+  const service = createAgencyService({ repository: repository as unknown as AgencyRepository });
+  return { service, repository };
+}
+
+describe("createAgencyApplication account-type side effects", () => {
+  it("flips PENDING user to AGENCY_USER after creating the agency", async () => {
+    const { service, repository } = createServiceWithUser({ accountType: "PENDING" });
+    const agency = await service.createAgencyApplication(
+      { id: "u-1", role: "USER", status: "ACTIVE", emailVerifiedAt: new Date(), accountType: "PENDING" },
+      validAgencyInput()
+    );
+    expect(repository.findUserAccountTypeForTest("u-1")).toBe("AGENCY_USER");
+    expect(agency.id).toBeDefined();
+  });
+
+  it("rejects a PERSONAL user with ACCOUNT_TYPE_FORBIDS_AGENCY", async () => {
+    const { service } = createServiceWithUser({ accountType: "PERSONAL" });
+    await expect(
+      service.createAgencyApplication(
+        { id: "u-1", role: "USER", status: "ACTIVE", emailVerifiedAt: new Date(), accountType: "PERSONAL" },
+        validAgencyInput()
+      )
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCOUNT_TYPE_FORBIDS_AGENCY" });
+  });
+
+  it("allows an AGENCY_USER to create an additional agency (no accountType change)", async () => {
+    const { service, repository } = createServiceWithUser({ accountType: "AGENCY_USER" });
+    await service.createAgencyApplication(
+      { id: "u-1", role: "USER", status: "ACTIVE", emailVerifiedAt: new Date(), accountType: "AGENCY_USER" },
+      validAgencyInput()
+    );
+    expect(repository.findUserAccountTypeForTest("u-1")).toBe("AGENCY_USER");
   });
 });

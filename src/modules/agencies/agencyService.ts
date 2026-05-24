@@ -84,6 +84,10 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     }) {
       assertActive(user);
 
+      if (user.accountType === "PERSONAL") {
+        throw new ApiError(403, "ACCOUNT_TYPE_FORBIDS_AGENCY", "Personal accounts cannot create or join an agency. Create a separate account with a different email.");
+      }
+
       const name = input.name.trim();
       if (!name) {
         throw new ApiError(400, "AGENCY_NAME_REQUIRED", "Agency name is required.");
@@ -100,6 +104,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         logoImageId: input.logoImageId,
       });
       await options.repository.createOwnerMembership({ agencyId: agency.id, userId: user.id });
+
+      // Side effect: commit PENDING accounts to AGENCY_USER.
+      if (user.accountType === "PENDING") {
+        await options.repository.updateUser(user.id, { accountType: "AGENCY_USER" });
+      }
+
       return agency;
     },
 

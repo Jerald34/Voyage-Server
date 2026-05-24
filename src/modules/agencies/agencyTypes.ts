@@ -82,4 +82,6 @@ export type AgencyRepository = {
   updateAgency(id: string, data: Partial<AgencyRecord>): Promise<AgencyRecord>;
   createAdminAuditEvent(data: Omit<AdminAuditRecord, "id" | "createdAt">): Promise<AdminAuditRecord>;
   deleteAgencyCascade(agencyId: string): Promise<void>;
+  updateUser(userId: string, data: { accountType?: "PENDING" | "PERSONAL" | "AGENCY_USER" }): Promise<{ id: string; accountType: string }>;
+  findUserById(userId: string): Promise<{ id: string; accountType: string } | null>;
 };
