@@ -116,7 +116,7 @@ export function createPrismaPersonalRepository(client: PrismaClient = prisma): P
     },
 
     async createShareForUserItinerary({ userId, itineraryId, recipientName, recipientEmail }) {
-      const { ApiError } = await import("../../http/errors");
+      const { ApiError } = await import("../../http/errors.js");
       const itinerary = await client.itinerary.findFirst({
         where: { id: itineraryId, agencyId: null, createdByUserId: userId },
         select: { id: true }

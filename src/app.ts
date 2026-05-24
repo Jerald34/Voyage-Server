@@ -14,6 +14,7 @@ import { shareRoutes } from "./modules/shares/shareRoutes";
 import { publicShareRoutes } from "./modules/shares/publicShareRoutes";
 import { teamRoutes } from "./modules/agencies/teamRoutes";
 import { workspaceRoutes } from "./modules/workspace/workspaceRoutes";
+import { personalRoutes } from "./modules/personal/personalRoutes";
 
 export function createApp() {
   const app = express();
@@ -47,6 +48,7 @@ export function createApp() {
   app.use("/shared", publicShareRoutes);
   app.use("/admin", adminRoutes);
   app.use("/images", imageRoutes);
+  app.use("/me", personalRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

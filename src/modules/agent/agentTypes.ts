@@ -154,7 +154,7 @@ export type ApprovedItineraryThreadRecord = {
   };
   itinerary: {
     id: string;
-    tripId: string;
+    tripId: string | null;
     agencyId: string | null;
     version: number;
     status: string;
