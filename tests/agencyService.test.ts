@@ -206,7 +206,7 @@ describe("agency service", () => {
     const { service } = createService();
 
     await expect(service.listPendingAgencies(createUser())).rejects.toMatchObject({
-      code: "ADMIN_REQUIRED",
+      code: "SUPER_ADMIN_REQUIRED",
       statusCode: 403
     });
   });
@@ -221,7 +221,7 @@ describe("agency service", () => {
       country: "Philippines"
     });
 
-    const approved = await service.approveAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id);
+    const approved = await service.approveAgency(createUser({ id: "admin-1", role: "SUPER_ADMIN" }), agency.id);
 
     expect(approved).toMatchObject({
       id: agency.id,
@@ -247,7 +247,7 @@ describe("agency service", () => {
       country: "Philippines"
     });
 
-    const rejected = await service.rejectAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id, {
+    const rejected = await service.rejectAgency(createUser({ id: "admin-1", role: "SUPER_ADMIN" }), agency.id, {
       reason: "Business details could not be verified."
     });
 
@@ -268,7 +268,7 @@ describe("agency service", () => {
       country: "Philippines"
     });
 
-    const suspended = await service.suspendAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id, {
+    const suspended = await service.suspendAgency(createUser({ id: "admin-1", role: "SUPER_ADMIN" }), agency.id, {
       reason: "Policy review required."
     });
 
