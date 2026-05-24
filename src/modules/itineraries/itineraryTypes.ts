@@ -81,6 +81,10 @@ export type UpdateItineraryItemRepoInput = Partial<StructuredItineraryItem>;
 
 export interface ItineraryRepository {
   listTripsWithItineraries(agencyId: string): Promise<Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>>;
+  listTripsForUser(
+    agencyId: string,
+    filter: { role: "OWNER" | "ADMIN" | "STAFF"; userId: string }
+  ): Promise<Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>>;
   createTripWithItinerary(data: {
     agencyId: string;
     createdByUserId: string;

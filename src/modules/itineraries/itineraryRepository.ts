@@ -86,6 +86,17 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
       return trips as Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>;
     },
 
+    async listTripsForUser(agencyId, filter) {
+      const where = filter.role === "STAFF"
+        ? { agencyId, assignedOrganizerUserId: filter.userId }
+        : { agencyId };
+      return client.clientTrip.findMany({
+        where,
+        include: { itineraries: { select: { id: true, status: true, version: true }, orderBy: { createdAt: "desc" }, take: 1 } },
+        orderBy: { createdAt: "desc" }
+      }) as Promise<Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>>;
+    },
+
     async createTripWithItinerary(data) {
       return client.$transaction(async (tx) => {
         const trip = await tx.clientTrip.create({
