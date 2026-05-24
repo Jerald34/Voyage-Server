@@ -185,6 +185,20 @@ export function createAuthService(options: AuthServiceOptions) {
       );
     },
 
+    async setAccountType(userId: string, target: "PERSONAL" | "AGENCY_USER") {
+      if (target !== "PERSONAL" && target !== "AGENCY_USER") {
+        throw new ApiError(400, "INVALID_ACCOUNT_TYPE", "Account type must be PERSONAL or AGENCY_USER.");
+      }
+      const user = await options.repository.findUserById(userId);
+      if (!user) {
+        throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+      }
+      if (user.accountType !== "PENDING") {
+        throw new ApiError(409, "ACCOUNT_TYPE_ALREADY_SET", "Your account type has already been set.");
+      }
+      return options.repository.updateUser(userId, { accountType: target });
+    },
+
     async checkEmail(email: string) {
       const emailNormalized = normalizeEmail(email);
       const existingUser = await options.repository.findUserByEmailNormalized(emailNormalized);
