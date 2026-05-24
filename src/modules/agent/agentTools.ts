@@ -16,7 +16,7 @@ import type { AgentRunRecord, AgentSourceInput, AgentTaskInput, AgentTaskRecord,
 import type { AgentEvent } from "./agentSchemas";
 
 export type AgentToolContext = {
-  agencyId: string;
+  agencyId: string | null;
   threadId: string;
   runId: string;
   userId: string;
@@ -48,7 +48,7 @@ export type AgentToolService = {
 
 export type CreateItineraryService = {
   createDraftFromStructuredInput(
-    agencyId: string,
+    agencyId: string | null,
     createdByUserId: string,
     input: StructuredItineraryInput
   ): Promise<{ itinerary?: { id?: string; version?: number; status?: string }; trip?: { id?: string } } | unknown>;
@@ -56,7 +56,7 @@ export type CreateItineraryService = {
 
 export type UpdateItineraryService = {
   replaceDraft(
-    agencyId: string,
+    agencyId: string | null,
     itineraryId: string,
     input: any // Using any to avoid complex zod dependency here
   ): Promise<{ id?: string; version?: number; status?: string } | unknown>;
@@ -66,31 +66,31 @@ export type UpdateItineraryService = {
 // Tool factories accept a thin subset of this shape so they remain unit-testable.
 export type ItineraryAgentService = {
   createDraftFromStructuredInput(
-    agencyId: string,
+    agencyId: string | null,
     createdByUserId: string,
     input: StructuredItineraryInput
   ): Promise<unknown>;
   replaceDraft(
-    agencyId: string,
+    agencyId: string | null,
     itineraryId: string,
     input: any
   ): Promise<unknown>;
   createPlanFromStructuredInput(
-    agencyId: string,
+    agencyId: string | null,
     createdByUserId: string,
     input: PlanItineraryInput
   ): Promise<unknown>;
   deleteItinerary(
-    agencyId: string,
+    agencyId: string | null,
     input: DeleteItineraryInput
   ): Promise<{ deleted: boolean; tripDeleted: boolean }>;
-  addDay(agencyId: string, input: AddItineraryDayInput): Promise<unknown>;
-  updateDay(agencyId: string, input: UpdateItineraryDayInput): Promise<unknown>;
-  removeDay(agencyId: string, input: RemoveItineraryDayInput): Promise<unknown>;
-  addItem(agencyId: string, input: AddItineraryItemInput): Promise<unknown>;
-  updateItem(agencyId: string, input: UpdateItineraryItemInput): Promise<unknown>;
-  removeItem(agencyId: string, input: RemoveItineraryItemInput): Promise<unknown>;
-  moveItem(agencyId: string, input: MoveItineraryItemInput): Promise<unknown>;
+  addDay(agencyId: string | null, input: AddItineraryDayInput): Promise<unknown>;
+  updateDay(agencyId: string | null, input: UpdateItineraryDayInput): Promise<unknown>;
+  removeDay(agencyId: string | null, input: RemoveItineraryDayInput): Promise<unknown>;
+  addItem(agencyId: string | null, input: AddItineraryItemInput): Promise<unknown>;
+  updateItem(agencyId: string | null, input: UpdateItineraryItemInput): Promise<unknown>;
+  removeItem(agencyId: string | null, input: RemoveItineraryItemInput): Promise<unknown>;
+  moveItem(agencyId: string | null, input: MoveItineraryItemInput): Promise<unknown>;
 };
 
 function limitKey(runId: string, toolName: string) {

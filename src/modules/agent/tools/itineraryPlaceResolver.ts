@@ -252,7 +252,7 @@ export async function resolveSingleItemPlace(options: {
 export async function attachRouteFromPrevious(options: {
   maps: MapsProvider;
   itineraryService: Pick<ItineraryAgentService, "updateItem">;
-  agencyId: string;
+  agencyId: string | null;
   itineraryId: string;
   dayId: string;
   result: {

@@ -255,7 +255,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       return client.agentRun.create({
         data: {
           threadId: data.threadId,
-          agencyId: data.agencyId,
+          agencyId: data.agencyId as string,
           triggerMessageId: data.triggerMessageId,
           status: "QUEUED",
           modelProvider: data.modelProvider,
@@ -295,7 +295,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         const run = await tx.agentRun.create({
           data: {
             threadId: data.threadId,
-            agencyId: data.agencyId,
+            agencyId: data.agencyId as string,
             triggerMessageId: message.id,
             status: "QUEUED",
             modelProvider: data.modelProvider,

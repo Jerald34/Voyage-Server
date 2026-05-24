@@ -21,7 +21,7 @@ export type AgentMessageRecord = {
 export type AgentRunRecord = {
   id: string;
   threadId: string;
-  agencyId: string;
+  agencyId: string | null;
   triggerMessageId: string | null;
   status: AgentRunStatus;
   modelProvider: string;
@@ -118,7 +118,7 @@ export type AgentRunEventRecord = {
 
 export type AgentThreadRecord = {
   id: string;
-  agencyId: string;
+  agencyId: string | null;
   tripId: string | null;
   createdByUserId: string;
   title: string;
@@ -162,7 +162,7 @@ export type ApprovedItineraryThreadRecord = {
 };
 
 export type AgentOrchestratorRunInput = {
-  agencyId: string;
+  agencyId: string | null;
   threadId: string;
   runId: string;
   userId: string;
@@ -180,7 +180,7 @@ export type AgentOrchestrator = {
 
 export type AgentOrchestratorAgentService = {
   getThread(
-    agencyId: string,
+    agencyId: string | null,
     threadId: string
   ): Promise<{ messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string }> }>;
   startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
@@ -202,14 +202,14 @@ export type AgentOrchestratorAgentService = {
 
 export interface AgentRepository {
   createThread(data: {
-    agencyId: string;
+    agencyId: string | null;
     createdByUserId: string;
     title: string;
     tripId?: string | null;
   }): Promise<AgentThreadRecord>;
   listThreadsByAgency(agencyId: string): Promise<AgentThreadRecord[]>;
-  findThreadByAgency(id: string, agencyId: string): Promise<AgentThreadRecord | null>;
-  deleteThreadByAgency(id: string, agencyId: string): Promise<boolean>;
+  findThreadByAgency(id: string, agencyId: string | null): Promise<AgentThreadRecord | null>;
+  deleteThreadByAgency(id: string, agencyId: string | null): Promise<boolean>;
   approveItineraryThread(data: {
     agencyId: string;
     threadId: string;
@@ -225,7 +225,7 @@ export interface AgentRepository {
   }): Promise<AgentMessageRecord>;
   createRun(data: {
     threadId: string;
-    agencyId: string;
+    agencyId: string | null;
     triggerMessageId?: string | null;
     modelProvider: string;
     modelName: string;
@@ -233,7 +233,7 @@ export interface AgentRepository {
   startRun(id: string, startedAt: Date): Promise<AgentRunRecord | null>;
   createUserMessageAndRun(data: {
     threadId: string;
-    agencyId: string;
+    agencyId: string | null;
     authorUserId: string;
     content: string;
     metadata?: unknown;
@@ -309,7 +309,7 @@ export interface AgentRepository {
   cancelRunIfOpen(id: string): Promise<AgentRunRecord | null>;
   listThreadMessages(params: {
     threadId: string;
-    agencyId: string;
+    agencyId: string | null;
     cursor?: string | null;
     limit: number;
   }): Promise<{
