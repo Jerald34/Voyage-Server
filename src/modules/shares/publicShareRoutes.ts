@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { addCommentInputSchema } from "./shareSchemas";
 import { shareService } from "./shareService";
+import { buildShareResponse } from "./publicShareService";
 
 export const publicShareRoutes = Router();
 
@@ -9,7 +10,13 @@ publicShareRoutes.get("/:token", async (request, response, next) => {
   try {
     const token = String(request.params.token);
     const data = await shareService.getShareByToken(token);
-    response.json(data);
+    const result = buildShareResponse({
+      share: data.share,
+      agency: data.agency,
+      itinerary: data.itinerary as Record<string, unknown>,
+      creator: data.creator
+    });
+    response.json(result);
   } catch (error) {
     next(error);
   }
