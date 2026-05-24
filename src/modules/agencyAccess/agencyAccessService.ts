@@ -5,6 +5,7 @@ import { ApiError } from "../../http/errors";
 export type AgencyAccessUser = {
   id: string;
   status: "ACTIVE" | "DISABLED";
+  accountType: "PENDING" | "PERSONAL" | "AGENCY_USER";
 };
 
 export type AgencyAccess = {
@@ -34,6 +35,13 @@ export function createAgencyAccessService(options: { repository: AgencyAccessRep
   ) {
     if (user.status !== "ACTIVE") {
       throw new ApiError(403, "USER_DISABLED", "This account is disabled.");
+    }
+
+    if (user.accountType === "PENDING") {
+      throw new ApiError(403, "ACCOUNT_TYPE_PENDING", "Pick a personal or agency account to continue.");
+    }
+    if (user.accountType === "PERSONAL") {
+      throw new ApiError(403, "ACCOUNT_TYPE_FORBIDS_AGENCY", "Personal accounts cannot access agency workspaces.");
     }
 
     const access = await options.repository.findAgencyAccess(user.id, agencyId);

@@ -10,6 +10,7 @@ function createUser(overrides: Partial<AgencyAccessUser> = {}): AgencyAccessUser
   return {
     id: "user-1",
     status: "ACTIVE",
+    accountType: "AGENCY_USER",
     ...overrides
   };
 }
@@ -302,6 +303,30 @@ describe("requireTripAccess", () => {
     await expect(service.requireTripAccess(createUser(), "agency-1", "missing")).rejects.toMatchObject({
       statusCode: 404,
       code: "TRIP_NOT_FOUND"
+    });
+  });
+});
+
+describe("account type gates", () => {
+  it("rejects PERSONAL users with ACCOUNT_TYPE_FORBIDS_AGENCY before loading agency access", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess());
+    await expect(
+      service.requireVerifiedAgencyMember(createUser({ accountType: "PERSONAL" }), "agency-1")
+    ).rejects.toMatchObject({
+      code: "ACCOUNT_TYPE_FORBIDS_AGENCY",
+      statusCode: 403
+    });
+  });
+
+  it("rejects PENDING users with ACCOUNT_TYPE_PENDING before loading agency access", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess());
+    await expect(
+      service.requireVerifiedAgencyMember(createUser({ accountType: "PENDING" }), "agency-1")
+    ).rejects.toMatchObject({
+      code: "ACCOUNT_TYPE_PENDING",
+      statusCode: 403
     });
   });
 });
