@@ -22,6 +22,7 @@ export type AgencyAccess = {
 
 export type AgencyAccessRepository = {
   findAgencyAccess(userId: string, agencyId: string): Promise<AgencyAccess | null>;
+  findTripOrganizer(agencyId: string, tripId: string): Promise<{ assignedOrganizerUserId: string | null } | null>;
 };
 
 export function createAgencyAccessService(options: { repository: AgencyAccessRepository }) {
@@ -74,14 +75,31 @@ export function createAgencyAccessService(options: { repository: AgencyAccessRep
     return access;
   }
 
-  return { requireVerifiedAgencyMember, requireAgencyOwner, requireAgencyAdmin };
+  async function requireTripAccess(user: AgencyAccessUser, agencyId: string, tripId: string) {
+    const access = await requireVerifiedAgencyMember(user, agencyId);
+
+    // OWNER and ADMIN see every trip in the agency.
+    if (access.membership && (access.membership.role === "OWNER" || access.membership.role === "ADMIN")) {
+      return access;
+    }
+
+    // STAFF: must be the assigned organizer, else surface as 404 (prevent probing).
+    const trip = await options.repository.findTripOrganizer(access.agency.id, tripId);
+    if (!trip || trip.assignedOrganizerUserId !== user.id) {
+      throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+    }
+
+    return access;
+  }
+
+  return { requireVerifiedAgencyMember, requireAgencyOwner, requireAgencyAdmin, requireTripAccess };
 }
 
 export function createPrismaAgencyAccessRepository(client: PrismaClient = prisma): AgencyAccessRepository {
   return {
     async findAgencyAccess(userId, agencyIdOrSlug) {
       const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(agencyIdOrSlug);
-      
+
       const agency = await client.agency.findUnique({
         where: isUuid ? { id: agencyIdOrSlug } : { slug: agencyIdOrSlug },
         include: {
@@ -100,6 +118,12 @@ export function createPrismaAgencyAccessRepository(client: PrismaClient = prisma
         agency,
         membership: agency.memberships[0] ?? null
       } as AgencyAccess;
+    },
+    async findTripOrganizer(agencyId, tripId) {
+      return client.clientTrip.findFirst({
+        where: { id: tripId, agencyId },
+        select: { assignedOrganizerUserId: true }
+      });
     }
   };
 }

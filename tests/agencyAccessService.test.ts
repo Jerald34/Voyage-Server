@@ -51,6 +51,9 @@ function createMemoryAgencyAccessRepository(): AgencyAccessRepository & {
         agency: access.agency,
         membership: access.membership?.userId === userId ? access.membership : null
       };
+    },
+    async findTripOrganizer(_agencyId, _tripId) {
+      return null;
     }
   };
 }
@@ -233,6 +236,69 @@ describe("requireAgencyAdmin", () => {
     await expect(service.requireAgencyAdmin(createUser(), "agency-1")).rejects.toMatchObject({
       code: "AGENCY_ADMIN_REQUIRED",
       statusCode: 403
+    });
+  });
+});
+
+function withTripOrganizer(
+  repo: ReturnType<typeof createMemoryAgencyAccessRepository>,
+  tripId: string,
+  organizerUserId: string | null
+) {
+  (repo as any).findTripOrganizer = async (_agencyId: string, _tripId: string) => {
+    if (_tripId !== tripId) return null;
+    return { assignedOrganizerUserId: organizerUserId };
+  };
+}
+
+describe("requireTripAccess", () => {
+  it("allows OWNER access to any trip in the agency", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess());
+    withTripOrganizer(repository, "trip-1", "other-staff");
+    await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).resolves.toBeDefined();
+  });
+
+  it("allows ADMIN access to any trip in the agency", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess({
+      membership: { agencyId: "agency-1", userId: "user-1", role: "ADMIN", status: "ACTIVE" }
+    }));
+    withTripOrganizer(repository, "trip-1", "other-staff");
+    await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).resolves.toBeDefined();
+  });
+
+  it("allows STAFF to access their own trip", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess({
+      membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+    }));
+    withTripOrganizer(repository, "trip-1", "user-1");
+    await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).resolves.toBeDefined();
+  });
+
+  it("returns 404 (not 403) when STAFF probes another organizer's trip", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess({
+      membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+    }));
+    withTripOrganizer(repository, "trip-1", "other-staff");
+    await expect(service.requireTripAccess(createUser(), "agency-1", "trip-1")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "TRIP_NOT_FOUND"
+    });
+  });
+
+  it("returns 404 when the trip does not exist at all", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set("agency-1", createAgencyAccess({
+      membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+    }));
+    // no withTripOrganizer call — repo returns null
+    (repository as any).findTripOrganizer = async () => null;
+    await expect(service.requireTripAccess(createUser(), "agency-1", "missing")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "TRIP_NOT_FOUND"
     });
   });
 });
