@@ -211,3 +211,28 @@ describe("requireAgencyOwner", () => {
     });
   });
 });
+
+describe("requireAgencyAdmin", () => {
+  it.each(["OWNER", "ADMIN"] as const)("returns access for a(n) %s member", async (role) => {
+    const { service, repository } = createService();
+    const access = createAgencyAccess({
+      membership: { agencyId: "agency-1", userId: "user-1", role, status: "ACTIVE" }
+    });
+    repository.accessByAgencyId.set("agency-1", access);
+    await expect(service.requireAgencyAdmin(createUser(), "agency-1")).resolves.toEqual(access);
+  });
+
+  it("rejects a STAFF member with AGENCY_ADMIN_REQUIRED", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set(
+      "agency-1",
+      createAgencyAccess({
+        membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+      })
+    );
+    await expect(service.requireAgencyAdmin(createUser(), "agency-1")).rejects.toMatchObject({
+      code: "AGENCY_ADMIN_REQUIRED",
+      statusCode: 403
+    });
+  });
+});

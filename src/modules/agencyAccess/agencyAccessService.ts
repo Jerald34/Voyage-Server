@@ -66,7 +66,15 @@ export function createAgencyAccessService(options: { repository: AgencyAccessRep
     return access;
   }
 
-  return { requireVerifiedAgencyMember, requireAgencyOwner };
+  async function requireAgencyAdmin(user: AgencyAccessUser, agencyId: string) {
+    const access = await requireVerifiedAgencyMember(user, agencyId);
+    if (!access.membership || (access.membership.role !== "OWNER" && access.membership.role !== "ADMIN")) {
+      throw new ApiError(403, "AGENCY_ADMIN_REQUIRED", "Only the agency owner or admin can perform this action.");
+    }
+    return access;
+  }
+
+  return { requireVerifiedAgencyMember, requireAgencyOwner, requireAgencyAdmin };
 }
 
 export function createPrismaAgencyAccessRepository(client: PrismaClient = prisma): AgencyAccessRepository {
