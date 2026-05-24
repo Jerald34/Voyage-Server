@@ -25,40 +25,48 @@ export type AgencyAccessRepository = {
 };
 
 export function createAgencyAccessService(options: { repository: AgencyAccessRepository }) {
-  return {
-    async requireVerifiedAgencyMember(
-      user: AgencyAccessUser,
-      agencyId: string,
-      allowedRoles: Array<"OWNER" | "ADMIN" | "STAFF"> = ["OWNER", "ADMIN", "STAFF"]
-    ) {
-      if (user.status !== "ACTIVE") {
-        throw new ApiError(403, "USER_DISABLED", "This account is disabled.");
-      }
-
-      const access = await options.repository.findAgencyAccess(user.id, agencyId);
-      if (!access?.agency) {
-        throw new ApiError(404, "AGENCY_NOT_FOUND", "Agency not found.");
-      }
-
-      if (access.agency.status !== "VERIFIED") {
-        throw new ApiError(
-          403,
-          "AGENCY_NOT_VERIFIED",
-          "Agency must be verified before using itinerary agent features."
-        );
-      }
-
-      if (
-        !access.membership ||
-        access.membership.status !== "ACTIVE" ||
-        !allowedRoles.includes(access.membership.role)
-      ) {
-        throw new ApiError(403, "AGENCY_ACCESS_REQUIRED", "You do not have access to this agency workspace.");
-      }
-
-      return access;
+  async function requireVerifiedAgencyMember(
+    user: AgencyAccessUser,
+    agencyId: string,
+    allowedRoles: Array<"OWNER" | "ADMIN" | "STAFF"> = ["OWNER", "ADMIN", "STAFF"]
+  ) {
+    if (user.status !== "ACTIVE") {
+      throw new ApiError(403, "USER_DISABLED", "This account is disabled.");
     }
-  };
+
+    const access = await options.repository.findAgencyAccess(user.id, agencyId);
+    if (!access?.agency) {
+      throw new ApiError(404, "AGENCY_NOT_FOUND", "Agency not found.");
+    }
+
+    if (access.agency.status !== "VERIFIED") {
+      throw new ApiError(
+        403,
+        "AGENCY_NOT_VERIFIED",
+        "Agency must be verified before using itinerary agent features."
+      );
+    }
+
+    if (
+      !access.membership ||
+      access.membership.status !== "ACTIVE" ||
+      !allowedRoles.includes(access.membership.role)
+    ) {
+      throw new ApiError(403, "AGENCY_ACCESS_REQUIRED", "You do not have access to this agency workspace.");
+    }
+
+    return access;
+  }
+
+  async function requireAgencyOwner(user: AgencyAccessUser, agencyId: string) {
+    const access = await requireVerifiedAgencyMember(user, agencyId);
+    if (!access.membership || access.membership.role !== "OWNER") {
+      throw new ApiError(403, "AGENCY_OWNER_REQUIRED", "Only the agency owner can perform this action.");
+    }
+    return access;
+  }
+
+  return { requireVerifiedAgencyMember, requireAgencyOwner };
 }
 
 export function createPrismaAgencyAccessRepository(client: PrismaClient = prisma): AgencyAccessRepository {

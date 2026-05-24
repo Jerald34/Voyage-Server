@@ -172,3 +172,42 @@ describe("agency access service", () => {
     await expect(service.requireVerifiedAgencyMember(createUser(), "agency-1")).resolves.toEqual(access);
   });
 });
+
+describe("requireAgencyOwner", () => {
+  it("returns access for an OWNER member", async () => {
+    const { service, repository } = createService();
+    const access = createAgencyAccess({
+      membership: { agencyId: "agency-1", userId: "user-1", role: "OWNER", status: "ACTIVE" }
+    });
+    repository.accessByAgencyId.set("agency-1", access);
+    await expect(service.requireAgencyOwner(createUser(), "agency-1")).resolves.toEqual(access);
+  });
+
+  it("rejects an ADMIN member with AGENCY_OWNER_REQUIRED", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set(
+      "agency-1",
+      createAgencyAccess({
+        membership: { agencyId: "agency-1", userId: "user-1", role: "ADMIN", status: "ACTIVE" }
+      })
+    );
+    await expect(service.requireAgencyOwner(createUser(), "agency-1")).rejects.toMatchObject({
+      code: "AGENCY_OWNER_REQUIRED",
+      statusCode: 403
+    });
+  });
+
+  it("rejects a STAFF member with AGENCY_OWNER_REQUIRED", async () => {
+    const { service, repository } = createService();
+    repository.accessByAgencyId.set(
+      "agency-1",
+      createAgencyAccess({
+        membership: { agencyId: "agency-1", userId: "user-1", role: "STAFF", status: "ACTIVE" }
+      })
+    );
+    await expect(service.requireAgencyOwner(createUser(), "agency-1")).rejects.toMatchObject({
+      code: "AGENCY_OWNER_REQUIRED",
+      statusCode: 403
+    });
+  });
+});
