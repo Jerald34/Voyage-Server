@@ -17,7 +17,7 @@ export type TripSummary = {
 
 export type ThreadSummary = {
   id: string;
-  agencyId: string;
+  agencyId: string | null;
   tripId: string | null;
   title: string;
   status: string;

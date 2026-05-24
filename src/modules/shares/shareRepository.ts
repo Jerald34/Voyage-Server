@@ -82,6 +82,10 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
         return null;
       }
 
+      if (!share.tripId) {
+        return null;
+      }
+
       const trip = await client.clientTrip.findUnique({
         where: { id: share.tripId },
         select: {

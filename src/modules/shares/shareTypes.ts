@@ -7,7 +7,7 @@ export type ShareRecord = {
   token: string;
   itineraryId: string;
   tripId: string;
-  agencyId: string;
+  agencyId: string | null;
   clientName: string | null;
   clientEmail: string | null;
   expiresAt: Date | null;
