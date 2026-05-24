@@ -80,4 +80,5 @@ export type AgencyRepository = {
   listAuditEventsForTarget(targetType: string, targetId: string): Promise<AdminAuditRecord[]>;
   updateAgency(id: string, data: Partial<AgencyRecord>): Promise<AgencyRecord>;
   createAdminAuditEvent(data: Omit<AdminAuditRecord, "id" | "createdAt">): Promise<AdminAuditRecord>;
+  deleteAgencyCascade(agencyId: string): Promise<void>;
 };

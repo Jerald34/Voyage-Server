@@ -252,6 +252,22 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     async getPendingCount(user: AgencyUser) {
       assertSuperAdmin(user);
       return options.repository.countAgenciesByStatus("PENDING_REVIEW");
+    },
+
+    async deleteAgency(user: AgencyUser, agencyId: string, input: { confirmName: string }) {
+      assertActive(user);
+      const agency = await findRequiredAgency(agencyId);
+
+      const membership = await options.repository.findMembership(agencyId, user.id);
+      if (!membership || membership.status !== "ACTIVE" || membership.role !== "OWNER") {
+        throw new ApiError(403, "AGENCY_OWNER_REQUIRED", "Only the agency owner can delete this agency.");
+      }
+
+      if (input.confirmName !== agency.name) {
+        throw new ApiError(400, "NAME_CONFIRMATION_MISMATCH", "The confirmation name does not match the agency name.");
+      }
+
+      await options.repository.deleteAgencyCascade(agencyId);
     }
   };
 }

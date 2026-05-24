@@ -20,15 +20,18 @@ function createMemoryAgencyRepository(): AgencyRepository & {
   agencies: Awaited<ReturnType<AgencyRepository["createAgency"]>>[];
   memberships: Awaited<ReturnType<AgencyRepository["createOwnerMembership"]>>[];
   audits: Awaited<ReturnType<AgencyRepository["createAdminAuditEvent"]>>[];
+  deleted: string[];
 } {
   const agencies: Awaited<ReturnType<AgencyRepository["createAgency"]>>[] = [];
   const memberships: Awaited<ReturnType<AgencyRepository["createOwnerMembership"]>>[] = [];
   const audits: Awaited<ReturnType<AgencyRepository["createAdminAuditEvent"]>>[] = [];
+  const deleted: string[] = [];
 
   return {
     agencies,
     memberships,
     audits,
+    deleted,
     async createAgency(data) {
       const agency = {
         id: `agency-${agencies.length + 1}`,
@@ -82,6 +85,13 @@ function createMemoryAgencyRepository(): AgencyRepository & {
       };
       audits.push(audit);
       return audit;
+    },
+    async deleteAgencyCascade(agencyId) {
+      deleted.push(agencyId);
+      const index = agencies.findIndex((a) => a.id === agencyId);
+      if (index !== -1) {
+        agencies.splice(index, 1);
+      }
     }
   };
 }
@@ -406,6 +416,66 @@ describe("agency service", () => {
       })
     ).rejects.toMatchObject({
       code: "AGENCY_ADMIN_REQUIRED",
+      statusCode: 403
+    });
+  });
+
+  it("OWNER can delete agency with correct name confirmation", async () => {
+    const { service, repository } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Delete Me Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    await service.deleteAgency(owner, agency.id, { confirmName: "Delete Me Travel" });
+
+    expect(repository.deleted).toContain(agency.id);
+  });
+
+  it("deleteAgency rejects with NAME_CONFIRMATION_MISMATCH when confirmName does not match", async () => {
+    const { service } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Delete Me Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    await expect(
+      service.deleteAgency(owner, agency.id, { confirmName: "Wrong Name" })
+    ).rejects.toMatchObject({
+      code: "NAME_CONFIRMATION_MISMATCH",
+      statusCode: 400
+    });
+  });
+
+  it("ADMIN gets AGENCY_OWNER_REQUIRED when calling deleteAgency", async () => {
+    const { service, repository } = createService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
+      name: "Protected Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+    repository.memberships.push({
+      id: "membership-2",
+      agencyId: agency.id,
+      userId: "admin-1",
+      role: "ADMIN",
+      status: "ACTIVE"
+    });
+
+    await expect(
+      service.deleteAgency(createUser({ id: "admin-1" }), agency.id, { confirmName: "Protected Travel" })
+    ).rejects.toMatchObject({
+      code: "AGENCY_OWNER_REQUIRED",
       statusCode: 403
     });
   });
