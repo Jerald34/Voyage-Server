@@ -75,3 +75,56 @@ describe("personalService itineraries", () => {
     });
   });
 });
+
+describe("personalService create/update/delete", () => {
+  it("creates an itinerary owned by the caller", async () => {
+    const repo = fakeRepo();
+    const svc = createPersonalService({ repository: repo });
+    const created = await svc.createItinerary("u-1", { title: "Trip to Tokyo" });
+    expect(created.createdByUserId).toBe("u-1");
+    expect(created.title).toBe("Trip to Tokyo");
+    expect(created.agencyId).toBeNull();
+  });
+
+  it("rejects empty title with PERSONAL_ITINERARY_TITLE_REQUIRED", async () => {
+    const repo = fakeRepo();
+    const svc = createPersonalService({ repository: repo });
+    await expect(svc.createItinerary("u-1", { title: "   " })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "PERSONAL_ITINERARY_TITLE_REQUIRED"
+    });
+  });
+
+  it("updates own itinerary", async () => {
+    const repo = fakeRepo([{ id: "a", createdByUserId: "u-1", agencyId: null, title: "Old", summary: null, status: "DRAFT", version: 1, createdAt: new Date(), updatedAt: new Date() }]);
+    const svc = createPersonalService({ repository: repo });
+    const updated = await svc.updateItinerary("u-1", "a", { title: "New" });
+    expect(updated.title).toBe("New");
+  });
+
+  it("rejects updating someone else's itinerary with PERSONAL_ITINERARY_NOT_FOUND", async () => {
+    const repo = fakeRepo([{ id: "b", createdByUserId: "u-2", agencyId: null, title: "Theirs", summary: null, status: "DRAFT", version: 1, createdAt: new Date(), updatedAt: new Date() }]);
+    const svc = createPersonalService({ repository: repo });
+    await expect(svc.updateItinerary("u-1", "b", { title: "Hacked" })).rejects.toMatchObject({
+      statusCode: 404,
+      code: "PERSONAL_ITINERARY_NOT_FOUND"
+    });
+  });
+
+  it("deletes own itinerary", async () => {
+    const repo = fakeRepo([{ id: "a", createdByUserId: "u-1", agencyId: null, title: "Mine", summary: null, status: "DRAFT", version: 1, createdAt: new Date(), updatedAt: new Date() }]);
+    const svc = createPersonalService({ repository: repo });
+    const ok = await svc.deleteItinerary("u-1", "a");
+    expect(ok).toEqual({ deleted: true });
+    expect(await repo.listItinerariesForUser("u-1")).toHaveLength(0);
+  });
+
+  it("rejects deleting someone else's itinerary", async () => {
+    const repo = fakeRepo([{ id: "b", createdByUserId: "u-2", agencyId: null, title: "Theirs", summary: null, status: "DRAFT", version: 1, createdAt: new Date(), updatedAt: new Date() }]);
+    const svc = createPersonalService({ repository: repo });
+    await expect(svc.deleteItinerary("u-1", "b")).rejects.toMatchObject({
+      statusCode: 404,
+      code: "PERSONAL_ITINERARY_NOT_FOUND"
+    });
+  });
+});
