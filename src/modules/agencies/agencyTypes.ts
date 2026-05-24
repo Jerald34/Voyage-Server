@@ -2,6 +2,7 @@ export type AgencyUser = {
   id: string;
   role: "USER" | "SUPER_ADMIN";
   status: "ACTIVE" | "DISABLED";
+  accountType: "PENDING" | "PERSONAL" | "AGENCY_USER";
   emailVerifiedAt: Date | null;
 };
 
