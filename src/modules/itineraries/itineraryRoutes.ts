@@ -29,8 +29,16 @@ itineraryRoutes.use(async (request, _response, next) => {
 
 itineraryRoutes.get("/", async (request, response, next) => {
   try {
-    const agencyId = getAgencyId(request);
-    const trips = await itineraryService.listTripsWithItineraries(agencyId);
+    const params = request.params as Record<string, string | undefined>;
+    const access = await agencyAccessService.requireVerifiedAgencyMember(
+      request.authUser!,
+      String(params.agencyId)
+    );
+    const role = access.membership!.role;
+    const trips = await itineraryService.listTripsForUser(access.agency.id, {
+      role,
+      userId: request.authUser!.id
+    });
     response.json({ trips });
   } catch (error) {
     next(error);
