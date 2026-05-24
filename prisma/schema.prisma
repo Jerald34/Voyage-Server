@@ -354,7 +354,7 @@ model Itinerary {
   id              String           @id @default(uuid()) @db.Uuid
   agencyId        String?          @db.Uuid
   agency          Agency?          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  tripId          String           @db.Uuid
+  tripId          String?          @db.Uuid
   trip            ClientTrip?      @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
   createdByUserId String           @db.Uuid
   createdByUser   User             @relation("ItineraryCreator", fields: [createdByUserId], references: [id])
