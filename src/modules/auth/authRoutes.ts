@@ -10,6 +10,7 @@ import {
   emailCheckSchema,
   loginSchema,
   registerSchema,
+  setAccountTypeSchema,
   updateProfileSchema
 } from "./authSchemas";
 import { authService } from "./authService";
@@ -78,6 +79,16 @@ authRoutes.patch("/me", requireAuth, async (request, response, next) => {
     const input = updateProfileSchema.parse(request.body);
     const user = await authService.updateProfile(request.authUser!, input);
     response.json({ user: serializeUser(user as NonNullable<Express.Request["authUser"]>) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+authRoutes.post("/me/account-type", requireAuth, async (request, response, next) => {
+  try {
+    const input = setAccountTypeSchema.parse(request.body);
+    const user = await authService.setAccountType(request.authUser!.id, input.accountType);
+    response.json({ user });
   } catch (error) {
     next(error);
   }

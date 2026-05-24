@@ -56,3 +56,7 @@ export const confirmPasswordResetSchema = z.object({
   token: z.string().min(16),
   password: z.string().min(8)
 });
+
+export const setAccountTypeSchema = z.object({
+  accountType: z.enum(["PERSONAL", "AGENCY_USER"])
+});
