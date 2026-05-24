@@ -7,7 +7,7 @@ export type AuthUserRecord = {
   emailNormalized: string;
   passwordHash: string | null;
   displayName: string;
-  role: "USER" | "ADMIN";
+  role: "USER" | "SUPER_ADMIN";
   status: "ACTIVE" | "DISABLED";
   emailVerifiedAt: Date | null;
   avatarImageId: string | null;

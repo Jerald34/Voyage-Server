@@ -1,6 +1,6 @@
 export type AgencyUser = {
   id: string;
-  role: "USER" | "ADMIN";
+  role: "USER" | "SUPER_ADMIN";
   status: "ACTIVE" | "DISABLED";
   emailVerifiedAt: Date | null;
 };
