@@ -487,9 +487,9 @@ model AgentMessage {
 model AgentRun {
   id               String          @id @default(uuid()) @db.Uuid
   threadId         String          @db.Uuid
-  thread           AgentThread     @relation(fields: [threadId, agencyId], references: [id, agencyId], onDelete: Cascade)
-  agencyId         String          @db.Uuid
-  agency           Agency          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  thread           AgentThread?    @relation(fields: [threadId, agencyId], references: [id, agencyId], onDelete: Cascade)
+  agencyId         String?         @db.Uuid
+  agency           Agency?         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   triggerMessageId String?         @db.Uuid
   triggerMessage   AgentMessage?   @relation("AgentRunTriggerMessage", fields: [triggerMessageId, threadId], references: [id, threadId], onDelete: NoAction)
   status           AgentRunStatus  @default(QUEUED)
