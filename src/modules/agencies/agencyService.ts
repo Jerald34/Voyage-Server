@@ -49,10 +49,10 @@ function assertActive(user: AgencyUser) {
   }
 }
 
-function assertAdmin(user: AgencyUser) {
+function assertSuperAdmin(user: AgencyUser) {
   assertActive(user);
-  if (user.role !== "ADMIN") {
-    throw new ApiError(403, "ADMIN_REQUIRED", "Admin access is required.");
+  if (user.role !== "SUPER_ADMIN") {
+    throw new ApiError(403, "SUPER_ADMIN_REQUIRED", "Super admin access is required.");
   }
 }
 
@@ -137,12 +137,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async listPendingAgencies(user: AgencyUser) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       return options.repository.listPendingAgencies();
     },
 
     async approveAgency(user: AgencyUser, agencyId: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       await findRequiredAgency(agencyId);
       const reviewedAt = now();
       const agency = await options.repository.updateAgency(agencyId, {
@@ -167,7 +167,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async rejectAgency(user: AgencyUser, agencyId: string, input: { reason: string }) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       await findRequiredAgency(agencyId);
       const reason = input.reason.trim();
       if (!reason) {
@@ -190,7 +190,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async suspendAgency(user: AgencyUser, agencyId: string, input: { reason: string }) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       await findRequiredAgency(agencyId);
       const reason = input.reason.trim();
       if (!reason) {
@@ -213,7 +213,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async unsuspendAgency(user: AgencyUser, agencyId: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       const agency = await findRequiredAgency(agencyId);
       if (agency.status !== "SUSPENDED") {
         throw new ApiError(400, "AGENCY_NOT_SUSPENDED", "Only suspended agencies can be unsuspended.");
@@ -235,12 +235,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async listAllAgencies(user: AgencyUser, status?: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       return options.repository.listAgencies(status);
     },
 
     async getAgencyDetail(user: AgencyUser, agencyId: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       const agency = await options.repository.findAgencyByIdWithOwner(agencyId);
       if (!agency) {
         throw new ApiError(404, "AGENCY_NOT_FOUND", "Agency not found.");
@@ -250,7 +250,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async getPendingCount(user: AgencyUser) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       return options.repository.countAgenciesByStatus("PENDING_REVIEW");
     }
   };
