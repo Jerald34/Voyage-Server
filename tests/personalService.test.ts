@@ -175,3 +175,17 @@ describe("personalService threads", () => {
     expect(thread.title).toBe("Tokyo planning");
   });
 });
+
+describe("personalService shares", () => {
+  it("creates a personal share for an own itinerary", async () => {
+    const repo = {
+      ...fakeRepo([{ id: "a", createdByUserId: "u-1", agencyId: null, title: "Mine", summary: null, status: "DRAFT" as const, version: 1, createdAt: new Date(), updatedAt: new Date() }]),
+      async createShareForUserItinerary(input: any) {
+        return { id: "s-1", token: "tok-abc", itineraryId: input.itineraryId, createdAt: new Date() };
+      }
+    } as any;
+    const svc = createPersonalService({ repository: repo });
+    const share = await svc.createShare("u-1", { itineraryId: "a" });
+    expect(share.token).toBe("tok-abc");
+  });
+});
