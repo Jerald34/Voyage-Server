@@ -128,3 +128,50 @@ describe("personalService create/update/delete", () => {
     });
   });
 });
+
+describe("personalService threads", () => {
+  it("lists own threads only", async () => {
+    const repo = {
+      ...fakeRepo(),
+      async listThreadsForUser(userId: string) {
+        const all = [
+          { id: "t1", createdByUserId: "u-1", title: "Mine", status: "ACTIVE" as const, createdAt: new Date(), updatedAt: new Date() },
+          { id: "t2", createdByUserId: "u-2", title: "Theirs", status: "ACTIVE" as const, createdAt: new Date(), updatedAt: new Date() }
+        ];
+        return all.filter((t) => t.createdByUserId === userId);
+      }
+    } as any;
+    const svc = createPersonalService({ repository: repo });
+    const list = await svc.listThreads("u-1");
+    expect(list.map((t) => t.id)).toEqual(["t1"]);
+  });
+
+  it("creates a thread with default title", async () => {
+    let created: any = null;
+    const repo = {
+      ...fakeRepo(),
+      async createThreadForUser(input: any) {
+        created = { id: "t-new", ...input, status: "ACTIVE", createdAt: new Date(), updatedAt: new Date() };
+        return created;
+      }
+    } as any;
+    const svc = createPersonalService({ repository: repo });
+    const thread = await svc.createThread("u-1");
+    expect(thread.title).toBe("New thread");
+    expect(created.userId).toBe("u-1");
+  });
+
+  it("creates a thread with a custom title", async () => {
+    let created: any = null;
+    const repo = {
+      ...fakeRepo(),
+      async createThreadForUser(input: any) {
+        created = { id: "t-new", ...input, status: "ACTIVE", createdAt: new Date(), updatedAt: new Date() };
+        return created;
+      }
+    } as any;
+    const svc = createPersonalService({ repository: repo });
+    const thread = await svc.createThread("u-1", "Tokyo planning");
+    expect(thread.title).toBe("Tokyo planning");
+  });
+});
