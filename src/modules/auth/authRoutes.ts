@@ -23,6 +23,7 @@ export function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
     email: user.email,
     displayName: user.displayName,
     role: user.role,
+    accountType: user.accountType,
     status: user.status,
     emailVerifiedAt: user.emailVerifiedAt,
     capabilities: getUserCapabilities(user),
@@ -88,7 +89,7 @@ authRoutes.post("/me/account-type", requireAuth, async (request, response, next)
   try {
     const input = setAccountTypeSchema.parse(request.body);
     const user = await authService.setAccountType(request.authUser!.id, input.accountType);
-    response.json({ user });
+    response.json({ user: serializeUser(user as NonNullable<Express.Request["authUser"]>) });
   } catch (error) {
     next(error);
   }
