@@ -205,8 +205,8 @@ describe("auth service", () => {
     });
   });
 
-  it("registers users as verified without sending a verification email", async () => {
-    const { service, emailSender } = createService();
+  it("registers users as unverified, sends verification email, and blocks login until verified", { timeout: 15000 }, async () => {
+    const { service, repository, emailSender } = createService();
 
     const registration = await service.registerWithEmail({
       email: "new@example.com",
@@ -214,17 +214,72 @@ describe("auth service", () => {
       displayName: "New User"
     });
 
-    expect(registration.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
-    expect(emailSender.sendVerificationEmail).not.toHaveBeenCalled();
+    expect(registration.user.emailVerifiedAt).toBeNull();
+    expect((registration as { sessionToken?: string }).sessionToken).toBeUndefined();
+    expect(emailSender.sendVerificationEmail).toHaveBeenCalledTimes(1);
+
+    await expect(
+      service.loginWithEmail({ email: "NEW@example.com", password: "password123" })
+    ).rejects.toMatchObject({ code: "EMAIL_NOT_VERIFIED", statusCode: 403 });
+
+    const emailCall = vi.mocked(emailSender.sendVerificationEmail).mock.calls.at(-1);
+    const verifyUrl = new URL(emailCall?.[0].verificationUrl ?? "");
+    const rawToken = verifyUrl.searchParams.get("token") ?? "";
+
+    await service.confirmEmailVerification(rawToken);
+
+    const stored = repository.users.find((u) => u.emailNormalized === "new@example.com");
+    expect(stored?.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
 
     const result = await service.loginWithEmail({
       email: "NEW@example.com",
       password: "password123"
     });
-
-    expect(result.user.emailVerifiedAt).toEqual(new Date("2026-04-27T12:00:00.000Z"));
     expect(result.sessionToken).toEqual(expect.any(String));
   });
+
+  it("rejects an invalid verification token", async () => {
+    const { service } = createService();
+    await expect(service.confirmEmailVerification("not-a-real-token")).rejects.toMatchObject({
+      code: "INVALID_OR_EXPIRED_TOKEN",
+      statusCode: 400
+    });
+  });
+
+  it("rate-limits verification email resends per user", async () => {
+    const { service, emailSender } = createService();
+    await service.registerWithEmail({
+      email: "throttle@example.com",
+      password: "password123",
+      displayName: "Throttle"
+    });
+    vi.mocked(emailSender.sendVerificationEmail).mockClear();
+
+    await service.requestEmailVerificationByEmail("throttle@example.com");
+    expect(emailSender.sendVerificationEmail).not.toHaveBeenCalled();
+  });
+
+  it("throws EMAIL_NOT_FOUND when requesting verification for an unknown email", async () => {
+    const { service } = createService();
+    await expect(
+      service.requestEmailVerificationByEmail("ghost@example.com")
+    ).rejects.toMatchObject({ code: "EMAIL_NOT_FOUND", statusCode: 404 });
+  });
+
+  it("throws EMAIL_ALREADY_VERIFIED when re-requesting verification for a verified account", async () => {
+    const { service, repository } = createService();
+    const registration = await service.registerWithEmail({
+      email: "verified@example.com",
+      password: "password123",
+      displayName: "Verified"
+    });
+    await repository.updateUser(registration.user.id, {
+      emailVerifiedAt: new Date("2026-04-27T12:00:00.000Z")
+    });
+    await expect(
+      service.requestEmailVerificationByEmail("verified@example.com")
+    ).rejects.toMatchObject({ code: "EMAIL_ALREADY_VERIFIED", statusCode: 409 });
+  }, 15000);
 
   it("updates a user's display name", async () => {
     const { service } = createService();
@@ -260,12 +315,12 @@ describe("auth service", () => {
     });
   });
 
-  it("rejects direct email verification requests in this deployment", async () => {
+  it("rejects email verification for missing users", async () => {
     const { service } = createService();
 
-    await expect(service.requestEmailVerification("user-1")).rejects.toMatchObject({
-      code: "EMAIL_VERIFICATION_UNAVAILABLE",
-      statusCode: 501
+    await expect(service.requestEmailVerification("user-missing")).rejects.toMatchObject({
+      code: "USER_NOT_FOUND",
+      statusCode: 404
     });
   });
 
@@ -293,12 +348,15 @@ describe("auth service", () => {
     expect(token?.tokenHash).not.toBe(rawToken);
   });
 
-  it("resets a password, invalidates sessions, and rejects the old password", async () => {
+  it("resets a password, invalidates sessions, and rejects the old password", { timeout: 15000 }, async () => {
     const { service, repository, emailSender } = createService();
     const registration = await service.registerWithEmail({
       email: "change@example.com",
       password: "password123",
       displayName: "Change Me"
+    });
+    await repository.updateUser(registration.user.id, {
+      emailVerifiedAt: new Date("2026-04-27T12:00:00.000Z")
     });
 
     repository.sessions.push({

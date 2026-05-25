@@ -6,6 +6,7 @@ import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
 import { env } from "../../config/env";
 import { verifyAppleIdToken, verifyGoogleAuthorizationCode } from "../../services/oauth";
+import { z } from "zod";
 import {
   emailCheckSchema,
   loginSchema,
@@ -14,6 +15,11 @@ import {
   updateProfileSchema
 } from "./authSchemas";
 import { authService } from "./authService";
+
+const verificationRequestSchema = z.object({ email: z.string().trim().toLowerCase().email() });
+const verificationConfirmSchema = z.object({ token: z.string().min(1) });
+const passwordResetRequestSchema = z.object({ email: z.string().trim().toLowerCase().email() });
+const passwordResetConfirmSchema = z.object({ token: z.string().min(1), password: z.string().min(8) });
 
 export const authRoutes = Router();
 
@@ -40,8 +46,10 @@ authRoutes.post("/register", async (request, response, next) => {
   try {
     const input = registerSchema.parse(request.body);
     const result = await authService.registerWithEmail(input);
-    setSessionCookie(response, result.sessionToken);
-    response.status(201).json({ user: serializeUser(result.user as NonNullable<Express.Request["authUser"]>) });
+    response.status(201).json({
+      user: serializeUser(result.user as NonNullable<Express.Request["authUser"]>),
+      emailVerificationRequired: true
+    });
   } catch (error) {
     next(error);
   }
@@ -104,20 +112,44 @@ authRoutes.post("/email/check", async (request, response, next) => {
   }
 });
 
-authRoutes.post("/email/verification/request", (_request, _response, next) => {
-  next(new ApiError(501, "EMAIL_VERIFICATION_UNAVAILABLE", "Email verification is not available in this deployment."));
+authRoutes.post("/email/verification/request", async (request, response, next) => {
+  try {
+    const input = verificationRequestSchema.parse(request.body);
+    await authService.requestEmailVerificationByEmail(input.email);
+    response.status(202).json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.post("/password/reset/request", (_request, _response, next) => {
-  next(new ApiError(501, "PASSWORD_RESET_UNAVAILABLE", "Password reset is not available in this deployment."));
+authRoutes.post("/email/verification/confirm", async (request, response, next) => {
+  try {
+    const input = verificationConfirmSchema.parse(request.body);
+    await authService.confirmEmailVerification(input.token);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.post("/password/reset/confirm", (_request, _response, next) => {
-  next(new ApiError(501, "PASSWORD_RESET_UNAVAILABLE", "Password reset is not available in this deployment."));
+authRoutes.post("/password/reset/request", async (request, response, next) => {
+  try {
+    const input = passwordResetRequestSchema.parse(request.body);
+    await authService.requestPasswordReset({ email: input.email });
+    response.status(202).json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.post("/email/verification/confirm", (_request, _response, next) => {
-  next(new ApiError(501, "EMAIL_VERIFICATION_UNAVAILABLE", "Email verification is not available in this deployment."));
+authRoutes.post("/password/reset/confirm", async (request, response, next) => {
+  try {
+    const input = passwordResetConfirmSchema.parse(request.body);
+    await authService.confirmPasswordReset(input);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
 authRoutes.get("/google/start", (_request, response, next) => {

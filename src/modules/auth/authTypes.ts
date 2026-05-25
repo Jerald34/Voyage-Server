@@ -66,7 +66,10 @@ export type AuthRepository = {
   findUserByEmailNormalized(emailNormalized: string): Promise<AuthUserRecord | null>;
   findUserById(id: string): Promise<AuthUserRecord | null>;
   createUser(data: CreateUserInput): Promise<AuthUserRecord>;
-  updateUser(id: string, data: Partial<Pick<AuthUserRecord, "emailVerifiedAt" | "displayName" | "passwordHash" | "accountType">>): Promise<AuthUserRecord>;
+  updateUser(
+    id: string,
+    data: Partial<Pick<AuthUserRecord, "emailVerifiedAt" | "displayName" | "passwordHash" | "accountType">>
+  ): Promise<AuthUserRecord>;
   createSession(data: { userId: string; tokenHash: string; expiresAt: Date }): Promise<SessionRecord>;
   deleteSessionsByUserId(userId: string): Promise<void>;
   deleteSessionByTokenHash(tokenHash: string): Promise<void>;

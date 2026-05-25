@@ -7,24 +7,11 @@ export function createTeamService(options: { repository: TeamRepository }) {
       return options.repository.listMembers(agencyId);
     },
 
-    async inviteMember(input: { agencyId: string; email: string; role: "ADMIN" | "STAFF" }) {
+    async addExistingUserToAgency(input: { agencyId: string; userId: string; role: "ADMIN" | "STAFF" }) {
       if (input.role !== "ADMIN" && input.role !== "STAFF") {
         throw new ApiError(400, "INVALID_INVITE_ROLE", "Members can only be invited as ADMIN or STAFF.");
       }
-      const normalized = input.email.trim().toLowerCase();
-      const user = await options.repository.findUserByEmail(normalized);
-      if (!user) {
-        throw new ApiError(404, "USER_NOT_FOUND", "No Voyage account is registered to that email.");
-      }
-      const existing = await options.repository.listMembers(input.agencyId);
-      if (existing.some((m) => m.userId === user.id)) {
-        throw new ApiError(409, "ALREADY_A_MEMBER", "That user is already a member of this agency.");
-      }
-      return options.repository.createMembership({
-        agencyId: input.agencyId,
-        userId: user.id,
-        role: input.role
-      });
+      await options.repository.createMembership(input);
     },
 
     async removeMember(input: { agencyId: string; membershipId: string }) {

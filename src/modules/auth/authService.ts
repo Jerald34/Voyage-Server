@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import {
   sendPasswordResetEmail,
+  sendVerificationEmail,
   type VerificationEmailPayload
 } from "../../services/email";
 import { hashPassword, verifyPassword } from "../../services/password";
@@ -47,13 +48,49 @@ export function createAuthService(options: AuthServiceOptions) {
     return { session, sessionToken };
   }
 
+  const VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000;
+  const lastVerificationRequestAt = new Map<string, number>();
+
   async function requestEmailVerification(userId: string) {
-    void userId;
-    throw new ApiError(
-      501,
-      "EMAIL_VERIFICATION_UNAVAILABLE",
-      "Email verification is not available in this deployment."
-    );
+    const user = await options.repository.findUserById(userId);
+    if (!user) {
+      throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+    }
+
+    assertActiveUser(user);
+
+    if (user.emailVerifiedAt) {
+      throw new ApiError(409, "EMAIL_ALREADY_VERIFIED", "This email address is already verified.");
+    }
+
+    const requestedAt = now();
+    const previous = lastVerificationRequestAt.get(user.id);
+    if (previous && requestedAt.getTime() - previous < VERIFICATION_RESEND_COOLDOWN_MS) {
+      throw new ApiError(
+        429,
+        "VERIFICATION_RESEND_COOLDOWN",
+        "Please wait a minute before requesting another verification email."
+      );
+    }
+    lastVerificationRequestAt.set(user.id, requestedAt.getTime());
+
+    await options.repository.markUnusedVerificationTokensUsed(user.id, requestedAt);
+
+    const rawToken = createRandomToken();
+    await options.repository.createVerificationToken({
+      userId: user.id,
+      tokenHash: hashToken(rawToken),
+      expiresAt: addHours(requestedAt, 24)
+    });
+
+    const verifyUrl = new URL("/verify-email", appOrigin);
+    verifyUrl.searchParams.set("token", rawToken);
+
+    await options.emailSender.sendVerificationEmail({
+      to: user.email,
+      displayName: user.displayName,
+      verificationUrl: verifyUrl.toString()
+    });
   }
 
   async function requestPasswordReset(userId: string) {
@@ -101,10 +138,14 @@ export function createAuthService(options: AuthServiceOptions) {
         emailNormalized,
         passwordHash: await hashPassword(input.password, passwordPepper),
         displayName: input.displayName.trim(),
-        emailVerifiedAt: now()
+        emailVerifiedAt: null
       });
-      const { sessionToken, session } = await createSession(user.id);
-      return { user, session, sessionToken };
+
+      await requestEmailVerification(user.id).catch((error) => {
+        console.error("[auth] Failed to send verification email on register:", error);
+      });
+
+      return { user };
     },
 
     async loginWithEmail(input: { email: string; password: string }) {
@@ -120,6 +161,14 @@ export function createAuthService(options: AuthServiceOptions) {
         throw new ApiError(401, "INVALID_CREDENTIALS", "Email or password is incorrect.");
       }
 
+      if (!user.emailVerifiedAt) {
+        throw new ApiError(
+          403,
+          "EMAIL_NOT_VERIFIED",
+          "Please verify your email address before signing in. Check your inbox for the confirmation link."
+        );
+      }
+
       const { sessionToken, session } = await createSession(user.id);
       return { user, session, sessionToken };
     },
@@ -130,7 +179,10 @@ export function createAuthService(options: AuthServiceOptions) {
 
     async requestPasswordReset(input: { email: string }) {
       const user = await options.repository.findUserByEmailNormalized(normalizeEmail(input.email));
-      if (!user || user.status !== "ACTIVE") {
+      if (!user) {
+        throw new ApiError(404, "EMAIL_NOT_FOUND", "We couldn't find a Voyage account with that email.");
+      }
+      if (user.status !== "ACTIVE") {
         return;
       }
 
@@ -176,13 +228,46 @@ export function createAuthService(options: AuthServiceOptions) {
 
     requestEmailVerification,
 
+    async requestEmailVerificationByEmail(email: string) {
+      const user = await options.repository.findUserByEmailNormalized(normalizeEmail(email));
+      if (!user) {
+        throw new ApiError(404, "EMAIL_NOT_FOUND", "We couldn't find a Voyage account with that email.");
+      }
+      if (user.status !== "ACTIVE") {
+        return;
+      }
+      if (user.emailVerifiedAt) {
+        throw new ApiError(409, "EMAIL_ALREADY_VERIFIED", "This email address is already verified. Try signing in.");
+      }
+      await requestEmailVerification(user.id).catch((error) => {
+        console.error("[auth] Failed to resend verification email:", error);
+      });
+    },
+
     async confirmEmailVerification(rawToken: string) {
-      void rawToken;
-      throw new ApiError(
-        501,
-        "EMAIL_VERIFICATION_UNAVAILABLE",
-        "Email verification is not available in this deployment."
-      );
+      const token = await options.repository.findVerificationTokenByHash(hashToken(rawToken));
+      if (!token || token.usedAt || token.expiresAt <= now()) {
+        throw new ApiError(
+          400,
+          "INVALID_OR_EXPIRED_TOKEN",
+          "This verification link is invalid or has expired. Request a new one."
+        );
+      }
+
+      const user = await options.repository.findUserById(token.userId);
+      if (!user) {
+        throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+      }
+      assertActiveUser(user);
+
+      const verifiedAt = now();
+      await options.repository.markVerificationTokenUsed(token.id, verifiedAt);
+
+      const updated = user.emailVerifiedAt
+        ? user
+        : await options.repository.updateUser(user.id, { emailVerifiedAt: verifiedAt });
+
+      return { user: updated };
     },
 
     async setAccountType(userId: string, target: "PERSONAL" | "AGENCY_USER") {
@@ -381,7 +466,7 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
 export const authService = createAuthService({
   repository: createPrismaAuthRepository(),
   emailSender: {
-    sendVerificationEmail: async () => undefined,
+    sendVerificationEmail,
     sendPasswordResetEmail
   }
 });

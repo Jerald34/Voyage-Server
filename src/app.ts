@@ -13,6 +13,7 @@ import { itineraryRoutes } from "./modules/itineraries/itineraryRoutes";
 import { shareRoutes } from "./modules/shares/shareRoutes";
 import { publicShareRoutes } from "./modules/shares/publicShareRoutes";
 import { teamRoutes } from "./modules/agencies/teamRoutes";
+import { invitationRoutes } from "./modules/agencies/invitationRoutes";
 import { workspaceRoutes } from "./modules/workspace/workspaceRoutes";
 import { personalRoutes } from "./modules/personal/personalRoutes";
 
@@ -40,6 +41,7 @@ export function createApp() {
 
   app.use("/auth", authRoutes);
   app.use("/agencies", agencyRoutes);
+  app.use("/invitations", invitationRoutes);
   app.use("/agencies/:agencyId/team", teamRoutes);
   app.use("/agencies/:agencyId/agent", agentRoutes);
   app.use("/agencies/:agencyId/itineraries", itineraryRoutes);

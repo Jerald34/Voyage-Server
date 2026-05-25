@@ -22,41 +22,20 @@ function fakeRepo(seed: Partial<{
   };
 }
 
-describe("teamService.inviteMember", () => {
-  it("creates a STAFF membership for an existing user", async () => {
-    const repo = fakeRepo({ byEmail: { "jane@example.com": { id: "user-2" } } });
+describe("teamService.addExistingUserToAgency", () => {
+  it("creates a STAFF membership", async () => {
+    const repo = fakeRepo();
     const service = createTeamService({ repository: repo });
-    const member = await service.inviteMember({ agencyId: "agency-1", email: "Jane@Example.com", role: "STAFF" });
-    expect(member.role).toBe("STAFF");
+    await service.addExistingUserToAgency({ agencyId: "agency-1", userId: "user-2", role: "STAFF" });
     expect(repo.created).toEqual([{ agencyId: "agency-1", userId: "user-2", role: "STAFF" }]);
   });
 
-  it("rejects with USER_NOT_FOUND if email has no matching user", async () => {
-    const repo = fakeRepo({ byEmail: {} });
+  it("rejects an invalid role", async () => {
+    const repo = fakeRepo();
     const service = createTeamService({ repository: repo });
     await expect(
-      service.inviteMember({ agencyId: "agency-1", email: "nobody@example.com", role: "STAFF" })
-    ).rejects.toMatchObject({ statusCode: 404, code: "USER_NOT_FOUND" });
-  });
-
-  it("rejects inviting as OWNER", async () => {
-    const repo = fakeRepo({ byEmail: { "j@example.com": { id: "u-2" } } });
-    const service = createTeamService({ repository: repo });
-    await expect(
-      service.inviteMember({ agencyId: "agency-1", email: "j@example.com", role: "OWNER" as any })
+      service.addExistingUserToAgency({ agencyId: "agency-1", userId: "u", role: "OWNER" as any })
     ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_INVITE_ROLE" });
-  });
-
-  it("rejects inviting a user who is already a member", async () => {
-    const existing: TeamMembershipRecord = {
-      id: "m-1", agencyId: "agency-1", userId: "user-2", role: "STAFF", status: "ACTIVE",
-      user: { id: "user-2", email: "j@example.com", displayName: "J" }, createdAt: new Date()
-    };
-    const repo = fakeRepo({ byEmail: { "j@example.com": { id: "user-2" } }, members: [existing] });
-    const service = createTeamService({ repository: repo });
-    await expect(
-      service.inviteMember({ agencyId: "agency-1", email: "j@example.com", role: "STAFF" })
-    ).rejects.toMatchObject({ statusCode: 409, code: "ALREADY_A_MEMBER" });
   });
 });
 
