@@ -1,3 +1,4 @@
+import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "../config/env";
 
 export type VerificationEmailPayload = {
@@ -12,42 +13,60 @@ export type PasswordResetEmailPayload = {
   resetUrl: string;
 };
 
-function getResendFromAddress() {
-  const configuredFrom = (process.env.EMAIL_FROM ?? "").trim();
+export type AgencyInvitationEmailPayload = {
+  to: string;
+  inviterName: string;
+  agencyName: string;
+  role: "ADMIN" | "STAFF";
+  acceptUrl: string;
+};
 
-  if (!configuredFrom) {
-    throw new Error("EMAIL_FROM is required for Resend emails.");
-  }
+type Mail = { to: string; subject: string; html: string; text?: string; logMessage: string };
 
-  const placeholderDomain = configuredFrom.includes("example.com");
-  if (!placeholderDomain) {
-    return configuredFrom;
-  }
+let smtpTransporter: Transporter | null = null;
 
-  if (env.NODE_ENV === "production") {
-    throw new Error(
-      "EMAIL_FROM uses example.com, which is only a placeholder. Set EMAIL_FROM to an address on a Resend-verified domain."
-    );
-  }
-
-  const fallbackFrom = "Voyage <onboarding@resend.dev>";
-  console.warn(`[Email] EMAIL_FROM is placeholder; using ${fallbackFrom} for local development.`);
-  return fallbackFrom;
+function getSmtpTransporter(): Transporter | null {
+  if (!env.SMTP_HOST) return null;
+  if (smtpTransporter) return smtpTransporter;
+  smtpTransporter = nodemailer.createTransport({
+    host: env.SMTP_HOST,
+    port: env.SMTP_PORT,
+    secure: env.SMTP_SECURE,
+    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } : undefined
+  });
+  return smtpTransporter;
 }
 
-async function sendWithResend(payload: {
-  to: string;
-  subject: string;
-  html: string;
-  logMessage: string;
-}) {
-  if (!process.env.RESEND_API_KEY) {
-    console.info(payload.logMessage);
-    return;
+function getFromAddress() {
+  const configured = (env.EMAIL_FROM ?? "").trim();
+  if (!configured) {
+    throw new Error("EMAIL_FROM is required to send email.");
   }
+  if (configured.includes("example.com")) {
+    if (env.NODE_ENV === "production") {
+      throw new Error("EMAIL_FROM uses example.com placeholder. Set it to a real sending address.");
+    }
+    const fallback = "Voyage <onboarding@resend.dev>";
+    return fallback;
+  }
+  return configured;
+}
 
-  const from = getResendFromAddress();
+async function sendViaSmtp(mail: Mail): Promise<boolean> {
+  const transporter = getSmtpTransporter();
+  if (!transporter) return false;
+  await transporter.sendMail({
+    from: getFromAddress(),
+    to: mail.to,
+    subject: mail.subject,
+    html: mail.html,
+    text: mail.text
+  });
+  return true;
+}
 
+async function sendViaResend(mail: Mail): Promise<boolean> {
+  if (!process.env.RESEND_API_KEY) return false;
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
@@ -56,37 +75,55 @@ async function sendWithResend(payload: {
       "User-Agent": "Voyage-Server/1.0"
     },
     body: JSON.stringify({
-      from,
-      to: payload.to,
-      subject: payload.subject,
-      html: payload.html
+      from: getFromAddress(),
+      to: mail.to,
+      subject: mail.subject,
+      html: mail.html
     })
   });
-
   if (!response.ok) {
-    const responseBody = await response.json().catch(() => null);
-    const resendErrorCode = responseBody?.error?.code ?? responseBody?.code ?? "unknown";
-    const resendErrorMessage = responseBody?.error?.message ?? responseBody?.message ?? "Unknown Resend error";
-    throw new Error(
-      `Resend email failed with status ${response.status} (${resendErrorCode}): ${resendErrorMessage}`
-    );
+    const body = await response.json().catch(() => null);
+    const code = body?.error?.code ?? body?.code ?? "unknown";
+    const message = body?.error?.message ?? body?.message ?? "Unknown Resend error";
+    throw new Error(`Resend email failed with status ${response.status} (${code}): ${message}`);
   }
+  return true;
 }
 
+async function sendMail(mail: Mail) {
+  if (await sendViaSmtp(mail)) return;
+  if (await sendViaResend(mail)) return;
+  console.info(mail.logMessage);
+}
+
+const baseStyles = `font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1d2024;`;
+
 export async function sendVerificationEmail(payload: VerificationEmailPayload) {
-  await sendWithResend({
+  await sendMail({
     to: payload.to,
     subject: "Verify your Voyage email",
-    html: `<p>Hello ${payload.displayName},</p><p>Verify your Voyage email by opening this link:</p><p><a href="${payload.verificationUrl}">Verify email</a></p>`,
+    html: `<div style="${baseStyles}"><p>Hello ${payload.displayName},</p><p>Confirm your email to finish setting up your Voyage account.</p><p><a href="${payload.verificationUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Verify email</a></p><p style="font-size:13px;color:#666">Or paste this link in your browser:<br/>${payload.verificationUrl}</p><p style="font-size:13px;color:#666">This link expires in 24 hours.</p></div>`,
+    text: `Hello ${payload.displayName},\n\nConfirm your email at: ${payload.verificationUrl}\n\nThis link expires in 24 hours.`,
     logMessage: `Verification email for ${payload.to}: ${payload.verificationUrl}`
   });
 }
 
 export async function sendPasswordResetEmail(payload: PasswordResetEmailPayload) {
-  await sendWithResend({
+  await sendMail({
     to: payload.to,
     subject: "Reset your Voyage password",
-    html: `<p>Hello ${payload.displayName},</p><p>Reset your Voyage password by opening this link:</p><p><a href="${payload.resetUrl}">Reset password</a></p><p>If you did not ask for this, you can ignore this email.</p>`,
+    html: `<div style="${baseStyles}"><p>Hello ${payload.displayName},</p><p>Reset your Voyage password by opening this link:</p><p><a href="${payload.resetUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Reset password</a></p><p style="font-size:13px;color:#666">If you didn't ask for this, you can ignore this email.</p></div>`,
+    text: `Hello ${payload.displayName},\n\nReset your Voyage password at: ${payload.resetUrl}\n\nIf you didn't ask for this, you can ignore this email.`,
     logMessage: `Password reset email for ${payload.to}: ${payload.resetUrl}`
+  });
+}
+
+export async function sendAgencyInvitationEmail(payload: AgencyInvitationEmailPayload) {
+  await sendMail({
+    to: payload.to,
+    subject: `${payload.inviterName} invited you to join ${payload.agencyName} on Voyage`,
+    html: `<div style="${baseStyles}"><p>Hello,</p><p><strong>${payload.inviterName}</strong> has invited you to join <strong>${payload.agencyName}</strong> on Voyage as <strong>${payload.role}</strong>.</p><p><a href="${payload.acceptUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Accept invitation</a></p><p style="font-size:13px;color:#666">Or paste this link:<br/>${payload.acceptUrl}</p><p style="font-size:13px;color:#666">This invitation expires in 7 days.</p></div>`,
+    text: `${payload.inviterName} invited you to join ${payload.agencyName} on Voyage as ${payload.role}.\n\nAccept at: ${payload.acceptUrl}\n\nThis invitation expires in 7 days.`,
+    logMessage: `Agency invite email for ${payload.to}: ${payload.acceptUrl}`
   });
 }

@@ -57,6 +57,10 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       return options.repository.listTripsWithItineraries(agencyId);
     },
 
+    async listTripsForUser(agencyId: string, filter: { role: "OWNER" | "ADMIN" | "STAFF"; userId: string }) {
+      return options.repository.listTripsForUser(agencyId, filter);
+    },
+
     async createDraftFromStructuredInput(
       agencyId: string,
       createdByUserId: string,

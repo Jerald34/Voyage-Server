@@ -49,16 +49,16 @@ function assertActive(user: AgencyUser) {
   }
 }
 
-function assertAdmin(user: AgencyUser) {
+function assertSuperAdmin(user: AgencyUser) {
   assertActive(user);
-  if (user.role !== "ADMIN") {
-    throw new ApiError(403, "ADMIN_REQUIRED", "Admin access is required.");
+  if (user.role !== "SUPER_ADMIN") {
+    throw new ApiError(403, "SUPER_ADMIN_REQUIRED", "Super admin access is required.");
   }
 }
 
-function assertAgencyOwnerMembership(membership: AgencyMembershipRecord | null) {
-  if (!membership || membership.status !== "ACTIVE" || membership.role !== "OWNER") {
-    throw new ApiError(403, "AGENCY_OWNER_REQUIRED", "Only the agency owner can edit workspace settings.");
+function assertAgencyAdminMembership(membership: AgencyMembershipRecord | null) {
+  if (!membership || membership.status !== "ACTIVE" || (membership.role !== "OWNER" && membership.role !== "ADMIN")) {
+    throw new ApiError(403, "AGENCY_ADMIN_REQUIRED", "Only the agency owner or admin can edit workspace settings.");
   }
 }
 
@@ -84,6 +84,10 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     }) {
       assertActive(user);
 
+      if (user.accountType === "PERSONAL") {
+        throw new ApiError(403, "ACCOUNT_TYPE_FORBIDS_AGENCY", "Personal accounts cannot create or join an agency. Create a separate account with a different email.");
+      }
+
       const name = input.name.trim();
       if (!name) {
         throw new ApiError(400, "AGENCY_NAME_REQUIRED", "Agency name is required.");
@@ -100,6 +104,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         logoImageId: input.logoImageId,
       });
       await options.repository.createOwnerMembership({ agencyId: agency.id, userId: user.id });
+
+      // Side effect: commit PENDING accounts to AGENCY_USER.
+      if (user.accountType === "PENDING") {
+        await options.repository.updateUser(user.id, { accountType: "AGENCY_USER" });
+      }
+
       return agency;
     },
 
@@ -114,7 +124,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
       await findRequiredAgency(agencyId);
 
       const membership = await options.repository.findMembership(agencyId, user.id);
-      assertAgencyOwnerMembership(membership);
+      assertAgencyAdminMembership(membership);
 
       const name = input.name.trim();
       const businessPhone = normalizeDigitsOnlyBusinessPhone(input.businessPhone);
@@ -137,12 +147,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async listPendingAgencies(user: AgencyUser) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       return options.repository.listPendingAgencies();
     },
 
     async approveAgency(user: AgencyUser, agencyId: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       await findRequiredAgency(agencyId);
       const reviewedAt = now();
       const agency = await options.repository.updateAgency(agencyId, {
@@ -167,7 +177,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async rejectAgency(user: AgencyUser, agencyId: string, input: { reason: string }) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       await findRequiredAgency(agencyId);
       const reason = input.reason.trim();
       if (!reason) {
@@ -190,7 +200,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async suspendAgency(user: AgencyUser, agencyId: string, input: { reason: string }) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       await findRequiredAgency(agencyId);
       const reason = input.reason.trim();
       if (!reason) {
@@ -213,7 +223,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async unsuspendAgency(user: AgencyUser, agencyId: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       const agency = await findRequiredAgency(agencyId);
       if (agency.status !== "SUSPENDED") {
         throw new ApiError(400, "AGENCY_NOT_SUSPENDED", "Only suspended agencies can be unsuspended.");
@@ -235,12 +245,12 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async listAllAgencies(user: AgencyUser, status?: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       return options.repository.listAgencies(status);
     },
 
     async getAgencyDetail(user: AgencyUser, agencyId: string) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       const agency = await options.repository.findAgencyByIdWithOwner(agencyId);
       if (!agency) {
         throw new ApiError(404, "AGENCY_NOT_FOUND", "Agency not found.");
@@ -250,8 +260,24 @@ export function createAgencyService(options: { repository: AgencyRepository; now
     },
 
     async getPendingCount(user: AgencyUser) {
-      assertAdmin(user);
+      assertSuperAdmin(user);
       return options.repository.countAgenciesByStatus("PENDING_REVIEW");
+    },
+
+    async deleteAgency(user: AgencyUser, agencyId: string, input: { confirmName: string }) {
+      assertActive(user);
+      const agency = await findRequiredAgency(agencyId);
+
+      const membership = await options.repository.findMembership(agencyId, user.id);
+      if (!membership || membership.status !== "ACTIVE" || membership.role !== "OWNER") {
+        throw new ApiError(403, "AGENCY_OWNER_REQUIRED", "Only the agency owner can delete this agency.");
+      }
+
+      if (input.confirmName !== agency.name) {
+        throw new ApiError(400, "NAME_CONFIRMATION_MISMATCH", "The confirmation name does not match the agency name.");
+      }
+
+      await options.repository.deleteAgencyCascade(agencyId);
     }
   };
 }

@@ -245,7 +245,7 @@ export function createAgentService(options: {
       return options.repository.listThreadsByAgency(agencyId);
     },
 
-    async getThread(agencyId: string, threadId: string) {
+    async getThread(agencyId: string | null, threadId: string) {
       const thread = await options.repository.findThreadByAgency(threadId, agencyId);
       if (!thread) {
         throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");

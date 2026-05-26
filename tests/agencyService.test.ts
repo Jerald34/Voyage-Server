@@ -11,6 +11,7 @@ function createUser(overrides: Partial<AgencyUser> = {}): AgencyUser {
     id: "user-1",
     role: "USER",
     status: "ACTIVE",
+    accountType: "AGENCY_USER",
     emailVerifiedAt: new Date("2026-04-27T00:00:00.000Z"),
     ...overrides
   };
@@ -20,15 +21,18 @@ function createMemoryAgencyRepository(): AgencyRepository & {
   agencies: Awaited<ReturnType<AgencyRepository["createAgency"]>>[];
   memberships: Awaited<ReturnType<AgencyRepository["createOwnerMembership"]>>[];
   audits: Awaited<ReturnType<AgencyRepository["createAdminAuditEvent"]>>[];
+  deleted: string[];
 } {
   const agencies: Awaited<ReturnType<AgencyRepository["createAgency"]>>[] = [];
   const memberships: Awaited<ReturnType<AgencyRepository["createOwnerMembership"]>>[] = [];
   const audits: Awaited<ReturnType<AgencyRepository["createAdminAuditEvent"]>>[] = [];
+  const deleted: string[] = [];
 
   return {
     agencies,
     memberships,
     audits,
+    deleted,
     async createAgency(data) {
       const agency = {
         id: `agency-${agencies.length + 1}`,
@@ -82,6 +86,19 @@ function createMemoryAgencyRepository(): AgencyRepository & {
       };
       audits.push(audit);
       return audit;
+    },
+    async deleteAgencyCascade(agencyId) {
+      deleted.push(agencyId);
+      const index = agencies.findIndex((a) => a.id === agencyId);
+      if (index !== -1) {
+        agencies.splice(index, 1);
+      }
+    },
+    async updateUser(_userId: string, _data: any) {
+      return { id: _userId, accountType: "AGENCY_USER" } as any;
+    },
+    async findUserById(_userId: string) {
+      return { id: _userId, accountType: "AGENCY_USER" } as any;
     }
   };
 }
@@ -206,7 +223,7 @@ describe("agency service", () => {
     const { service } = createService();
 
     await expect(service.listPendingAgencies(createUser())).rejects.toMatchObject({
-      code: "ADMIN_REQUIRED",
+      code: "SUPER_ADMIN_REQUIRED",
       statusCode: 403
     });
   });
@@ -221,7 +238,7 @@ describe("agency service", () => {
       country: "Philippines"
     });
 
-    const approved = await service.approveAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id);
+    const approved = await service.approveAgency(createUser({ id: "admin-1", role: "SUPER_ADMIN" }), agency.id);
 
     expect(approved).toMatchObject({
       id: agency.id,
@@ -247,7 +264,7 @@ describe("agency service", () => {
       country: "Philippines"
     });
 
-    const rejected = await service.rejectAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id, {
+    const rejected = await service.rejectAgency(createUser({ id: "admin-1", role: "SUPER_ADMIN" }), agency.id, {
       reason: "Business details could not be verified."
     });
 
@@ -268,7 +285,7 @@ describe("agency service", () => {
       country: "Philippines"
     });
 
-    const suspended = await service.suspendAgency(createUser({ id: "admin-1", role: "ADMIN" }), agency.id, {
+    const suspended = await service.suspendAgency(createUser({ id: "admin-1", role: "SUPER_ADMIN" }), agency.id, {
       reason: "Policy review required."
     });
 
@@ -344,7 +361,42 @@ describe("agency service", () => {
     expect(parsed.businessEmail).toBe("hello@example.com");
   });
 
-  it("non-owner member gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
+  it("ADMIN member can successfully update agency settings", async () => {
+    const { service, repository } = createService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
+      name: "Admin Edit Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+    repository.memberships.push({
+      id: "membership-2",
+      agencyId: agency.id,
+      userId: "admin-1",
+      role: "ADMIN",
+      status: "ACTIVE"
+    });
+
+    const updated = await service.updateAgencySettings(createUser({ id: "admin-1" }), agency.id, {
+      name: "Admin Edited Travel",
+      businessPhone: "639003334444",
+      businessEmail: "admin@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+
+    expect(updated).toMatchObject({
+      id: agency.id,
+      name: "Admin Edited Travel",
+      businessPhone: "639003334444",
+      businessEmail: "admin@example.com",
+      city: "Olongapo City",
+      country: "Philippines"
+    });
+  });
+
+  it("STAFF member gets ApiError 403 AGENCY_ADMIN_REQUIRED", async () => {
     const { service, repository } = createService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
       name: "Owner Travel",
@@ -370,12 +422,72 @@ describe("agency service", () => {
         country: "Philippines"
       })
     ).rejects.toMatchObject({
+      code: "AGENCY_ADMIN_REQUIRED",
+      statusCode: 403
+    });
+  });
+
+  it("OWNER can delete agency with correct name confirmation", async () => {
+    const { service, repository } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Delete Me Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    await service.deleteAgency(owner, agency.id, { confirmName: "Delete Me Travel" });
+
+    expect(repository.deleted).toContain(agency.id);
+  });
+
+  it("deleteAgency rejects with NAME_CONFIRMATION_MISMATCH when confirmName does not match", async () => {
+    const { service } = createService();
+    const owner = createUser({ id: "owner-1" });
+    const agency = await service.createAgencyApplication(owner, {
+      name: "Delete Me Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    await expect(
+      service.deleteAgency(owner, agency.id, { confirmName: "Wrong Name" })
+    ).rejects.toMatchObject({
+      code: "NAME_CONFIRMATION_MISMATCH",
+      statusCode: 400
+    });
+  });
+
+  it("ADMIN gets AGENCY_OWNER_REQUIRED when calling deleteAgency", async () => {
+    const { service, repository } = createService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
+      name: "Protected Travel",
+      businessPhone: "639001112222",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+    repository.memberships.push({
+      id: "membership-2",
+      agencyId: agency.id,
+      userId: "admin-1",
+      role: "ADMIN",
+      status: "ACTIVE"
+    });
+
+    await expect(
+      service.deleteAgency(createUser({ id: "admin-1" }), agency.id, { confirmName: "Protected Travel" })
+    ).rejects.toMatchObject({
       code: "AGENCY_OWNER_REQUIRED",
       statusCode: 403
     });
   });
 
-  it("disabled owner membership gets ApiError 403 AGENCY_OWNER_REQUIRED", async () => {
+  it("disabled owner membership gets ApiError 403 AGENCY_ADMIN_REQUIRED", async () => {
     const { service, repository } = createService();
     const owner = createUser({ id: "owner-1" });
     const agency = await service.createAgencyApplication(owner, {
@@ -396,8 +508,127 @@ describe("agency service", () => {
         country: "Philippines"
       })
     ).rejects.toMatchObject({
-      code: "AGENCY_OWNER_REQUIRED",
+      code: "AGENCY_ADMIN_REQUIRED",
       statusCode: 403
     });
+  });
+});
+
+function validAgencyInput() {
+  return {
+    name: "Test Agency",
+    businessPhone: "639001112222",
+    businessEmail: "owner@example.com",
+    city: "Manila",
+    country: "Philippines"
+  };
+}
+
+function createServiceWithUser(opts: { accountType: "PENDING" | "PERSONAL" | "AGENCY_USER" }) {
+  const accountTypeByUserId = new Map<string, string>();
+  accountTypeByUserId.set("u-1", opts.accountType);
+
+  const agencies: Awaited<ReturnType<AgencyRepository["createAgency"]>>[] = [];
+  const memberships: Awaited<ReturnType<AgencyRepository["createOwnerMembership"]>>[] = [];
+  const audits: Awaited<ReturnType<AgencyRepository["createAdminAuditEvent"]>>[] = [];
+  const deleted: string[] = [];
+
+  const repository = {
+    agencies,
+    memberships,
+    audits,
+    deleted,
+    accountTypeByUserId,
+    async createAgency(data: any) {
+      const agency = {
+        id: `agency-${agencies.length + 1}`,
+        status: "PENDING_REVIEW" as const,
+        submittedAt: new Date("2026-04-27T12:00:00.000Z"),
+        verifiedAt: null,
+        verifiedByAdminUserId: null,
+        rejectedAt: null,
+        rejectedByAdminUserId: null,
+        rejectionReason: null,
+        suspendedAt: null,
+        suspendedByAdminUserId: null,
+        suspensionReason: null,
+        ...data
+      };
+      agencies.push(agency);
+      return agency;
+    },
+    async createOwnerMembership(data: any) {
+      const membership = {
+        id: `membership-${memberships.length + 1}`,
+        role: "OWNER" as const,
+        status: "ACTIVE" as const,
+        ...data
+      };
+      memberships.push(membership);
+      return membership;
+    },
+    async findMembership(agencyId: string, userId: string) {
+      return memberships.find((m) => m.agencyId === agencyId && m.userId === userId) ?? null;
+    },
+    async listPendingAgencies() { return agencies.filter((a) => a.status === "PENDING_REVIEW"); },
+    async findAgencyById(id: string) { return agencies.find((a) => a.id === id) ?? null; },
+    async updateAgency(id: string, data: any) {
+      const agency = agencies.find((a) => a.id === id);
+      if (!agency) throw new Error(`Missing agency ${id}`);
+      Object.assign(agency, data);
+      return agency;
+    },
+    async createAdminAuditEvent(data: any) {
+      const audit = { id: `audit-${audits.length + 1}`, createdAt: new Date(), ...data };
+      audits.push(audit);
+      return audit;
+    },
+    async deleteAgencyCascade(agencyId: string) {
+      deleted.push(agencyId);
+    },
+    async updateUser(userId: string, data: any) {
+      if (data.accountType) accountTypeByUserId.set(userId, data.accountType);
+      return { id: userId, accountType: accountTypeByUserId.get(userId) } as any;
+    },
+    async findUserById(userId: string) {
+      return { id: userId, accountType: accountTypeByUserId.get(userId) } as any;
+    },
+    findUserAccountTypeForTest(userId: string) {
+      return accountTypeByUserId.get(userId);
+    }
+  };
+
+  const service = createAgencyService({ repository: repository as unknown as AgencyRepository });
+  return { service, repository };
+}
+
+describe("createAgencyApplication account-type side effects", () => {
+  it("flips PENDING user to AGENCY_USER after creating the agency", async () => {
+    const { service, repository } = createServiceWithUser({ accountType: "PENDING" });
+    const agency = await service.createAgencyApplication(
+      { id: "u-1", role: "USER", status: "ACTIVE", emailVerifiedAt: new Date(), accountType: "PENDING" },
+      validAgencyInput()
+    );
+    expect(repository.findUserAccountTypeForTest("u-1")).toBe("AGENCY_USER");
+    expect(agency.id).toBeDefined();
+  });
+
+  it("rejects a PERSONAL user with ACCOUNT_TYPE_FORBIDS_AGENCY", async () => {
+    const { service } = createServiceWithUser({ accountType: "PERSONAL" });
+    await expect(
+      service.createAgencyApplication(
+        { id: "u-1", role: "USER", status: "ACTIVE", emailVerifiedAt: new Date(), accountType: "PERSONAL" },
+        validAgencyInput()
+      )
+    ).rejects.toMatchObject({ statusCode: 403, code: "ACCOUNT_TYPE_FORBIDS_AGENCY" });
+  });
+
+  it("allows an AGENCY_USER to create an additional agency (no accountType change)", async () => {
+    const { service, repository } = createServiceWithUser({ accountType: "AGENCY_USER" });
+    await service.createAgencyApplication(
+      { id: "u-1", role: "USER", status: "ACTIVE", emailVerifiedAt: new Date(), accountType: "AGENCY_USER" },
+      validAgencyInput()
+    );
+    expect(repository.findUserAccountTypeForTest("u-1")).toBe("AGENCY_USER");
   });
 });

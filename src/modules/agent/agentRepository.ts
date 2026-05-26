@@ -180,7 +180,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         const trip = await tx.clientTrip.update({
           where: {
             id_agencyId: {
-              id: itinerary.tripId,
+              id: itinerary.tripId!,
               agencyId: data.agencyId
             }
           },

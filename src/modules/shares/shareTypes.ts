@@ -7,7 +7,7 @@ export type ShareRecord = {
   token: string;
   itineraryId: string;
   tripId: string;
-  agencyId: string;
+  agencyId: string | null;
   clientName: string | null;
   clientEmail: string | null;
   expiresAt: Date | null;
@@ -32,6 +32,17 @@ export type CommentRecord = {
   createdAt: Date;
 };
 
+export type PublicShareAgency = {
+  id: string;
+  name: string;
+  logoImage: { bucket: string; objectKey: string } | null;
+};
+
+export type PublicShareCreator = {
+  id: string;
+  displayName: string;
+};
+
 export type PublicShareData = {
   share: ShareRecord;
   trip: {
@@ -42,7 +53,9 @@ export type PublicShareData = {
     endDate: Date | null;
     travelerCount: number | null;
     destinationSummary: string | null;
-  };
+  } | null;
+  agency: PublicShareAgency | null;
+  creator: PublicShareCreator;
   itinerary: {
     id: string;
     title: string;

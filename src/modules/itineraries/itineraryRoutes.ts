@@ -29,8 +29,16 @@ itineraryRoutes.use(async (request, _response, next) => {
 
 itineraryRoutes.get("/", async (request, response, next) => {
   try {
-    const agencyId = getAgencyId(request);
-    const trips = await itineraryService.listTripsWithItineraries(agencyId);
+    const params = request.params as Record<string, string | undefined>;
+    const access = await agencyAccessService.requireVerifiedAgencyMember(
+      request.authUser!,
+      String(params.agencyId)
+    );
+    const role = access.membership!.role;
+    const trips = await itineraryService.listTripsForUser(access.agency.id, {
+      role,
+      userId: request.authUser!.id
+    });
     response.json({ trips });
   } catch (error) {
     next(error);
@@ -69,6 +77,7 @@ itineraryRoutes.delete("/trips/:tripId", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
     const tripId = String(request.params.tripId);
+    await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
     const result = await itineraryService.deleteTrip(agencyId, tripId);
     response.json(result);
   } catch (error) {

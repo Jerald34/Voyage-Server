@@ -17,7 +17,7 @@ export type TripSummary = {
 
 export type ThreadSummary = {
   id: string;
-  agencyId: string;
+  agencyId: string | null;
   tripId: string | null;
   title: string;
   status: string;
@@ -56,32 +56,46 @@ function safeExtractItineraryId(payload: unknown): string | null {
   return null;
 }
 
-export async function getBootstrap(agencyId: string): Promise<BootstrapResult> {
-  const [trips, rawThreads] = await Promise.all([
-    prisma.clientTrip.findMany({
-      where: { agencyId },
-      orderBy: { createdAt: "desc" },
-      select: {
-        id: true,
-        clientName: true,
-        title: true,
-        destinationSummary: true,
-        startDate: true,
-        endDate: true,
-        status: true,
-        assignedOrganizerUserId: true,
-        travelerCount: true,
-        budgetLevel: true,
-        updatedAt: true,
-        itineraries: {
-          select: { id: true, status: true, version: true },
-          orderBy: { createdAt: "desc" },
-          take: 1,
-        },
+export async function getBootstrap(
+  agencyId: string,
+  viewer: { role: "OWNER" | "ADMIN" | "STAFF"; userId: string }
+): Promise<BootstrapResult> {
+  const trips = await prisma.clientTrip.findMany({
+    where: viewer.role === "STAFF" ? { agencyId, assignedOrganizerUserId: viewer.userId } : { agencyId },
+    orderBy: { createdAt: "desc" },
+    select: {
+      id: true,
+      clientName: true,
+      title: true,
+      destinationSummary: true,
+      startDate: true,
+      endDate: true,
+      status: true,
+      assignedOrganizerUserId: true,
+      travelerCount: true,
+      budgetLevel: true,
+      updatedAt: true,
+      itineraries: {
+        select: { id: true, status: true, version: true },
+        orderBy: { createdAt: "desc" },
+        take: 1,
       },
-    }),
+    },
+  });
+
+  const visibleTripIds = trips.map((t) => t.id);
+
+  const [rawThreads] = await Promise.all([
     prisma.agentThread.findMany({
-      where: { agencyId },
+      where: viewer.role === "STAFF"
+        ? {
+            agencyId,
+            OR: [
+              { tripId: { in: visibleTripIds } },
+              { tripId: null, createdByUserId: viewer.userId }
+            ]
+          }
+        : { agencyId },
       orderBy: { updatedAt: "desc" },
       select: {
         id: true,

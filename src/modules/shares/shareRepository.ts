@@ -6,6 +6,8 @@ import type {
   ShareRepository,
   ShareRecord,
   PublicShareData,
+  PublicShareAgency,
+  PublicShareCreator,
   CommentRecord
 } from "./shareTypes";
 import type { AddCommentInput } from "./shareSchemas";
@@ -74,6 +76,10 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
           title: true,
           summary: true,
           version: true,
+          createdByUserId: true,
+          createdByUser: {
+            select: { id: true, displayName: true }
+          },
           ...includeItineraryPublicDetails()
         }
       });
@@ -82,26 +88,62 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
         return null;
       }
 
-      const trip = await client.clientTrip.findUnique({
-        where: { id: share.tripId },
-        select: {
-          id: true,
-          title: true,
-          clientName: true,
-          startDate: true,
-          endDate: true,
-          travelerCount: true,
-          destinationSummary: true
+      // Fetch trip if present (agency shares always have a tripId; personal shares don't).
+      let trip: PublicShareData["trip"] = null;
+      if (share.tripId) {
+        const tripRow = await client.clientTrip.findUnique({
+          where: { id: share.tripId },
+          select: {
+            id: true,
+            title: true,
+            clientName: true,
+            startDate: true,
+            endDate: true,
+            travelerCount: true,
+            destinationSummary: true
+          }
+        });
+        // If tripId is set but the row is missing, the share is invalid.
+        if (!tripRow) {
+          return null;
         }
-      });
-
-      if (!trip) {
-        return null;
+        trip = tripRow;
       }
+
+      // Fetch agency branding when share is agency-scoped.
+      let agency: PublicShareAgency | null = null;
+      if (share.agencyId) {
+        const agencyRow = await client.agency.findUnique({
+          where: { id: share.agencyId },
+          select: {
+            id: true,
+            name: true,
+            logoImage: {
+              select: { bucket: true, objectKey: true }
+            }
+          }
+        });
+        if (agencyRow) {
+          agency = {
+            id: agencyRow.id,
+            name: agencyRow.name,
+            logoImage: agencyRow.logoImage
+              ? { bucket: agencyRow.logoImage.bucket, objectKey: agencyRow.logoImage.objectKey }
+              : null
+          };
+        }
+      }
+
+      const creator: PublicShareCreator = {
+        id: itinerary.createdByUser.id,
+        displayName: itinerary.createdByUser.displayName
+      };
 
       return {
         share: share as ShareRecord,
         trip,
+        agency,
+        creator,
         itinerary: {
           id: itinerary.id,
           title: itinerary.title,

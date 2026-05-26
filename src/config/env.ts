@@ -16,6 +16,14 @@ const envSchema = z.object({
   ADMIN_EMAILS: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
   EMAIL_FROM: z.string().default("Voyage <no-reply@example.com>"),
+  SMTP_HOST: z.string().default(""),
+  SMTP_PORT: z.coerce.number().int().positive().default(587),
+  SMTP_SECURE: z.preprocess(
+    (value) => (typeof value === "string" ? value.toLowerCase() === "true" : value),
+    z.boolean().default(false)
+  ),
+  SMTP_USER: z.string().default(""),
+  SMTP_PASSWORD: z.string().default(""),
   S3_ENDPOINT: z.string().default(""),
   S3_REGION: z.string().default("auto"),
   S3_BUCKET: z.string().default(""),
