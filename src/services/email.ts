@@ -118,6 +118,29 @@ export async function sendPasswordResetEmail(payload: PasswordResetEmailPayload)
   });
 }
 
+export type TripReviewEmailPayload = {
+  to: string;
+  tripTitle: string;
+  tripToken: string;
+  clientName?: string;
+};
+
+export async function sendTripReviewEmail(payload: TripReviewEmailPayload) {
+  const greeting = payload.clientName ? `Hello ${payload.clientName},` : "Hello,";
+  const baseUrl = `${env.APP_ORIGIN.replace(/\/+$/, "")}/reviews/${payload.tripToken}`;
+  const star = (n: number) =>
+    `<a href="${baseUrl}?rating=${n}" style="display:inline-block;padding:8px 12px;margin:0 4px;background:#FAFAFA;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:#1d2024;font-size:20px;">${"⭐".repeat(n)}</a>`;
+  await sendMail({
+    to: payload.to,
+    subject: `How was your trip to ${payload.tripTitle}?`,
+    html: `<div style="${baseStyles}"><p>${greeting}</p><p>We hope you enjoyed your trip to <strong>${payload.tripTitle}</strong>. How would you rate it overall?</p><p style="text-align:center;margin:24px 0;">${star(1)}${star(2)}${star(3)}${star(4)}${star(5)}</p><p style="font-size:13px;color:#666">Tap a rating above and we'll ask you for the rest. Should take 30 seconds.</p></div>`,
+    text: `${greeting}\n\nWe hope you enjoyed your trip to ${payload.tripTitle}. Rate it 1-5 stars:\n\n${[1, 2, 3, 4, 5]
+      .map((n) => `${n} stars: ${baseUrl}?rating=${n}`)
+      .join("\n")}\n`,
+    logMessage: `Trip review email for ${payload.to}: ${baseUrl}`
+  });
+}
+
 export async function sendAgencyInvitationEmail(payload: AgencyInvitationEmailPayload) {
   await sendMail({
     to: payload.to,
