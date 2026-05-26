@@ -493,15 +493,13 @@ Seeded test DB:
 
 ---
 
-## 11. Open questions for the writing-plans phase
+## 11. Decisions (resolved 2026-05-26)
 
-These are not blockers for the spec but need decisions during implementation planning:
-
-1. Exact polling interval — 60s is the default; do we want it user-configurable (likely no)?
-2. Period switcher placement — per-tile or single global switch (lean: single global, simpler).
-3. Side-panel vs full route for funnel stage drill-down — UX prefers panel; bookmarkability prefers route. Decide based on whether owners want to share/bookmark these.
-4. Review email copy + send-after delay (2 days proposed; needs agency feedback).
-5. Should the `Avg proposal rating` KPI tile show response rate (`% of shares rated`) as a subtitle, in addition to the raw N-count already specified? Low response rate would otherwise be invisible at a glance. (Leaning yes.)
+1. **Polling interval:** fixed at 60s. Not user-configurable.
+2. **Period switcher:** single global switch above the KPI strip. Default `30d`. Keeps all KPI tiles comparable as one coherent story.
+3. **Funnel stage drill-down:** side panel, not a full route. Preserves dashboard context; trip URLs already cover the "share this" case.
+4. **Review email send-after delay:** 2 days after `ClientTrip.endDate`. Traveler has decompressed; trip is still fresh.
+5. **Avg proposal rating KPI subtitle:** show response rate. Format: `"32 of 80 shares rated (40%)"`. Prevents low-N averages from misleading visually.
 
 ---
 
