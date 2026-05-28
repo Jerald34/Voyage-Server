@@ -15,7 +15,7 @@ const optionalNullableDateSchema = z.preprocess(
   z.coerce.date().nullable().optional()
 );
 
-export const approveItineraryThreadSchema = z.object({
+export const saveItineraryThreadSchema = z.object({
   itineraryId: z.uuid(),
   clientName: z.string().trim().min(1).max(200),
   destination: z.string().trim().min(1).max(500),
@@ -23,6 +23,10 @@ export const approveItineraryThreadSchema = z.object({
   endDate: optionalNullableDateSchema,
   travelerCount: z.number().int().positive().max(999).optional(),
   budgetLevel: z.string().trim().max(100).optional()
+});
+
+export const updateThreadTitleSchema = z.object({
+  title: z.string().trim().min(1).max(200)
 });
 
 export const agentEventSchema = z.object({

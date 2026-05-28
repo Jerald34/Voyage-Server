@@ -680,6 +680,47 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
           toItems: toDay?.items ?? []
         };
       });
+    },
+
+    async approveTrip(tripId, agencyId) {
+      return client.$transaction(async (tx) => {
+        const trip = await tx.clientTrip.findFirst({
+          where: { id: tripId, agencyId },
+          include: {
+            itineraries: {
+              orderBy: { updatedAt: "desc" as const },
+              take: 1,
+              include: includeItineraryDetails()
+            }
+          }
+        });
+        if (!trip) {
+          throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+        }
+
+        const itinerary = (trip.itineraries[0] as ItineraryRecord | undefined) ?? null;
+
+        if (trip.status === "APPROVED_INTERNAL" && itinerary?.status === "APPROVED_INTERNAL") {
+          return { trip: trip as unknown as ClientTripRecord, itinerary };
+        }
+
+        const updatedTrip = await tx.clientTrip.update({
+          where: { id: tripId },
+          data: { status: "APPROVED_INTERNAL" }
+        });
+
+        let updatedItinerary: ItineraryRecord | null = itinerary;
+        if (itinerary && itinerary.status !== "APPROVED_INTERNAL") {
+          const raw = await tx.itinerary.update({
+            where: { id: itinerary.id },
+            data: { status: "APPROVED_INTERNAL" },
+            include: includeItineraryDetails()
+          });
+          updatedItinerary = raw as ItineraryRecord;
+        }
+
+        return { trip: updatedTrip as unknown as ClientTripRecord, itinerary: updatedItinerary };
+      });
     }
   };
 }

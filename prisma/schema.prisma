@@ -478,6 +478,7 @@ model AgentThread {
   createdByUser   User              @relation("AgentThreadCreator", fields: [createdByUserId], references: [id])
   title           String
   status          AgentThreadStatus @default(ACTIVE)
+  titleSetByUser  Boolean           @default(false)
   messages        AgentMessage[]
   runs            AgentRun[]
   toolCalls       AgentToolCall[]

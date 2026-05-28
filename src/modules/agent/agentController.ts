@@ -60,10 +60,23 @@ export async function deleteThread(req: Request, res: Response, next: NextFuncti
   }
 }
 
-export async function approveItineraryThread(req: Request, res: Response, next: NextFunction) {
+export async function saveItineraryThread(req: Request, res: Response, next: NextFunction) {
   try {
-    const approved = await agentService.approveItineraryThread(getAgencyId(req), String(req.params.id), req.body);
-    res.json(approved);
+    const saved = await agentService.saveItineraryThread(getAgencyId(req), String(req.params.id), req.body);
+    res.json(saved);
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function updateThreadTitle(req: Request, res: Response, next: NextFunction) {
+  try {
+    const thread = await agentService.updateThreadTitle(
+      getAgencyId(req),
+      String(req.params.id),
+      req.body
+    );
+    res.json({ thread });
   } catch (error) {
     next(error);
   }

@@ -84,3 +84,14 @@ itineraryRoutes.delete("/trips/:tripId", async (request, response, next) => {
     next(error);
   }
 });
+
+itineraryRoutes.post("/trips/:tripId/approve", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const tripId = String(request.params.tripId);
+    const result = await itineraryService.approveTrip(agencyId, tripId);
+    response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});

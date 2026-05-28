@@ -96,7 +96,7 @@ export async function getBootstrap(
             ]
           }
         : { agencyId },
-      orderBy: { updatedAt: "desc" },
+      orderBy: { createdAt: "desc" },
       select: {
         id: true,
         agencyId: true,

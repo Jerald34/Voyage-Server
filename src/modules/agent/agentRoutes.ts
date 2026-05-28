@@ -31,8 +31,10 @@ router.post("/threads", agentController.createThread);
 router.get("/threads/:id", agentController.getThread);
 router.get("/threads/:id/messages", agentController.listThreadMessages);
 router.delete("/threads/:id", agentController.deleteThread);
-router.post("/threads/:id/approve-itinerary", agentController.approveItineraryThread);
-router.post("/threads/:id/approve", agentController.approveItineraryThread);
+router.patch("/threads/:id", agentController.updateThreadTitle);
+router.post("/threads/:id/save", agentController.saveItineraryThread);
+// Deprecated alias — remove after one release.
+router.post("/threads/:id/approve", agentController.saveItineraryThread);
 router.post("/threads/:id/messages", agentController.createMessage);
 router.post("/threads/:id/images", upload.array("images", 3), agentController.uploadChatImages);
 router.get("/runs/:id/stream", agentController.runStream);

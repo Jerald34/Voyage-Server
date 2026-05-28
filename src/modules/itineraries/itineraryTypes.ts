@@ -154,6 +154,10 @@ export interface ItineraryRepository {
     fromItems: ItineraryItemRecord[];
     toItems: ItineraryItemRecord[];
   }>;
+  approveTrip(
+    tripId: string,
+    agencyId: string
+  ): Promise<{ trip: ClientTripRecord; itinerary: ItineraryRecord | null }>;
 }
 
 import { z } from "zod";

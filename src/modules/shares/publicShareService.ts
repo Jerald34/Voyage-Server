@@ -13,6 +13,7 @@ export type ShareBrandInput = {
     [key: string]: unknown;
   } | null;
   itinerary: Record<string, unknown>;
+  trip: Record<string, unknown> | null;
   creator: {
     id: string;
     displayName: string;
@@ -28,6 +29,7 @@ export type ShareResponseWithBrand = {
   share: ShareBrandInput["share"];
   agency: ShareBrandInput["agency"];
   itinerary: ShareBrandInput["itinerary"];
+  trip: ShareBrandInput["trip"];
   creator: ShareBrandInput["creator"];
   brand: ShareBrand;
 };
@@ -54,7 +56,7 @@ function buildLogoUrl(
  * returns the full public share response payload including a `brand` discriminated union.
  */
 export function buildShareResponse(input: ShareBrandInput): ShareResponseWithBrand & { brand: ShareBrand } {
-  const { share, agency, itinerary, creator } = input;
+  const { share, agency, itinerary, trip, creator } = input;
 
   let brand: ShareBrand;
   if (share.agencyId !== null && agency !== null) {
@@ -74,6 +76,7 @@ export function buildShareResponse(input: ShareBrandInput): ShareResponseWithBra
     share,
     agency,
     itinerary,
+    trip,
     creator,
     brand
   };

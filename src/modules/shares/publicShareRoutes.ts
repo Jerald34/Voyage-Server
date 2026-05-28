@@ -35,6 +35,7 @@ publicShareRoutes.get("/:token", async (request, response, next) => {
       share: data.share,
       agency: data.agency,
       itinerary: data.itinerary as Record<string, unknown>,
+      trip: data.trip as Record<string, unknown> | null,
       creator: data.creator
     });
     response.json(result);
