@@ -18,6 +18,7 @@ import { teamRoutes } from "./modules/agencies/teamRoutes";
 import { invitationRoutes } from "./modules/agencies/invitationRoutes";
 import { workspaceRoutes } from "./modules/workspace/workspaceRoutes";
 import { personalRoutes } from "./modules/personal/personalRoutes";
+import { ratedHistoryListRoutes, ratedHistoryInsertRoutes } from "./modules/ratedHistory/ratedHistoryRoutes";
 
 export function createApp() {
   const app = express();
@@ -55,6 +56,8 @@ export function createApp() {
   app.use("/admin", adminRoutes);
   app.use("/images", imageRoutes);
   app.use("/me", personalRoutes);
+  app.use("/agencies/:agencyId/rated-history", ratedHistoryListRoutes);
+  app.use("/trips/:tripId/itinerary", ratedHistoryInsertRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);
