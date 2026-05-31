@@ -40,6 +40,9 @@ function normalizeDigitsOnlyBusinessPhone(businessPhone: string) {
   if (!/^\d+$/.test(trimmed)) {
     throw new ApiError(400, "AGENCY_BUSINESS_PHONE_INVALID", "Business phone must contain digits only.");
   }
+  if (trimmed.length < 7 || trimmed.length > 15) {
+    throw new ApiError(400, "AGENCY_BUSINESS_PHONE_INVALID", "Enter a valid phone number (7–15 digits).");
+  }
   return trimmed;
 }
 

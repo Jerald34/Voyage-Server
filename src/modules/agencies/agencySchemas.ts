@@ -23,7 +23,7 @@ const trimmedDigitsOnlyBusinessPhoneSchema = z.preprocess((value) => {
   }
 
   return value.trim();
-}, z.string().min(1).max(30).regex(/^\d+$/, "Business phone must contain digits only."));
+}, z.string().min(7, "Enter a valid phone number (7–15 digits)").max(15, "Enter a valid phone number (7–15 digits)").regex(/^\d+$/, "Business phone must contain digits only."));
 
 export const createAgencySchema = z.object({
   name: z.string().min(1).max(160),

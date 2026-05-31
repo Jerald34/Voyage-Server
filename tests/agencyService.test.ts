@@ -176,6 +176,128 @@ describe("agency service", () => {
     });
   });
 
+  it.each([
+    ["createAgencySchema", createAgencySchema],
+    ["updateAgencySettingsSchema", updateAgencySettingsSchema]
+  ])("rejects businessPhone shorter than 7 digits in %s", (_schemaName, schema) => {
+    const parsed = schema.safeParse({
+      name: "Travel Studio",
+      businessPhone: "123",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["businessPhone"] })
+        ])
+      );
+    }
+  });
+
+  it.each([
+    ["createAgencySchema", createAgencySchema],
+    ["updateAgencySettingsSchema", updateAgencySettingsSchema]
+  ])("rejects businessPhone longer than 15 digits in %s", (_schemaName, schema) => {
+    const parsed = schema.safeParse({
+      name: "Travel Studio",
+      businessPhone: "1234567890123456",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(parsed.success).toBe(false);
+    if (!parsed.success) {
+      expect(parsed.error.issues).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ path: ["businessPhone"] })
+        ])
+      );
+    }
+  });
+
+  it.each([
+    ["createAgencySchema", createAgencySchema],
+    ["updateAgencySettingsSchema", updateAgencySettingsSchema]
+  ])("accepts a 7-digit minimum businessPhone in %s", (_schemaName, schema) => {
+    const parsed = schema.safeParse({
+      name: "Travel Studio",
+      businessPhone: "1234567",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it.each([
+    ["createAgencySchema", createAgencySchema],
+    ["updateAgencySettingsSchema", updateAgencySettingsSchema]
+  ])("accepts a 15-digit maximum businessPhone in %s", (_schemaName, schema) => {
+    const parsed = schema.safeParse({
+      name: "Travel Studio",
+      businessPhone: "123456789012345",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(parsed.success).toBe(true);
+  });
+
+  it("rejects too-short businessPhone at the service boundary", async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createAgencyApplication(createUser(), {
+        name: "Short Phone Travel",
+        businessPhone: "1",
+        businessEmail: "owner@example.com",
+        city: "Subic",
+        country: "Philippines"
+      })
+    ).rejects.toMatchObject({
+      code: "AGENCY_BUSINESS_PHONE_INVALID",
+      statusCode: 400
+    });
+  });
+
+  it("rejects too-long businessPhone at the service boundary", async () => {
+    const { service } = createService();
+
+    await expect(
+      service.createAgencyApplication(createUser(), {
+        name: "Long Phone Travel",
+        businessPhone: "1234567890123456",
+        businessEmail: "owner@example.com",
+        city: "Subic",
+        country: "Philippines"
+      })
+    ).rejects.toMatchObject({
+      code: "AGENCY_BUSINESS_PHONE_INVALID",
+      statusCode: 400
+    });
+  });
+
+  it("accepts a valid 12-digit PH businessPhone at the service boundary", async () => {
+    const { service } = createService();
+
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), {
+      name: "Valid PH Phone Travel",
+      businessPhone: "639171234567",
+      businessEmail: "owner@example.com",
+      city: "Subic",
+      country: "Philippines"
+    });
+
+    expect(agency.businessPhone).toBe("639171234567");
+  });
+
   it("creates agency applications without adding an email verification gate", async () => {
     const { service } = createService();
 
