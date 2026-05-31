@@ -188,6 +188,10 @@ function makeDeps(opts: FakeDepsOpts = {}): RatedHistoryDeps {
             : opts.review
         )
       },
+      itineraryShare: {
+        // Default: no share rating (review is the sole source in existing tests).
+        findFirst: vi.fn(async () => null)
+      },
       itinerary: {
         findUnique: vi.fn(async () => targetItin as never)
       },

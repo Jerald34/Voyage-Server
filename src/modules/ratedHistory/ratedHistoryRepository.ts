@@ -31,11 +31,25 @@ export type ListRatedTripsResult = {
   nextPage: number | null;
 };
 
+/** Canonical shape for a single entry in the merged pool before pagination. */
+type MergedEntry = {
+  tripId: string;
+  title: string;
+  destinationSummary: string | null;
+  startDate: Date | null;
+  endDate: Date | null;
+  itineraryId: string | undefined;
+  dayCount: number;
+  rating: number;
+  ratedAt: Date;
+};
+
 /**
  * Returns paginated rated trip summaries for an agency.
- * Filters: TripReview.rating ≥ 4; optional destination/durationDays/season filters.
+ * Filters: TripReview.rating ≥ 4 OR ItineraryShare.proposalRating ≥ 4;
+ * optional destination/durationDays/season filters.
  * Excludes trips with zero itineraries.
- * Ordered by TripReview.submittedAt DESC.
+ * Ordered by ratedAt DESC (most recent of submittedAt / proposalRatedAt).
  */
 export async function listRatedTrips(
   params: ListRatedTripsParams
@@ -55,7 +69,7 @@ export async function listRatedTrips(
       : {}),
   };
 
-  // Fetch all TripReview rows for the agency with rating >= 4, joined to the trip.
+  // ── Source A: TripReview rows ────────────────────────────────────────────────
   // We over-fetch here to support in-JS filtering for durationDays and season,
   // then paginate the filtered result set.
   // TODO: optimize with raw SQL DATE_PART if N grows large enough that the full
@@ -93,20 +107,102 @@ export async function listRatedTrips(
     },
   });
 
-  // Deduplicate: if a trip has multiple reviews (defensive), keep the one with
-  // the most recent submittedAt (already DESC-sorted, so first wins).
-  const seenTripIds = new Set<string>();
-  const deduped = reviews.filter((r) => {
-    if (seenTripIds.has(r.trip.id)) return false;
-    seenTripIds.add(r.trip.id);
-    return true;
+  // ── Source B: ItineraryShare rows ────────────────────────────────────────────
+  const shares = await prisma.itineraryShare.findMany({
+    where: {
+      agencyId,
+      proposalRating: { gte: 4 },
+      tripId: { not: null },
+      trip: tripWhere,
+    },
+    orderBy: { proposalRatedAt: "desc" },
+    select: {
+      proposalRating: true,
+      proposalRatedAt: true,
+      trip: {
+        select: {
+          id: true,
+          title: true,
+          destinationSummary: true,
+          startDate: true,
+          endDate: true,
+          itineraries: {
+            orderBy: { updatedAt: "desc" },
+            take: 1,
+            select: {
+              id: true,
+              _count: {
+                select: { days: true },
+              },
+            },
+          },
+        },
+      },
+    },
   });
 
-  // Exclude trips with no itinerary or whose most-recent itinerary has zero days.
-  const withDays = deduped.filter((r) => {
+  // ── Merge both sources by tripId ─────────────────────────────────────────────
+  // Build a map keyed by tripId; each entry tracks the best rating and most
+  // recent ratedAt from either source.
+  const byTripId = new Map<string, MergedEntry>();
+
+  for (const r of reviews) {
+    const existing = byTripId.get(r.trip.id);
     const itin = r.trip.itineraries[0];
-    return itin !== undefined && itin._count.days > 0;
-  });
+    if (!existing) {
+      byTripId.set(r.trip.id, {
+        tripId: r.trip.id,
+        title: r.trip.title,
+        destinationSummary: r.trip.destinationSummary ?? null,
+        startDate: r.trip.startDate,
+        endDate: r.trip.endDate,
+        itineraryId: itin?.id,
+        dayCount: itin?._count.days ?? 0,
+        rating: r.rating,
+        ratedAt: r.submittedAt,
+      });
+    } else {
+      // Keep higher rating; use more recent timestamp.
+      if (r.rating > existing.rating) existing.rating = r.rating;
+      if (r.submittedAt > existing.ratedAt) existing.ratedAt = r.submittedAt;
+    }
+  }
+
+  for (const s of shares) {
+    // proposalRating is guaranteed >= 4 by the query filter; proposalRatedAt
+    // may be null despite the filter (Prisma nullable). Skip if so.
+    if (!s.trip || s.proposalRating === null || s.proposalRatedAt === null) continue;
+    const existing = byTripId.get(s.trip.id);
+    const itin = s.trip.itineraries[0];
+    if (!existing) {
+      byTripId.set(s.trip.id, {
+        tripId: s.trip.id,
+        title: s.trip.title,
+        destinationSummary: s.trip.destinationSummary ?? null,
+        startDate: s.trip.startDate,
+        endDate: s.trip.endDate,
+        itineraryId: itin?.id,
+        dayCount: itin?._count.days ?? 0,
+        rating: s.proposalRating,
+        ratedAt: s.proposalRatedAt,
+      });
+    } else {
+      if (s.proposalRating > existing.rating) existing.rating = s.proposalRating;
+      if (s.proposalRatedAt > existing.ratedAt) existing.ratedAt = s.proposalRatedAt;
+    }
+  }
+
+  // ── Exclude trips with no itinerary or zero days ─────────────────────────────
+  const withDays = [...byTripId.values()].filter(
+    (e) => e.itineraryId !== undefined && e.dayCount > 0
+  );
+
+  // ── Sort by ratedAt DESC ──────────────────────────────────────────────────────
+  withDays.sort((a, b) => b.ratedAt.getTime() - a.ratedAt.getTime());
+
+  // NOTE: The old code built `deduped` from the sorted reviews array; we now
+  // use `withDays` (already deduped by the Map). The downstream filter
+  // variable is renamed accordingly.
 
   // Apply in-JS filters (durationDays, season).
   // These are post-fetch because Prisma cannot express DATE_PART arithmetic
@@ -115,8 +211,8 @@ export async function listRatedTrips(
 
   if (durationDays !== undefined) {
     // TODO: optimize with raw SQL DATE_PART if N grows
-    filtered = filtered.filter((r) => {
-      const { startDate, endDate } = r.trip;
+    filtered = filtered.filter((e) => {
+      const { startDate, endDate } = e;
       if (!startDate || !endDate) return false;
       const start = new Date(startDate);
       const end = new Date(endDate);
@@ -127,8 +223,8 @@ export async function listRatedTrips(
   }
 
   if (season !== undefined) {
-    filtered = filtered.filter((r) => {
-      const computed = startDateToSeason(r.trip.startDate);
+    filtered = filtered.filter((e) => {
+      const computed = startDateToSeason(e.startDate);
       return computed === season;
     });
   }
@@ -137,15 +233,15 @@ export async function listRatedTrips(
   const skip = (page - 1) * pageSize;
   const page_rows = filtered.slice(skip, skip + pageSize);
 
-  const trips: RatedTripSummary[] = page_rows.map((r) => ({
-    tripId: r.trip.id,
-    title: r.trip.title,
-    destinationSummary: r.trip.destinationSummary ?? null,
-    dayCount: r.trip.itineraries[0]?._count.days ?? 0,
-    startDate: r.trip.startDate ? r.trip.startDate.toISOString().slice(0, 10) : null,
-    endDate: r.trip.endDate ? r.trip.endDate.toISOString().slice(0, 10) : null,
-    rating: r.rating,
-    ratedAt: r.submittedAt.toISOString(),
+  const trips: RatedTripSummary[] = page_rows.map((e) => ({
+    tripId: e.tripId,
+    title: e.title,
+    destinationSummary: e.destinationSummary,
+    dayCount: e.dayCount,
+    startDate: e.startDate ? e.startDate.toISOString().slice(0, 10) : null,
+    endDate: e.endDate ? e.endDate.toISOString().slice(0, 10) : null,
+    rating: e.rating,
+    ratedAt: e.ratedAt.toISOString(),
   }));
 
   const hasMore = skip + pageSize < total;

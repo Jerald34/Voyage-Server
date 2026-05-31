@@ -61,6 +61,17 @@ export type RatedHistoryDeps = {
         select: Record<string, unknown>;
       }) => Promise<{ rating: number; submittedAt: Date } | null>;
     };
+    itineraryShare: {
+      findFirst: (args: {
+        where: {
+          tripId: string;
+          agencyId: string;
+          proposalRating: { gte: number };
+          proposalRatedAt: { not: null };
+        };
+        select: Record<string, unknown>;
+      }) => Promise<{ proposalRating: number; proposalRatedAt: Date } | null>;
+    };
     itinerary: {
       findUnique: (args: {
         where: { id: string };
@@ -188,11 +199,26 @@ export function createRatedHistoryService(deps: RatedHistoryDeps) {
       throw new SourceNotFoundError("missing");
     }
 
-    const review = await deps.db.tripReview.findFirst({
-      where: { tripId, rating: { gte: 4 } },
-      orderBy: { submittedAt: "desc" },
-      select: { rating: true, submittedAt: true }
-    });
+    // Resolve the best rating from either source (union gate).
+    const [review, share] = await Promise.all([
+      deps.db.tripReview.findFirst({
+        where: { tripId, rating: { gte: 4 } },
+        orderBy: { submittedAt: "desc" },
+        select: { rating: true, submittedAt: true }
+      }),
+      deps.db.itineraryShare.findFirst({
+        where: {
+          tripId,
+          agencyId: callerAgencyId,
+          proposalRating: { gte: 4 },
+          proposalRatedAt: { not: null }
+        },
+        select: { proposalRating: true, proposalRatedAt: true }
+      })
+    ]);
+
+    // Pick the higher rating between the two sources; fall back to 0.
+    const bestRating = Math.max(review?.rating ?? 0, share?.proposalRating ?? 0);
 
     const itinerary: RatedItinerary = stripInternalFields(source);
 
@@ -203,7 +229,7 @@ export function createRatedHistoryService(deps: RatedHistoryDeps) {
       dayCount: source.days.length,
       startDate: trip.startDate ? toIsoDate(trip.startDate) : null,
       endDate: trip.endDate ? toIsoDate(trip.endDate) : null,
-      rating: review?.rating ?? 0
+      rating: bestRating
     };
 
     return {
@@ -541,6 +567,9 @@ export const ratedHistoryService = createRatedHistoryService({
     },
     tripReview: {
       findFirst: (args) => prisma.tripReview.findFirst(args as never) as never
+    },
+    itineraryShare: {
+      findFirst: (args) => prisma.itineraryShare.findFirst(args as never) as never
     },
     itinerary: {
       findUnique: (args) => prisma.itinerary.findUnique(args as never) as never
