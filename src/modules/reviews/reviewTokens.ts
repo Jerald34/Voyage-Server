@@ -5,25 +5,39 @@
  *
  * The token is tied to a specific tripId and issuedAt timestamp.
  * Verification returns null on bad signature or malformed token — never throws.
+ *
+ * Security: requires the TRIP_REVIEW_SECRET environment variable to be set
+ * (non-empty). In production this is enforced at boot via env.ts (F6). In
+ * development the server will still start if the variable is absent, but tokens
+ * cannot be signed — callers will receive an error at runtime. The old fallback
+ * to PASSWORD_PEPPER or the literal "dev-trip-review-secret" has been removed
+ * (F5) to prevent token forgery when neither secret is configured.
  */
 
 import { createHmac } from "node:crypto";
-import { env } from "../../config/env";
 
 export type TripReviewTokenPayload = {
   tripId: string;
   issuedAt: string; // ISO-8601
 };
 
+/** Maximum token age in milliseconds (30 days). Tokens older than this are rejected. */
+const TRIP_REVIEW_TOKEN_MAX_AGE_MS = 30 * 24 * 60 * 60 * 1000;
+
 function getSecret(): string {
-  // Prefer the dedicated secret; fall back to JWT_SECRET if not configured.
-  // JWT_SECRET is not in the env schema, but PASSWORD_PEPPER is always present.
-  // We use the value of TRIP_REVIEW_SECRET when set, otherwise fall back to
-  // PASSWORD_PEPPER (always non-empty in prod) or a hard-coded dev sentinel.
+  // F5: Read directly from process.env (not the cached env object) so that
+  // the secret can be overridden in tests without restarting the module.
+  // Use only the dedicated TRIP_REVIEW_SECRET — never fall back to
+  // PASSWORD_PEPPER (avoids coupling two unrelated trust domains) and never
+  // fall back to a hard-coded literal (which is publicly readable in source).
   const secret = (process.env["TRIP_REVIEW_SECRET"] ?? "").trim();
-  if (secret) return secret;
-  // Fall back to PASSWORD_PEPPER which is always present in the schema
-  return env.PASSWORD_PEPPER || "dev-trip-review-secret";
+  if (!secret) {
+    throw new Error(
+      "[reviewTokens] TRIP_REVIEW_SECRET is not configured. " +
+        "Set this environment variable to a non-empty random secret before signing review tokens."
+    );
+  }
+  return secret;
 }
 
 function base64urlEncode(data: string): string {
@@ -90,7 +104,17 @@ export function verifyTripReviewToken(token: string): TripReviewTokenPayload | n
       return null;
     }
 
-    return parsed as TripReviewTokenPayload;
+    const payload = parsed as TripReviewTokenPayload;
+
+    // F5: Enforce token TTL — reject tokens older than TRIP_REVIEW_TOKEN_MAX_AGE_MS.
+    // The original code carried issuedAt but never checked it, meaning a leaked or
+    // forged token would remain valid forever.
+    const issuedAtMs = Date.parse(payload.issuedAt);
+    if (isNaN(issuedAtMs) || Date.now() - issuedAtMs > TRIP_REVIEW_TOKEN_MAX_AGE_MS) {
+      return null;
+    }
+
+    return payload;
   } catch {
     return null;
   }
