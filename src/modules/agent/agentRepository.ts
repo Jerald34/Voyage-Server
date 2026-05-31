@@ -82,13 +82,13 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           tripId: data.tripId
         },
         include: includeThreadDetails()
-      }) as Promise<AgentThreadRecord>;
+      }) as unknown as Promise<AgentThreadRecord>;
     },
 
     async listThreadsByAgency(agencyId) {
       const rows = await client.agentThread.findMany({
         where: { agencyId },
-        orderBy: { updatedAt: "desc" },
+        orderBy: { createdAt: "desc" },
         select: {
           id: true,
           agencyId: true,
@@ -96,6 +96,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           createdByUserId: true,
           title: true,
           status: true,
+          titleSetByUser: true,
           createdAt: true,
           updatedAt: true,
         },
@@ -111,13 +112,51 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
     },
 
     async deleteThreadByAgency(id, agencyId) {
-      const deleted = await client.agentThread.deleteMany({
-        where: { id, agencyId }
+      return client.$transaction(async (tx) => {
+        // Capture the thread's bound tripId before deletion so we can
+        // garbage-collect an orphan draft ClientTrip in the same transaction.
+        const thread = await tx.agentThread.findFirst({
+          where: { id, agencyId },
+          select: { id: true, tripId: true }
+        });
+        if (!thread) return false;
+
+        const deleted = await tx.agentThread.deleteMany({
+          where: { id, agencyId }
+        });
+        if (deleted.count === 0) return false;
+
+        // Cascade: if this thread was bound to a draft ClientTrip that was
+        // never saved-to-client (clientName === null) and no other thread
+        // still references it, delete the trip too. Trips that have been
+        // saved (clientName set) or approved must NEVER be deleted by this
+        // path — those are real client trips.
+        if (thread.tripId) {
+          const trip = await tx.clientTrip.findFirst({
+            where: { id: thread.tripId, agencyId },
+            select: { id: true, status: true, clientName: true }
+          });
+          if (
+            trip &&
+            trip.status === "DRAFT" &&
+            (trip.clientName === null || trip.clientName === "")
+          ) {
+            const otherThreadCount = await tx.agentThread.count({
+              where: { tripId: thread.tripId, agencyId }
+            });
+            if (otherThreadCount === 0) {
+              await tx.clientTrip.deleteMany({
+                where: { id: thread.tripId, agencyId }
+              });
+            }
+          }
+        }
+
+        return true;
       });
-      return deleted.count > 0;
     },
 
-    async approveItineraryThread(data) {
+    async saveItineraryThread(data) {
       return client.$transaction(async (tx) => {
         const thread = await tx.agentThread.findFirst({
           where: {
@@ -192,7 +231,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             endDate: data.input.endDate ?? null,
             travelerCount: data.input.travelerCount ?? null,
             budgetLevel: data.input.budgetLevel ?? null,
-            status: "APPROVED_INTERNAL",
+            status: "IN_REVIEW",
           },
           select: {
             id: true,
@@ -205,6 +244,11 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             travelerCount: true,
             budgetLevel: true
           }
+        });
+
+        await tx.itinerary.update({
+          where: { id: itinerary.id },
+          data: { status: "NEEDS_REVIEW" }
         });
 
         const bindThread = await tx.agentThread.updateMany({
@@ -617,6 +661,31 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       const messages = hasMore ? rows.slice(0, limit) : rows;
       const nextCursor = hasMore ? rows[limit - 1]?.id ?? null : null;
       return { messages, nextCursor };
+    },
+
+    async updateThreadTitle({ threadId, title, manual }) {
+      const trimmed = title.trim();
+      if (!trimmed) return null;
+
+      // Manual: always write + set the flag.
+      // Automatic: only write when titleSetByUser is false, and never flip the flag.
+      if (manual) {
+        return client.agentThread.update({
+          where: { id: threadId },
+          data: { title: trimmed, titleSetByUser: true },
+          include: includeThreadDetails()
+        }) as unknown as Promise<AgentThreadRecord>;
+      }
+
+      const updated = await client.agentThread.updateMany({
+        where: { id: threadId, titleSetByUser: false },
+        data: { title: trimmed }
+      });
+      if (updated.count === 0) return null;
+      return client.agentThread.findUnique({
+        where: { id: threadId },
+        include: includeThreadDetails()
+      }) as Promise<AgentThreadRecord | null>;
     }
   };
 }

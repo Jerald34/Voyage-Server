@@ -190,6 +190,10 @@ export function createItineraryService(options: { repository: ItineraryRepositor
         toDayId: parsed.toDayId,
         toSortOrder: parsed.toSortOrder
       });
+    },
+
+    async approveTrip(agencyId: string, tripId: string) {
+      return options.repository.approveTrip(tripId, agencyId);
     }
   };
 }

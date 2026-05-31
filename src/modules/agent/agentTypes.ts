@@ -123,6 +123,7 @@ export type AgentThreadRecord = {
   createdByUserId: string;
   title: string;
   status: AgentThreadStatus;
+  titleSetByUser: boolean;
   messages: AgentMessageRecord[];
   events: AgentRunEventRecord[];
   createdAt: Date;
@@ -210,7 +211,7 @@ export interface AgentRepository {
   listThreadsByAgency(agencyId: string): Promise<AgentThreadRecord[]>;
   findThreadByAgency(id: string, agencyId: string | null): Promise<AgentThreadRecord | null>;
   deleteThreadByAgency(id: string, agencyId: string | null): Promise<boolean>;
-  approveItineraryThread(data: {
+  saveItineraryThread(data: {
     agencyId: string;
     threadId: string;
     input: ApproveItineraryThreadInput;
@@ -323,4 +324,9 @@ export interface AgentRepository {
     }>;
     nextCursor: string | null;
   }>;
+  updateThreadTitle(args: {
+    threadId: string;
+    title: string;
+    manual: boolean;
+  }): Promise<AgentThreadRecord | null>;
 }

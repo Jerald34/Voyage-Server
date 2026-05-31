@@ -3,11 +3,16 @@ import { publishAgentRunEvent } from "./agentEvents";
 import { agentLogger } from "./agentLogger";
 import {
   agentEventSchema,
-  approveItineraryThreadSchema,
+  saveItineraryThreadSchema,
   createMessageSchema,
   createThreadSchema,
+  updateThreadTitleSchema,
   type AgentEvent
 } from "./agentSchemas";
+import {
+  deriveTitleFromMessage,
+  deriveTitleFromItineraryPayload
+} from "./agentThreadTitler";
 import type {
   AgentRepository,
   AgentRunRecord,
@@ -230,6 +235,35 @@ export function createAgentService(options: {
     touchThread(threadId).catch(() => {});
   }
 
+  async function maybeRenameFromFirstMessage(threadId: string, content: string) {
+    try {
+      const result = await options.repository.listThreadMessages({
+        threadId,
+        agencyId: null,
+        cursor: null,
+        limit: 2
+      });
+      const userCount = (result?.messages ?? []).filter((m) => m.role === "USER").length;
+      if (userCount !== 1) return; // bail if this isn't the first user message
+      const derived = deriveTitleFromMessage(content);
+      if (!derived) return;
+      await options.repository.updateThreadTitle({ threadId, title: derived, manual: false });
+    } catch {
+      // best-effort; never block the user write
+    }
+  }
+
+  async function maybeRenameFromItineraryEvent(threadId: string, event: AgentEvent) {
+    if (event.type !== "itinerary.created" && event.type !== "itinerary.updated") return;
+    const derived = deriveTitleFromItineraryPayload(event.payload);
+    if (!derived) return;
+    try {
+      await options.repository.updateThreadTitle({ threadId, title: derived, manual: false });
+    } catch {
+      // best-effort
+    }
+  }
+
   return {
     async createThread(agencyId: string, userId: string, input: unknown) {
       const parsed = createThreadSchema.parse(input);
@@ -260,24 +294,38 @@ export function createAgentService(options: {
       }
     },
 
-    async approveItineraryThread(agencyId: string, threadId: string, input: unknown) {
-      const parsed = approveItineraryThreadSchema.parse(input);
+    async saveItineraryThread(agencyId: string, threadId: string, input: unknown) {
+      const parsed = saveItineraryThreadSchema.parse(input);
       const thread = await this.getThread(agencyId, threadId);
       if (thread.tripId) {
         throw new ApiError(409, "THREAD_ALREADY_BOUND", "This thread is already attached to a trip.");
       }
 
-      const approved = await options.repository.approveItineraryThread({
+      const saved = await options.repository.saveItineraryThread({
         agencyId,
         threadId,
         input: parsed
       });
-      if (!approved) {
+      if (!saved) {
         throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
       }
 
       await touchThread(threadId);
-      return approved;
+      return saved;
+    },
+
+    async updateThreadTitle(agencyId: string, threadId: string, input: unknown) {
+      const parsed = updateThreadTitleSchema.parse(input);
+      await this.getThread(agencyId, threadId); // 404 if cross-agency
+      const updated = await options.repository.updateThreadTitle({
+        threadId,
+        title: parsed.title,
+        manual: true
+      });
+      if (!updated) {
+        throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
+      }
+      return updated;
     },
 
     async appendUserMessageAndCreateRun(
@@ -300,6 +348,7 @@ export function createAgentService(options: {
         modelName
       });
       await touchThread(threadId);
+      await maybeRenameFromFirstMessage(threadId, parsed.content);
       return result;
     },
 
@@ -333,6 +382,7 @@ export function createAgentService(options: {
       });
       debouncedTouchThread(run.threadId);
       publishAgentRunEvent(run.id, parsed, persisted.id);
+      await maybeRenameFromItineraryEvent(run.threadId, parsed);
       return persisted;
     },
 

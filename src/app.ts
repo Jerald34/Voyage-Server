@@ -8,14 +8,17 @@ import { adminRoutes } from "./modules/admin/adminRoutes";
 import { agencyRoutes } from "./modules/agencies/agencyRoutes";
 import { agentRoutes } from "./modules/agent/agentRoutes";
 import { authRoutes } from "./modules/auth/authRoutes";
+import { dashboardRoutes } from "./modules/dashboard/dashboardRoutes";
 import { imageRoutes } from "./modules/images/imageRoutes";
 import { itineraryRoutes } from "./modules/itineraries/itineraryRoutes";
+import { reviewRoutes } from "./modules/reviews/reviewRoutes";
 import { shareRoutes } from "./modules/shares/shareRoutes";
 import { publicShareRoutes } from "./modules/shares/publicShareRoutes";
 import { teamRoutes } from "./modules/agencies/teamRoutes";
 import { invitationRoutes } from "./modules/agencies/invitationRoutes";
 import { workspaceRoutes } from "./modules/workspace/workspaceRoutes";
 import { personalRoutes } from "./modules/personal/personalRoutes";
+import { ratedHistoryListRoutes, ratedHistoryInsertRoutes } from "./modules/ratedHistory/ratedHistoryRoutes";
 
 export function createApp() {
   const app = express();
@@ -47,10 +50,14 @@ export function createApp() {
   app.use("/agencies/:agencyId/itineraries", itineraryRoutes);
   app.use("/agencies/:agencyId/workspace", workspaceRoutes);
   app.use("/agencies/:agencyId/shares", shareRoutes);
+  app.use("/agencies/:agencyId/dashboard", dashboardRoutes);
   app.use("/shared", publicShareRoutes);
+  app.use("/reviews", reviewRoutes);
   app.use("/admin", adminRoutes);
   app.use("/images", imageRoutes);
   app.use("/me", personalRoutes);
+  app.use("/agencies/:agencyId/rated-history", ratedHistoryListRoutes);
+  app.use("/trips/:tripId/itinerary", ratedHistoryInsertRoutes);
 
   app.use(notFoundHandler);
   app.use(errorHandler);

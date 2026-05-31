@@ -34,6 +34,7 @@ function createMemoryRepository(): AgentRepository & {
     endDate: Date | null;
     travelerCount: number | null;
     budgetLevel: string | null;
+    status: string;
   }[];
   itineraries: {
     id: string;
@@ -61,6 +62,7 @@ function createMemoryRepository(): AgentRepository & {
     endDate: Date | null;
     travelerCount: number | null;
     budgetLevel: string | null;
+    status: string;
   }[] = [];
   const itineraries: {
     id: string;
@@ -100,6 +102,7 @@ function createMemoryRepository(): AgentRepository & {
         createdByUserId: data.createdByUserId,
         title: data.title,
         status: "ACTIVE",
+        titleSetByUser: false,
         messages: [],
         runs: [],
         toolCalls: [],
@@ -139,7 +142,7 @@ function createMemoryRepository(): AgentRepository & {
       }
       return true;
     },
-    async approveItineraryThread(data) {
+    async saveItineraryThread(data) {
       const thread = threads.find(
         (candidate) => candidate.id === data.threadId && candidate.agencyId === data.agencyId
       );
@@ -184,6 +187,8 @@ function createMemoryRepository(): AgentRepository & {
       trip.endDate = data.input.endDate ?? null;
       trip.travelerCount = data.input.travelerCount ?? null;
       trip.budgetLevel = data.input.budgetLevel ?? null;
+      trip.status = "IN_REVIEW";
+      itinerary.status = "NEEDS_REVIEW";
       thread.title = data.input.clientName;
       thread.tripId = trip.id;
       thread.updatedAt = now;
@@ -475,6 +480,42 @@ function createMemoryRepository(): AgentRepository & {
       run.errorMessage = data.errorMessage;
       run.updatedAt = data.failedAt;
       return run;
+    },
+    async cancelRunIfOpen(id) {
+      const run = runs.find((candidate) => candidate.id === id);
+      if (!run || isTerminalRunStatus(run.status)) return null;
+      run.status = "CANCELLED";
+      run.updatedAt = now;
+      return run;
+    },
+    async listThreadMessages({ threadId, cursor, limit }) {
+      const threadMessages = messages
+        .filter((m) => m.threadId === threadId)
+        .sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime());
+      const startIndex = cursor
+        ? threadMessages.findIndex((m) => m.id === cursor) + 1
+        : 0;
+      const page = threadMessages.slice(startIndex, startIndex + limit);
+      const last = page[page.length - 1];
+      return {
+        messages: page.map((m) => ({
+          id: m.id,
+          role: m.role,
+          content: m.content,
+          createdAt: m.createdAt,
+          runId: m.runId,
+          metadata: m.metadata
+        })),
+        nextCursor: page.length === limit && last ? last.id : null
+      };
+    },
+    async updateThreadTitle({ threadId, title, manual }) {
+      const t = threads.find((x) => x.id === threadId);
+      if (!t) return null;
+      if (!manual && t.titleSetByUser) return t;
+      t.title = title.trim();
+      if (manual) t.titleSetByUser = true;
+      return t;
     }
   };
 }
@@ -635,8 +676,8 @@ describe("agent service", () => {
     await service.appendUserMessageAndCreateRun("agency-1", secondThread.id, "user-1", "Plan Bohol");
 
     await expect(service.listThreads("agency-1")).resolves.toMatchObject([
-      { id: secondThread.id, title: "Second" },
-      { id: firstThread.id, title: "First" }
+      { id: secondThread.id },
+      { id: firstThread.id }
     ]);
   });
 
@@ -922,7 +963,8 @@ describe("agent service", () => {
       startDate: null,
       endDate: null,
       travelerCount: null,
-      budgetLevel: null
+      budgetLevel: null,
+      status: "DRAFT"
     });
     repository.itineraries.push({
       id: "00000000-0000-4000-8000-000000000201",
@@ -943,7 +985,7 @@ describe("agent service", () => {
       createdAt: new Date("2026-04-28T03:00:00.000Z")
     });
 
-    const approved = await service.approveItineraryThread("agency-1", thread.id, {
+    const approved = await service.saveItineraryThread("agency-1", thread.id, {
       itineraryId: "00000000-0000-4000-8000-000000000201",
       clientName: "  Santos Family  ",
       destination: "Olongapo City and Subic Bay",
@@ -975,7 +1017,7 @@ describe("agent service", () => {
       tripId: "00000000-0000-4000-8000-000000000101",
       agencyId: "agency-1",
       version: 2,
-      status: "DRAFT"
+      status: "NEEDS_REVIEW"
     });
     expect(repository.threads[0]).toMatchObject({
       title: "Santos Family",
@@ -998,7 +1040,8 @@ describe("agent service", () => {
       startDate: null,
       endDate: null,
       travelerCount: null,
-      budgetLevel: null
+      budgetLevel: null,
+      status: "DRAFT"
     });
     repository.itineraries.push({
       id: "00000000-0000-4000-8000-000000000201",
@@ -1020,7 +1063,7 @@ describe("agent service", () => {
     });
 
     await expect(
-      service.approveItineraryThread("agency-1", approvingThread.id, {
+      service.saveItineraryThread("agency-1", approvingThread.id, {
         itineraryId: "00000000-0000-4000-8000-000000000201",
         clientName: "Santos Family",
         destination: "Olongapo City"
@@ -1039,7 +1082,7 @@ describe("agent service", () => {
     const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
 
     await expect(
-      service.approveItineraryThread("agency-2", thread.id, {
+      service.saveItineraryThread("agency-2", thread.id, {
         itineraryId: "00000000-0000-4000-8000-000000000201",
         clientName: "Santos Family",
         destination: "Olongapo City"
@@ -1056,7 +1099,7 @@ describe("agent service", () => {
     const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
 
     await expect(
-      service.approveItineraryThread("agency-1", thread.id, {
+      service.saveItineraryThread("agency-1", thread.id, {
         itineraryId: "00000000-0000-4000-8000-000000000201",
         clientName: "Santos Family",
         destination: "Olongapo City"
@@ -1065,6 +1108,138 @@ describe("agent service", () => {
       code: "DRAFT_ITINERARY_REQUIRED",
       statusCode: 409,
       message: "Generate an itinerary before saving this draft."
+    } satisfies Partial<ApiError>);
+  });
+});
+
+describe("auto-rename triggers", () => {
+  it("renames thread from first user message when title is default", async () => {
+    const repo = createMemoryRepository();
+    const service = createAgentService({ repository: repo });
+    const thread = await service.createThread("agency-1", "user-1", {});
+
+    await service.appendUserMessageAndCreateRun(
+      "agency-1",
+      thread.id,
+      "user-1",
+      "Plan a five day honeymoon in Bali"
+    );
+
+    const t = repo.threads.find((x) => x.id === thread.id)!;
+    expect(t.title).toBe("Plan a five day honeymoon in");
+    expect(t.titleSetByUser).toBe(false);
+  });
+
+  it("does not rename on the second user message", async () => {
+    const repo = createMemoryRepository();
+    const service = createAgentService({ repository: repo });
+    const thread = await service.createThread("agency-1", "user-1", {});
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "first");
+    const firstTitle = repo.threads.find((x) => x.id === thread.id)!.title;
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "second");
+    expect(repo.threads.find((x) => x.id === thread.id)!.title).toBe(firstTitle);
+  });
+
+  it("renames from itinerary destination when itinerary.created fires", async () => {
+    const repo = createMemoryRepository();
+    const service = createAgentService({ repository: repo });
+    const thread = await service.createThread("agency-1", "user-1", {});
+    const run = await service.appendUserMessageAndCreateRun(
+      "agency-1", thread.id, "user-1", "build something"
+    );
+
+    await service.recordRunEvent(run.run, {
+      type: "itinerary.created",
+      payload: { itineraryId: "i1", destination: "Kyoto, Japan" }
+    });
+
+    expect(repo.threads.find((x) => x.id === thread.id)!.title).toBe("Kyoto, Japan");
+  });
+
+  it("skips rename when titleSetByUser is true", async () => {
+    const repo = createMemoryRepository();
+    const service = createAgentService({ repository: repo });
+    const thread = await service.createThread("agency-1", "user-1", {});
+    await repo.updateThreadTitle({ threadId: thread.id, title: "My Custom", manual: true });
+
+    await service.appendUserMessageAndCreateRun(
+      "agency-1", thread.id, "user-1", "totally different message"
+    );
+    expect(repo.threads.find((x) => x.id === thread.id)!.title).toBe("My Custom");
+  });
+});
+
+describe("saveItineraryThread — status transitions", () => {
+  function seedItinerarySetup(repository: ReturnType<typeof createMemoryRepository>, threadId: string) {
+    repository.trips.push({
+      id: "00000000-0000-4000-8000-000000000301",
+      agencyId: "agency-1",
+      clientName: null,
+      title: "Untitled draft",
+      destinationSummary: null,
+      startDate: null,
+      endDate: null,
+      travelerCount: null,
+      budgetLevel: null,
+      status: "DRAFT"
+    });
+    repository.itineraries.push({
+      id: "00000000-0000-4000-8000-000000000401",
+      tripId: "00000000-0000-4000-8000-000000000301",
+      agencyId: "agency-1",
+      version: 1,
+      status: "DRAFT"
+    });
+    repository.events.push({
+      id: "event-save-test-1",
+      runId: "run-save-test-1",
+      threadId,
+      type: "itinerary.updated",
+      payload: { itineraryId: "00000000-0000-4000-8000-000000000401" },
+      sequence: 1,
+      createdAt: new Date("2026-04-28T03:00:00.000Z")
+    });
+  }
+
+  it("sets ClientTrip status to IN_REVIEW and Itinerary status to NEEDS_REVIEW on save", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
+    seedItinerarySetup(repository, thread.id);
+
+    await service.saveItineraryThread("agency-1", thread.id, {
+      itineraryId: "00000000-0000-4000-8000-000000000401",
+      clientName: "Test Client",
+      destination: "Tokyo, Japan"
+    });
+
+    const trip = repository.trips.find((t) => t.id === "00000000-0000-4000-8000-000000000301")!;
+    const itinerary = repository.itineraries.find((i) => i.id === "00000000-0000-4000-8000-000000000401")!;
+    expect(trip.status).toBe("IN_REVIEW");
+    expect(itinerary.status).toBe("NEEDS_REVIEW");
+  });
+
+  it("rejects save when thread is already bound to a trip", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Draft itinerary" });
+    seedItinerarySetup(repository, thread.id);
+
+    await service.saveItineraryThread("agency-1", thread.id, {
+      itineraryId: "00000000-0000-4000-8000-000000000401",
+      clientName: "Test Client",
+      destination: "Tokyo, Japan"
+    });
+
+    await expect(
+      service.saveItineraryThread("agency-1", thread.id, {
+        itineraryId: "00000000-0000-4000-8000-000000000401",
+        clientName: "Test Client Again",
+        destination: "Tokyo, Japan"
+      })
+    ).rejects.toMatchObject({
+      code: "THREAD_ALREADY_BOUND",
+      statusCode: 409
     } satisfies Partial<ApiError>);
   });
 });

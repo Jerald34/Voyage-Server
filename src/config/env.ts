@@ -64,7 +64,11 @@ const envSchema = z.object({
   WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5),
   CLOUDINARY_CLOUD_NAME: z.string().default(""),
   CLOUDINARY_API_KEY: z.string().default(""),
-  CLOUDINARY_API_SECRET: z.string().default("")
+  CLOUDINARY_API_SECRET: z.string().default(""),
+  REVIEW_SCHEDULER_ENABLED: z.preprocess(
+    (value) => (typeof value === "string" ? value.toLowerCase() !== "false" : value),
+    z.boolean().default(true)
+  )
 });
 
 export const env = envSchema.parse(process.env);

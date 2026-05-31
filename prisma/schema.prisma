@@ -258,6 +258,7 @@ model Agency {
   itineraryShares        ItineraryShare[]
   agentThreads           AgentThread[]
   agentRuns              AgentRun[]
+  tripReviews            TripReview[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -281,24 +282,24 @@ model AgencyMembership {
 }
 
 model AgencyInvitation {
-  id                String         @id @default(uuid()) @db.Uuid
-  agencyId          String         @db.Uuid
-  agency            Agency         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  email             String
-  emailNormalized   String
-  role              MembershipRole
-  invitedByUserId   String         @db.Uuid
-  invitedByUser     User           @relation("AgencyInvitationInviter", fields: [invitedByUserId], references: [id])
-  tokenHash         String         @unique
-  expiresAt         DateTime
-  acceptedAt        DateTime?
-  acceptedByUserId  String?        @db.Uuid
-  acceptedByUser    User?          @relation("AgencyInvitationAccepter", fields: [acceptedByUserId], references: [id])
-  revokedAt         DateTime?
-  revokedByUserId   String?        @db.Uuid
-  revokedByUser     User?          @relation("AgencyInvitationRevoker", fields: [revokedByUserId], references: [id])
-  createdAt         DateTime       @default(now())
-  updatedAt         DateTime       @updatedAt
+  id               String         @id @default(uuid()) @db.Uuid
+  agencyId         String         @db.Uuid
+  agency           Agency         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  email            String
+  emailNormalized  String
+  role             MembershipRole
+  invitedByUserId  String         @db.Uuid
+  invitedByUser    User           @relation("AgencyInvitationInviter", fields: [invitedByUserId], references: [id])
+  tokenHash        String         @unique
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedByUserId String?        @db.Uuid
+  acceptedByUser   User?          @relation("AgencyInvitationAccepter", fields: [acceptedByUserId], references: [id])
+  revokedAt        DateTime?
+  revokedByUserId  String?        @db.Uuid
+  revokedByUser    User?          @relation("AgencyInvitationRevoker", fields: [revokedByUserId], references: [id])
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
 
   @@index([agencyId])
   @@index([emailNormalized])
@@ -351,13 +352,13 @@ model AdminAuditEvent {
 }
 
 model ClientTrip {
-  id                      String           @id @default(uuid()) @db.Uuid
-  agencyId                String           @db.Uuid
-  agency                  Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  createdByUserId         String           @db.Uuid
-  createdByUser           User             @relation("ClientTripCreator", fields: [createdByUserId], references: [id])
-  assignedOrganizerUserId String?          @db.Uuid
-  assignedOrganizerUser   User?            @relation("ClientTripOrganizer", fields: [assignedOrganizerUserId], references: [id])
+  id                      String              @id @default(uuid()) @db.Uuid
+  agencyId                String              @db.Uuid
+  agency                  Agency              @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  createdByUserId         String              @db.Uuid
+  createdByUser           User                @relation("ClientTripCreator", fields: [createdByUserId], references: [id])
+  assignedOrganizerUserId String?             @db.Uuid
+  assignedOrganizerUser   User?               @relation("ClientTripOrganizer", fields: [assignedOrganizerUserId], references: [id])
   title                   String
   destinationSummary      String?
   clientName              String?
@@ -365,12 +366,14 @@ model ClientTrip {
   endDate                 DateTime?
   travelerCount           Int?
   budgetLevel             String?
-  status                  ClientTripStatus @default(DRAFT)
+  status                  ClientTripStatus    @default(DRAFT)
   itineraries             Itinerary[]
   itineraryShares         ItineraryShare[]
   agentThreads            AgentThread[]
-  createdAt               DateTime         @default(now())
-  updatedAt               DateTime         @updatedAt
+  tripReviews             TripReview[]
+  tripReviewEmailLog      TripReviewEmailLog?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
   @@unique([id, agencyId])
   @@index([agencyId])
@@ -475,6 +478,7 @@ model AgentThread {
   createdByUser   User              @relation("AgentThreadCreator", fields: [createdByUserId], references: [id])
   title           String
   status          AgentThreadStatus @default(ACTIVE)
+  titleSetByUser  Boolean           @default(false)
   messages        AgentMessage[]
   runs            AgentRun[]
   toolCalls       AgentToolCall[]
@@ -630,28 +634,32 @@ enum CommentStatus {
 }
 
 model ItineraryShare {
-  id           String             @id @default(cuid())
-  token        String             @unique
-  itineraryId  String             @db.Uuid
-  itinerary    Itinerary          @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
-  tripId       String?            @db.Uuid
-  trip         ClientTrip?        @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  agencyId     String?            @db.Uuid
-  agency       Agency?            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  clientName   String?
-  clientEmail  String?
-  expiresAt    DateTime?
-  revokedAt    DateTime?
-  viewCount    Int                @default(0)
-  lastViewedAt DateTime?
-  comments     ItineraryComment[]
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id                    String             @id @default(cuid())
+  token                 String             @unique
+  itineraryId           String             @db.Uuid
+  itinerary             Itinerary          @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  tripId                String?            @db.Uuid
+  trip                  ClientTrip?        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  agencyId              String?            @db.Uuid
+  agency                Agency?            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  clientName            String?
+  clientEmail           String?
+  expiresAt             DateTime?
+  revokedAt             DateTime?
+  viewCount             Int                @default(0)
+  lastViewedAt          DateTime?
+  proposalRating        Int?
+  proposalRatingComment String?
+  proposalRatedAt       DateTime?
+  comments              ItineraryComment[]
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
   @@index([itineraryId])
   @@index([tripId])
   @@index([agencyId])
   @@index([token])
+  @@index([proposalRating])
 }
 
 model ItineraryComment {
@@ -670,4 +678,31 @@ model ItineraryComment {
 
   @@index([shareId])
   @@index([status])
+}
+
+model TripReview {
+  id                   String     @id @default(uuid()) @db.Uuid
+  tripId               String     @db.Uuid
+  trip                 ClientTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  agencyId             String     @db.Uuid
+  agency               Agency     @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  rating               Int
+  npsScore             Int?
+  reviewText           String?
+  respondentName       String?
+  respondentEmail      String?
+  consentToTestimonial Boolean    @default(false)
+  submittedAt          DateTime   @default(now())
+  emailSentAt          DateTime?
+  createdAt            DateTime   @default(now())
+
+  @@index([agencyId])
+  @@index([agencyId, submittedAt])
+  @@index([rating])
+}
+
+model TripReviewEmailLog {
+  tripId String     @id @db.Uuid
+  trip   ClientTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  sentAt DateTime   @default(now())
 }
