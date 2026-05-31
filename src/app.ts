@@ -1,6 +1,8 @@
 import cookieParser from "cookie-parser";
 import cors from "cors";
 import express from "express";
+import helmet from "helmet";
+import rateLimit from "express-rate-limit";
 import { env } from "./config/env";
 import { attachAuthUser } from "./http/authMiddleware";
 import { errorHandler, notFoundHandler } from "./http/errors";
@@ -21,10 +23,81 @@ import { personalRoutes } from "./modules/personal/personalRoutes";
 import { ratedHistoryListRoutes, ratedHistoryInsertRoutes } from "./modules/ratedHistory/ratedHistoryRoutes";
 
 export function createApp() {
+  // ---------------------------------------------------------------------------
+  // F4 — Rate limiters (created per-app so tests get isolated counters)
+  // ---------------------------------------------------------------------------
+
+  /** Login: 10 attempts per 15 min per IP (brute-force / credential-stuffing). */
+  const loginLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many login attempts. Please try again later." } }
+  });
+
+  /** Password reset + email verification requests: 5 per hour per IP. */
+  const emailRequestLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 5,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many requests. Please try again later." } }
+  });
+
+  /** Email-check oracle: 20 per hour per IP. */
+  const emailCheckLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many requests. Please try again later." } }
+  });
+
+  /** OAuth callbacks: 20 per 15 min per IP (token-exchange spam). */
+  const oauthCallbackLimiter = rateLimit({
+    windowMs: 15 * 60 * 1000,
+    max: 20,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many OAuth requests. Please try again later." } }
+  });
+
+  /** Review submission: 10 per hour per IP (unauthenticated, combined with F5). */
+  const reviewSubmitLimiter = rateLimit({
+    windowMs: 60 * 60 * 1000,
+    max: 10,
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: { error: { code: "RATE_LIMIT_EXCEEDED", message: "Too many review submissions. Please try again later." } }
+  });
   const app = express();
 
-  app.use((req, res, next) => {
-    console.log(`[Request] ${req.method} ${req.url}`);
+  // F4: Trust the first proxy so rate-limiters and secure cookies see the real client IP.
+  app.set("trust proxy", 1);
+
+  // F8: Security headers — early, before routes.
+  // Configured for a JSON API served from a different origin than the SPA.
+  app.use(helmet({
+    // CSP is not set here because this is a JSON API (no HTML responses).
+    contentSecurityPolicy: false,
+    // Prevent content-type sniffing on all responses (including the photo proxy).
+    noSniff: true,
+    // Deny framing (defence-in-depth; no HTML pages served here).
+    frameguard: { action: "deny" },
+    // Downgrade referrer to origin-only.
+    referrerPolicy: { policy: "strict-origin-when-cross-origin" },
+    // HSTS: 1 year in production; not useful over HTTP but harmless.
+    hsts: {
+      maxAge: 31536000,
+      includeSubDomains: true
+    }
+  }));
+
+  // F9: Log only method + path — never query strings (which may contain OAuth
+  // codes, share tokens, or review tokens).
+  app.use((req, _res, next) => {
+    console.log(`[Request] ${req.method} ${req.path}`);
     next();
   });
 
@@ -41,6 +114,15 @@ export function createApp() {
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
   });
+
+  // F4: Apply rate limiters to sensitive auth endpoints before the router handles them.
+  app.post("/auth/login", loginLimiter);
+  app.post("/auth/password/reset/request", emailRequestLimiter);
+  app.post("/auth/email/verification/request", emailRequestLimiter);
+  app.post("/auth/email/check", emailCheckLimiter);
+  app.get("/auth/google/callback", oauthCallbackLimiter);
+  app.post("/auth/apple/callback", oauthCallbackLimiter);
+  app.post("/reviews/:tripToken/submit", reviewSubmitLimiter);
 
   app.use("/auth", authRoutes);
   app.use("/agencies", agencyRoutes);

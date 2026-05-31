@@ -159,6 +159,37 @@ function rawSessionSetCookie(setCookie: string | string[] | undefined): string |
   return header.find((c) => c.startsWith("voyage_session="));
 }
 
+/**
+ * F3: Simulate the real browser OAuth flow for tests.
+ * 1. GET /auth/google/start → receives state + nonce cookies.
+ * 2. Extract the state value from the redirect URL.
+ * 3. Replay the state cookie + state query param to /auth/google/callback.
+ *
+ * This mirrors what a browser does: it stores the state cookie during the
+ * redirect, then the provider bounces the user back with ?state= in the URL.
+ */
+async function getOAuthStateCookie(app: ReturnType<typeof createApp>): Promise<{ stateCookie: string; stateValue: string }> {
+  // We need Google client ID to be non-empty for /start to work.
+  // Set it temporarily — the test doesn't verify the redirect URL details.
+  const startRes = await request(app)
+    .get("/auth/google/start")
+    // Provide fake credentials so /start doesn't 501.
+    // These don't reach any real Google API since we're getting the redirect URL only.
+    .set("Host", "localhost");
+
+  // Extract state from the redirect URL
+  const location = startRes.headers["location"] as string | undefined;
+  const stateValue = location ? new URL(location).searchParams.get("state") ?? "" : "";
+
+  // Extract the state cookie set by /start
+  const setCookieHeaders = startRes.headers["set-cookie"] as string | string[] | undefined;
+  const cookies = Array.isArray(setCookieHeaders) ? setCookieHeaders : [setCookieHeaders].filter(Boolean) as string[];
+  const stateRaw = cookies.find((c) => c.startsWith("voyage_oauth_state="));
+  const stateCookiePair = stateRaw?.split(";")[0] ?? "";
+
+  return { stateCookie: stateCookiePair, stateValue };
+}
+
 beforeEach(() => {
   store.users = [];
   store.sessions = [];
@@ -171,6 +202,10 @@ beforeEach(() => {
     emailVerified: true,
     displayName: "Owner From Google"
   });
+  // Provide Google OAuth credentials so /google/start doesn't 501.
+  process.env["GOOGLE_CLIENT_ID"] = "test-client-id";
+  process.env["GOOGLE_CLIENT_SECRET"] = "test-client-secret";
+  process.env["GOOGLE_REDIRECT_URI"] = "http://localhost:4000/auth/google/callback";
 });
 
 // ── Tests ────────────────────────────────────────────────────────────────────
@@ -180,8 +215,14 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
     const existing = seedEmailPasswordUser();
     const app = createApp();
 
+    // F3: Get CSRF state by first calling /start, then replay it to the callback.
+    const { stateCookie, stateValue } = await getOAuthStateCookie(app);
+    expect(stateValue, "start must generate a state parameter").toBeTruthy();
+
     // 1. Google callback — verifyGoogleAuthorizationCode is stubbed to the existing email.
-    const callback = await request(app).get("/auth/google/callback?code=fake-auth-code");
+    const callback = await request(app)
+      .get(`/auth/google/callback?code=fake-auth-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
 
     // It redirects back into the app (not an error page).
     expect(callback.status).toBe(302);
@@ -225,7 +266,12 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
     seedEmailPasswordUser();
     const app = createApp();
 
-    const callback = await request(app).get("/auth/google/callback?code=fake-auth-code");
+    // F3: Obtain and replay CSRF state.
+    const { stateCookie, stateValue } = await getOAuthStateCookie(app);
+    const callback = await request(app)
+      .get(`/auth/google/callback?code=fake-auth-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
+
     const rawCookie = rawSessionSetCookie(callback.headers["set-cookie"]);
 
     expect(rawCookie, "callback must emit a voyage_session cookie").toBeDefined();
@@ -239,7 +285,12 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
     seedEmailPasswordUser();
     const app = createApp();
 
-    const callback = await request(app).get("/auth/google/callback?code=fake-auth-code");
+    // F3: Obtain and replay CSRF state.
+    const { stateCookie, stateValue } = await getOAuthStateCookie(app);
+    const callback = await request(app)
+      .get(`/auth/google/callback?code=fake-auth-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
+
     const sessionCookie = extractSessionCookie(callback.headers["set-cookie"]);
     expect(sessionCookie).toBeDefined();
 
@@ -253,5 +304,61 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
     // The real cookie authenticates.
     const ok = await request(app).get("/auth/me").set("Cookie", sessionCookie!);
     expect(ok.status).toBe(200);
+  });
+
+  // ── F3 regression tests ──────────────────────────────────────────────────
+
+  it("F3: rejects callback with missing state (no cookie, no query param)", async () => {
+    seedEmailPasswordUser();
+    const app = createApp();
+
+    const res = await request(app).get("/auth/google/callback?code=fake-auth-code");
+    // Missing state → 400 OAUTH_STATE_MISMATCH
+    expect(res.status).toBe(400);
+    expect(res.body?.error?.code).toBe("OAUTH_STATE_MISMATCH");
+  });
+
+  it("F3: rejects callback with mismatched state (cookie doesn't match query param)", async () => {
+    seedEmailPasswordUser();
+    const app = createApp();
+
+    // Set a valid state cookie, but send a different value in the query param.
+    const { stateCookie } = await getOAuthStateCookie(app);
+    const res = await request(app)
+      .get("/auth/google/callback?code=fake-auth-code&state=totally-wrong-state")
+      .set("Cookie", stateCookie);
+
+    expect(res.status).toBe(400);
+    expect(res.body?.error?.code).toBe("OAUTH_STATE_MISMATCH");
+  });
+
+  // ── F1 regression test ───────────────────────────────────────────────────
+
+  it("F1: rejects OAuth linking when provider email is unverified (existing user)", async () => {
+    // An existing Voyage account owner@example.com tries to be taken over via
+    // an unverified Google Workspace account with the same email.
+    seedEmailPasswordUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "attacker-sub",
+      email: EXISTING_EMAIL,
+      emailVerified: false, // <-- attacker's Google account has unverified email
+      displayName: "Attacker"
+    });
+
+    const app = createApp();
+    const { stateCookie, stateValue } = await getOAuthStateCookie(app);
+    const res = await request(app)
+      .get(`/auth/google/callback?code=attacker-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
+
+    // Must NOT redirect to the app as authenticated — must fail.
+    expect(res.status).toBe(403);
+    expect(res.body?.error?.code).toBe("OAUTH_EMAIL_UNVERIFIED");
+    // Must NOT have created a session cookie.
+    const sessionCookie = extractSessionCookie(res.headers["set-cookie"]);
+    expect(sessionCookie).toBeUndefined();
+    // Must NOT have linked a provider account.
+    expect(store.providerAccounts).toHaveLength(0);
   });
 });

@@ -259,14 +259,17 @@ describe("auth service", () => {
     expect(emailSender.sendVerificationEmail).not.toHaveBeenCalled();
   });
 
-  it("throws EMAIL_NOT_FOUND when requesting verification for an unknown email", async () => {
+  it("silently no-ops (F7 non-enumeration) when requesting verification for an unknown email", async () => {
+    // F7: requestEmailVerificationByEmail must NOT throw EMAIL_NOT_FOUND.
+    // It should return undefined (resolve silently) to avoid user enumeration.
     const { service } = createService();
     await expect(
       service.requestEmailVerificationByEmail("ghost@example.com")
-    ).rejects.toMatchObject({ code: "EMAIL_NOT_FOUND", statusCode: 404 });
+    ).resolves.toBeUndefined();
   });
 
-  it("throws EMAIL_ALREADY_VERIFIED when re-requesting verification for a verified account", async () => {
+  it("silently no-ops (F7 non-enumeration) when re-requesting verification for an already-verified account", async () => {
+    // F7: requestEmailVerificationByEmail must NOT throw EMAIL_ALREADY_VERIFIED.
     const { service, repository } = createService();
     const registration = await service.registerWithEmail({
       email: "verified@example.com",
@@ -278,7 +281,7 @@ describe("auth service", () => {
     });
     await expect(
       service.requestEmailVerificationByEmail("verified@example.com")
-    ).rejects.toMatchObject({ code: "EMAIL_ALREADY_VERIFIED", statusCode: 409 });
+    ).resolves.toBeUndefined();
   }, 15000);
 
   it("updates a user's display name", async () => {
