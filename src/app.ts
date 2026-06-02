@@ -21,6 +21,7 @@ import { invitationRoutes } from "./modules/agencies/invitationRoutes";
 import { workspaceRoutes } from "./modules/workspace/workspaceRoutes";
 import { personalRoutes } from "./modules/personal/personalRoutes";
 import { ratedHistoryListRoutes, ratedHistoryInsertRoutes } from "./modules/ratedHistory/ratedHistoryRoutes";
+import { supportRoutes } from "./modules/support/supportRoutes";
 
 export function createApp() {
   // ---------------------------------------------------------------------------
@@ -151,6 +152,7 @@ export function createApp() {
   app.use("/admin", adminRoutes);
   app.use("/images", imageRoutes);
   app.use("/me", personalRoutes);
+  app.use("/support", supportRoutes);
   app.use("/agencies/:agencyId/rated-history", ratedHistoryListRoutes);
   app.use("/trips/:tripId/itinerary", ratedHistoryInsertRoutes);
 

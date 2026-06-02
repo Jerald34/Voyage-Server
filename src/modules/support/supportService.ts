@@ -73,3 +73,6 @@ export function createSupportService(options: {
     }
   };
 }
+
+import { supportRepository } from "./supportRepository";
+export const supportService = createSupportService({ repository: supportRepository });

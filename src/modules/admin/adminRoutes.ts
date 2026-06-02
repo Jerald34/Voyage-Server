@@ -4,6 +4,8 @@ import { agencyReviewSchema } from "../agencies/agencySchemas";
 import { agencyService } from "../agencies/agencyService";
 import { createUsageService } from "./usageService";
 import { usageRepository } from "./usageRepository";
+import { supportService } from "../support/supportService";
+import { updateReportSchema } from "../support/supportSchemas";
 
 const usageService = createUsageService({ repository: usageRepository });
 
@@ -44,6 +46,27 @@ adminRoutes.get("/usage", requireSuperAdmin, async (request, response, next) => 
     const { period, groupBy, from, to } = request.query as Record<string, string>;
     const result = await usageService.getUsage(request.authUser!, { period: period as any, groupBy: groupBy as any, from, to });
     response.json(result);
+  } catch (error) { next(error); }
+});
+
+adminRoutes.get("/reports", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const reports = await supportService.listReports(request.authUser!, { status });
+    response.json({ reports });
+  } catch (error) { next(error); }
+});
+
+adminRoutes.get("/reports/:id", requireSuperAdmin, async (request, response, next) => {
+  try {
+    response.json({ report: await supportService.getReport(request.authUser!, String(request.params.id)) });
+  } catch (error) { next(error); }
+});
+
+adminRoutes.patch("/reports/:id", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const input = updateReportSchema.parse(request.body);
+    response.json({ report: await supportService.updateReport(request.authUser!, String(request.params.id), input) });
   } catch (error) { next(error); }
 });
 
