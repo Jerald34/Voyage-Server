@@ -2,7 +2,7 @@ import { Router } from "express";
 import { requireSuperAdmin } from "../../http/authMiddleware";
 import { agencyReviewSchema } from "../agencies/agencySchemas";
 import { agencyService } from "../agencies/agencyService";
-import { createUsageService } from "./usageService";
+import { createUsageService, usageQuerySchema } from "./usageService";
 import { usageRepository } from "./usageRepository";
 import { supportService } from "../support/supportService";
 import { updateReportSchema } from "../support/supportSchemas";
@@ -43,8 +43,8 @@ adminRoutes.get("/agencies", requireSuperAdmin, async (request, response, next) 
 
 adminRoutes.get("/usage", requireSuperAdmin, async (request, response, next) => {
   try {
-    const { period, groupBy, from, to } = request.query as Record<string, string>;
-    const result = await usageService.getUsage(request.authUser!, { period: period as any, groupBy: groupBy as any, from, to });
+    const { period, groupBy, from, to } = usageQuerySchema.parse(request.query);
+    const result = await usageService.getUsage(request.authUser!, { period, groupBy, from, to });
     response.json(result);
   } catch (error) { next(error); }
 });

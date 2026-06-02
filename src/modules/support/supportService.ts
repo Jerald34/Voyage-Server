@@ -66,8 +66,11 @@ export function createSupportService(options: {
     async updateReport(user: SupportServiceUser, id: string, patch: Record<string, any>) {
       assertSuperAdmin(user);
       const resolvedStatuses = ["RESOLVED", "WONT_FIX"];
+      const openStatuses = ["NEW", "IN_PROGRESS"];
       if (patch.status && resolvedStatuses.includes(patch.status)) {
         patch = { ...patch, resolvedAt: now(), resolvedByAdminUserId: user.id };
+      } else if (patch.status && openStatuses.includes(patch.status)) {
+        patch = { ...patch, resolvedAt: null, resolvedByAdminUserId: null };
       }
       return options.repository.updateReport(id, patch);
     }

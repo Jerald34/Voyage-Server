@@ -1,5 +1,13 @@
+import { z } from "zod";
 import { ApiError } from "../../http/errors";
 import { bucketSeries, rollupBy, type UsageRow, type UsagePeriod, type UsageGroupBy } from "./usageAggregations";
+
+export const usageQuerySchema = z.object({
+  period: z.enum(["day", "week", "month"]).optional(),
+  groupBy: z.enum(["user", "agency"]).optional(),
+  from: z.string().datetime({ offset: true }).optional(),
+  to: z.string().datetime({ offset: true }).optional()
+});
 
 export interface UsageServiceRepository {
   listRunUsage(range: { from: Date; to: Date }): Promise<UsageRow[]>;

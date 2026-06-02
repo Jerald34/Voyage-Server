@@ -33,4 +33,28 @@ describe("supportService", () => {
     expect(updated.resolvedByAdminUserId).toBe("admin");
     expect(updated.resolvedAt).toEqual(new Date("2026-06-10T00:00:00Z"));
   });
+
+  it("clears resolvedAt and resolvedByAdminUserId when report is re-opened to NEW", async () => {
+    const repo = memoryRepo();
+    const svc = createSupportService({ repository: repo, now: () => new Date("2026-06-10T00:00:00Z") });
+    const created = await svc.createReport({ id: "u1", role: "USER" }, { category: "BUG", subject: "X", message: "Y" }, {});
+    // First resolve it
+    await svc.updateReport({ id: "admin", role: "SUPER_ADMIN" }, created.id, { status: "RESOLVED" });
+    // Then reopen
+    const reopened = await svc.updateReport({ id: "admin", role: "SUPER_ADMIN" }, created.id, { status: "NEW" });
+    expect(reopened.resolvedAt).toBeNull();
+    expect(reopened.resolvedByAdminUserId).toBeNull();
+  });
+
+  it("clears resolvedAt and resolvedByAdminUserId when report is re-opened to IN_PROGRESS", async () => {
+    const repo = memoryRepo();
+    const svc = createSupportService({ repository: repo, now: () => new Date("2026-06-10T00:00:00Z") });
+    const created = await svc.createReport({ id: "u1", role: "USER" }, { category: "BUG", subject: "X", message: "Y" }, {});
+    // First mark as WONT_FIX
+    await svc.updateReport({ id: "admin", role: "SUPER_ADMIN" }, created.id, { status: "WONT_FIX" });
+    // Then move back to IN_PROGRESS
+    const reopened = await svc.updateReport({ id: "admin", role: "SUPER_ADMIN" }, created.id, { status: "IN_PROGRESS" });
+    expect(reopened.resolvedAt).toBeNull();
+    expect(reopened.resolvedByAdminUserId).toBeNull();
+  });
 });
