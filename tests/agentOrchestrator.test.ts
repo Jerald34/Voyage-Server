@@ -78,6 +78,9 @@ function createFakeAgentService(run = createRun()) {
     metadata: unknown;
     createdAt: Date;
   }> = [];
+  // Captures every completeRun invocation (incl. the optional usage summary) so tests
+  // can assert the orchestrator forwards accumulated model usage.
+  const completeRunCalls: Array<{ runId: string; assistantContent: string; usage: unknown }> = [];
   const service: AgentOrchestratorAgentService = {
     async getThread() {
       return {
@@ -202,7 +205,8 @@ function createFakeAgentService(run = createRun()) {
       }
       return created;
     },
-    async completeRun(runId, assistantContent) {
+    async completeRun(runId, assistantContent, usage) {
+      completeRunCalls.push({ runId, assistantContent, usage });
       run.status = "COMPLETED";
       run.completedAt = new Date("2026-04-28T00:00:00.000Z");
       events.push({
@@ -258,8 +262,19 @@ function createFakeAgentService(run = createRun()) {
     }
   };
 
-  return { service, events, run, toolCalls, tasks, sources };
+  return { service, events, run, toolCalls, tasks, sources, completeRunCalls };
 }
+
+// Shared fake usage so every model call reports tokens/cost; the orchestrator should
+// accumulate these and forward the summary to completeRun.
+const FAKE_MODEL_USAGE = {
+  model: "test-model",
+  promptTokenCount: 100,
+  candidatesTokenCount: 40,
+  totalTokenCount: 140,
+  cachedContentTokenCount: 0,
+  estimatedCostUsd: { prompt: 0.001, output: 0.001, total: 0.002 }
+} as const;
 
 function createModelProvider(content: string | string[]): ModelProvider & { calls: Array<Parameters<ModelProvider["complete"]>[0]> } {
   const contents = Array.isArray(content) ? [...content] : [content];
@@ -268,7 +283,7 @@ function createModelProvider(content: string | string[]): ModelProvider & { call
     calls,
     async complete(input) {
       calls.push(input);
-      return { content: contents.shift() ?? contents.at(-1) ?? "" };
+      return { content: contents.shift() ?? contents.at(-1) ?? "", usage: { ...FAKE_MODEL_USAGE } };
     }
   };
 }
@@ -1216,6 +1231,68 @@ describe("agent orchestrator", () => {
       type: "message.delta",
       payload: { delta: "Final response grounded by Google Search: Cebu travel advisories result." }
     });
+  });
+
+  it("passes summed model usage to completeRun", async () => {
+    const { service, completeRunCalls } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "I checked a tool.",
+      toolCalls: [
+        {
+          name: "web_search",
+          input: { query: "Cebu travel advisories", maxResults: 1 }
+        }
+      ]
+    });
+    // Three model calls (initial loop + continuation + synthesis), each reporting
+    // FAKE_MODEL_USAGE, so the accumulator should sum tokens across phases.
+    const modelProvider = createModelProvider([
+      modelOutput,
+      "Final response grounded by Google Search: Cebu travel advisories result."
+    ]);
+    const registry = createAgentToolRegistry([
+      createWebSearchTool({
+        agentService: service,
+        webSearch: {
+          async search() {
+            return [
+              {
+                title: "Cebu travel advisories",
+                url: "https://example.com/advisories",
+                snippet: "Official travel advisory result",
+                provider: "google_custom_search" as const
+              }
+            ];
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    const lastCall = completeRunCalls.at(-1);
+    expect(lastCall).toBeDefined();
+    const usageArg = lastCall?.usage as {
+      totalTokens: number;
+      promptTokens: number;
+      outputTokens: number;
+      calls: number;
+      detail: Array<{ phase: string }>;
+    };
+    expect(usageArg).toBeDefined();
+    expect(usageArg.totalTokens).toBeGreaterThan(0);
+    expect(usageArg.detail.length).toBeGreaterThanOrEqual(1);
+    // Three model calls each report 140 total tokens -> summed across the run.
+    expect(usageArg.totalTokens).toBe(FAKE_MODEL_USAGE.totalTokenCount * modelProvider.calls.length);
+    expect(usageArg.calls).toBe(modelProvider.calls.length);
+    // Both phases recorded: loop (initial + continuation) and synthesis.
+    expect(usageArg.detail.some((entry) => entry.phase === "loop")).toBe(true);
+    expect(usageArg.detail.some((entry) => entry.phase === "synthesis")).toBe(true);
   });
 
   it("does not fail the run when web_search provider is unavailable", async () => {
