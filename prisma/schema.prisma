@@ -165,6 +165,8 @@ model User {
   createdItineraries  Itinerary[]              @relation("ItineraryCreator")
   createdAgentThreads AgentThread[]            @relation("AgentThreadCreator")
   agentMessages       AgentMessage[]           @relation("AgentMessageAuthor")
+  problemReports      ProblemReport[]          @relation("ProblemReporter")
+  resolvedReports     ProblemReport[]          @relation("ProblemResolver")
   createdAt           DateTime                 @default(now())
   updatedAt           DateTime                 @updatedAt
 
@@ -259,6 +261,7 @@ model Agency {
   agentThreads           AgentThread[]
   agentRuns              AgentRun[]
   tripReviews            TripReview[]
+  problemReports         ProblemReport[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -716,4 +719,44 @@ model TripReviewEmailLog {
   tripId String     @id @db.Uuid
   trip   ClientTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
   sentAt DateTime   @default(now())
+}
+
+enum ProblemCategory {
+  BUG
+  BILLING
+  FEATURE
+  OTHER
+}
+
+enum ReportStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  WONT_FIX
+}
+
+model ProblemReport {
+  id                    String          @id @default(uuid()) @db.Uuid
+  reporterUserId        String          @db.Uuid
+  reporterUser          User            @relation("ProblemReporter", fields: [reporterUserId], references: [id])
+  agencyId              String?         @db.Uuid
+  agency                Agency?         @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+  category              ProblemCategory @default(OTHER)
+  subject               String
+  message               String
+  status                ReportStatus    @default(NEW)
+  adminNotes            String?
+  githubIssueUrl        String?
+  githubIssueNumber     Int?
+  resolvedByAdminUserId String?         @db.Uuid
+  resolvedByAdminUser   User?           @relation("ProblemResolver", fields: [resolvedByAdminUserId], references: [id])
+  resolvedAt            DateTime?
+  appContext            String?
+  userAgent             String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([status])
+  @@index([reporterUserId])
+  @@index([createdAt])
 }
