@@ -2,6 +2,10 @@ import { Router } from "express";
 import { requireSuperAdmin } from "../../http/authMiddleware";
 import { agencyReviewSchema } from "../agencies/agencySchemas";
 import { agencyService } from "../agencies/agencyService";
+import { createUsageService } from "./usageService";
+import { usageRepository } from "./usageRepository";
+
+const usageService = createUsageService({ repository: usageRepository });
 
 export const adminRoutes = Router();
 
@@ -33,6 +37,14 @@ adminRoutes.get("/agencies", requireSuperAdmin, async (request, response, next) 
   } catch (error) {
     next(error);
   }
+});
+
+adminRoutes.get("/usage", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const { period, groupBy, from, to } = request.query as Record<string, string>;
+    const result = await usageService.getUsage(request.authUser!, { period: period as any, groupBy: groupBy as any, from, to });
+    response.json(result);
+  } catch (error) { next(error); }
 });
 
 // Parameterized routes
