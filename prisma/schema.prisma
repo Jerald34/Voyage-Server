@@ -529,6 +529,15 @@ model AgentRun {
   status           AgentRunStatus  @default(QUEUED)
   modelProvider    String
   modelName        String
+  // Usage metering (forward-only; null for runs created before this shipped)
+  promptTokens   Int?
+  outputTokens   Int?
+  totalTokens    Int?
+  cachedTokens   Int?
+  thoughtsTokens Int?
+  costUsd        Decimal? @db.Decimal(12, 6)
+  usageDetail    Json?
+  usageUserId    String?  @db.Uuid
   startedAt        DateTime?
   completedAt      DateTime?
   failedAt         DateTime?
@@ -547,6 +556,8 @@ model AgentRun {
   @@index([agencyId])
   @@index([triggerMessageId])
   @@index([status])
+  @@index([usageUserId, createdAt])
+  @@index([agencyId, createdAt])
 }
 
 model AgentToolCall {
