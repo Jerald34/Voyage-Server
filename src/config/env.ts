@@ -34,12 +34,18 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().default(""),
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),
-  GOOGLE_REDIRECT_URI: z.string().default("http://localhost:4000/auth/google/callback"),
+  // OAuth callbacks must return through the app-origin `/api` proxy so the session
+  // cookie set on the callback is first-party to the app (required for iOS PWA).
+  // In production set this to `${APP_ORIGIN}/api/auth/google/callback` and register
+  // that exact URL in the Google Cloud console.
+  GOOGLE_REDIRECT_URI: z.string().default("http://localhost:3000/api/auth/google/callback"),
   APPLE_CLIENT_ID: z.string().default(""),
   APPLE_TEAM_ID: z.string().default(""),
   APPLE_KEY_ID: z.string().default(""),
   APPLE_PRIVATE_KEY: z.string().default(""),
-  APPLE_REDIRECT_URI: z.string().default("http://localhost:4000/auth/apple/callback"),
+  // See GOOGLE_REDIRECT_URI — Apple callbacks must likewise return via the `/api`
+  // proxy: `${APP_ORIGIN}/api/auth/apple/callback`, registered in the Apple console.
+  APPLE_REDIRECT_URI: z.string().default("http://localhost:3000/api/auth/apple/callback"),
   LM_STUDIO_BASE_URL: z.string().default("http://localhost:1234/v1"),
   LM_STUDIO_MODEL: z.string().default("local-model"),
   LM_STUDIO_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),

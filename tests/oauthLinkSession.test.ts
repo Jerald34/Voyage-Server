@@ -254,15 +254,15 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
     });
   });
 
-  it("emits the session cookie with cross-site delivery attributes (SameSite=None; Secure) so the post-redirect /auth/me fetch carries it", async () => {
-    // ROOT CAUSE of the "stranded on landing" bug: the SPA runs on a different
-    // origin/port than the API, so the only path back into the app after the
-    // OAuth redirect is a CROSS-SITE fetch("/auth/me") with credentials:"include".
-    // A SameSite=Lax cookie is withheld from cross-site, non-navigational fetch
-    // requests, so the cookie set here would never reach /auth/me and the user
-    // is bounced out. supertest replays cookies regardless of SameSite, so the
-    // ONLY way to catch this regression at this layer is to assert the emitted
-    // cookie attributes a real browser enforces.
+  it("emits the session cookie as first-party SameSite=Lax; Secure (the app reaches this API through a same-origin /api proxy)", async () => {
+    // The SPA now talks to this API through a SAME-ORIGIN reverse proxy (the
+    // client's Next `rewrites` forward /api/* here), so the post-redirect
+    // fetch("/auth/me") is same-site and a Lax cookie reaches it. Lax is in fact
+    // REQUIRED for iOS standalone PWAs: WebKit's ITP blocks cross-site
+    // SameSite=None cookies, which made sign-in appear to work while every data
+    // fetch came back unauthenticated (empty threads/itineraries). supertest
+    // replays cookies regardless of SameSite, so asserting the emitted attributes
+    // is the only way to catch a regression at this layer.
     seedEmailPasswordUser();
     const app = createApp();
 
@@ -275,9 +275,9 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
     const rawCookie = rawSessionSetCookie(callback.headers["set-cookie"]);
 
     expect(rawCookie, "callback must emit a voyage_session cookie").toBeDefined();
-    // Must be SameSite=None (case-insensitive) for cross-site fetch delivery...
-    expect(rawCookie!).toMatch(/;\s*SameSite=None/i);
-    // ...and SameSite=None is only honored by browsers when Secure is also set.
+    // First-party Lax (not None) now that delivery is same-site...
+    expect(rawCookie!).toMatch(/;\s*SameSite=Lax/i);
+    // ...and Secure stays on (HTTPS in prod; accepted on localhost in dev).
     expect(rawCookie!).toMatch(/;\s*Secure/i);
   });
 

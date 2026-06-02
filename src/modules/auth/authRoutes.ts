@@ -25,6 +25,12 @@ const OAUTH_NONCE_COOKIE = "voyage_oauth_nonce";
 /** 10 minutes — enough time for the user to complete the OAuth flow. */
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 
+// These short-lived OAuth CSRF cookies stay `SameSite=None` (unlike the session
+// cookie, which is now Lax via the same-origin proxy). They must survive the
+// cross-site round-trip back from the identity provider — in particular Apple uses
+// `response_mode=form_post`, i.e. a CROSS-SITE POST to the callback, on which a Lax
+// cookie would NOT be sent (Lax rides only top-level GET navigations). None is
+// required here; `Secure` is mandatory for None and is accepted on localhost.
 const OAUTH_COOKIE_OPTS = {
   httpOnly: true,
   secure: true,
