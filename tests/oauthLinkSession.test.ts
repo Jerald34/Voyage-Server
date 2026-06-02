@@ -252,6 +252,11 @@ describe("Google OAuth sign-in for an existing email/password user", () => {
       email: EXISTING_EMAIL,
       accountType: "PERSONAL"
     });
+
+    // Authenticated, per-user responses must be `no-store` so the browser/SW HTTP
+    // cache can't replay one account's identity for the next account on the same
+    // device (the cross-user data-leak after switching accounts).
+    expect(me.headers["cache-control"]).toBe("no-store");
   });
 
   it("emits the session cookie as first-party SameSite=Lax; Secure (the app reaches this API through a same-origin /api proxy)", async () => {

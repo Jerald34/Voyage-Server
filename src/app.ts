@@ -111,6 +111,19 @@ export function createApp() {
   app.use(cookieParser());
   app.use(attachAuthUser);
 
+  // Default every API response to `no-store`. Almost everything this API returns is
+  // per-user and authenticated (account details, threads, itineraries), and without
+  // an explicit directive the browser's HTTP cache — and any service worker — may
+  // reuse one user's response for the next account on the same device. That is the
+  // cross-user data-leak where a previous account's threads/details show up after
+  // switching accounts. Routes that serve genuinely cacheable, non-user content
+  // (e.g. the immutable photo proxy in imageRoutes) set their own Cache-Control in
+  // the handler, which runs later and overrides this default.
+  app.use((_request, response, next) => {
+    response.setHeader("Cache-Control", "no-store");
+    next();
+  });
+
   app.get("/health", (_request, response) => {
     response.json({ ok: true });
   });
