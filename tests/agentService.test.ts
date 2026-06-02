@@ -249,8 +249,11 @@ function createMemoryRepository(): AgentRepository & {
       });
       return { message, run };
     },
-    async findRunById(id) {
-      return runs.find((run) => run.id === id) ?? null;
+    async findRunById(id, agencyId) {
+      // F2: Filter by agencyId when provided (mirrors production behavior).
+      const run = runs.find((r) => r.id === id) ?? null;
+      if (run && agencyId != null && run.agencyId !== agencyId) return null;
+      return run;
     },
     async listRunEvents(runId) {
       return events

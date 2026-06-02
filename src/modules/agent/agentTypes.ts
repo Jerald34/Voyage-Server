@@ -241,7 +241,8 @@ export interface AgentRepository {
     modelProvider: string;
     modelName: string;
   }): Promise<{ message: AgentMessageRecord; run: AgentRunRecord }>;
-  findRunById(id: string): Promise<AgentRunRecord | null>;
+  /** F2: agencyId scopes the lookup to the tenant — pass it to prevent cross-tenant IDOR. */
+  findRunById(id: string, agencyId?: string | null): Promise<AgentRunRecord | null>;
   listRunEvents(runId: string): Promise<AgentRunEventRecord[]>;
   touchThread?(threadId: string, updatedAt: Date): Promise<void>;
   createRunEvent(data: {

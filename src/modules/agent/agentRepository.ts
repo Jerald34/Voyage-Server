@@ -350,7 +350,16 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
       });
     },
 
-    async findRunById(id) {
+    async findRunById(id, agencyId) {
+      // F2: When agencyId is provided, scope the lookup to that tenant so a
+      // member of agency A cannot read/manipulate a run belonging to agency B.
+      // Use findFirst with compound filter (not findUnique) since agencyId is not
+      // part of the unique constraint — but the combination is still unambiguous.
+      if (agencyId != null) {
+        return client.agentRun.findFirst({
+          where: { id, agencyId }
+        }) as Promise<AgentRunRecord | null>;
+      }
       return client.agentRun.findUnique({ where: { id } }) as Promise<AgentRunRecord | null>;
     },
 

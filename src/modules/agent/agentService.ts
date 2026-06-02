@@ -182,8 +182,14 @@ export function createAgentService(options: {
   const modelProvider = options.modelProvider ?? "openai";
   const modelName = options.modelName ?? "gpt-5-mini";
 
-  async function getRun(runId: string) {
-    const run = await options.repository.findRunById(runId);
+  /**
+   * F2: When agencyId is provided, only returns the run if it belongs to that
+   * agency. Returns 404 RUN_NOT_FOUND for both "not found" and "wrong agency"
+   * cases to avoid exposing which run IDs exist in other tenants (mirrors the
+   * thread-level findThreadByAgency 404 behaviour).
+   */
+  async function getRun(runId: string, agencyId?: string | null) {
+    const run = await options.repository.findRunById(runId, agencyId);
     if (!run) {
       throw new ApiError(404, "RUN_NOT_FOUND", "Agent run not found.");
     }
@@ -352,8 +358,9 @@ export function createAgentService(options: {
       return result;
     },
 
-    async startRun(runId: string, startedAtOverride?: Date) {
-      const run = await getRun(runId);
+    async startRun(runId: string, startedAtOverride?: Date, agencyId?: string | null) {
+      // F2: Pass agencyId to scope the run lookup to the calling agency.
+      const run = await getRun(runId, agencyId);
       assertRunOpen(run);
 
       const startedAt = startedAtOverride ?? now();
@@ -386,8 +393,9 @@ export function createAgentService(options: {
       return persisted;
     },
 
-    async listRunEvents(runId: string) {
-      await getRun(runId);
+    async listRunEvents(runId: string, agencyId?: string | null) {
+      // F2: Scope the run lookup to the calling agency before returning events.
+      await getRun(runId, agencyId);
       return options.repository.listRunEvents(runId);
     },
 
@@ -538,8 +546,9 @@ export function createAgentService(options: {
       return failedRun;
     },
 
-    async cancelRun(runId: string) {
-      const run = await getRun(runId);
+    async cancelRun(runId: string, agencyId?: string | null) {
+      // F2: Scope the run lookup to the calling agency before cancelling.
+      const run = await getRun(runId, agencyId);
       if (isTerminalRunStatus(run.status)) return;
       await options.repository.cancelRunIfOpen(runId);
       // Notify connected SSE clients so they close the stream

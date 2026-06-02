@@ -1,5 +1,14 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, beforeEach, afterEach } from "vitest";
 import { signTripReviewToken, verifyTripReviewToken } from "../src/modules/reviews/reviewTokens";
+
+// F5: TRIP_REVIEW_SECRET is now required — set it for all tests in this file.
+beforeEach(() => {
+  process.env["TRIP_REVIEW_SECRET"] = "test-review-secret-for-unit-tests";
+});
+
+afterEach(() => {
+  delete process.env["TRIP_REVIEW_SECRET"];
+});
 
 describe("trip review tokens", () => {
   it("round-trips a payload through sign + verify", () => {
@@ -18,9 +27,9 @@ describe("trip review tokens", () => {
   });
 
   it("returns null on a tampered payload", () => {
-    const token = signTripReviewToken({ tripId: "abc", issuedAt: "2026-01-01T00:00:00.000Z" });
+    const token = signTripReviewToken({ tripId: "abc", issuedAt: new Date().toISOString() });
     const [, sig] = token.split(".");
-    const otherPayload = Buffer.from(JSON.stringify({ tripId: "evil", issuedAt: "2026-01-01T00:00:00.000Z" })).toString(
+    const otherPayload = Buffer.from(JSON.stringify({ tripId: "evil", issuedAt: new Date().toISOString() })).toString(
       "base64url"
     );
     expect(verifyTripReviewToken(`${otherPayload}.${sig}`)).toBeNull();
@@ -30,5 +39,26 @@ describe("trip review tokens", () => {
     expect(verifyTripReviewToken("not-a-token")).toBeNull();
     expect(verifyTripReviewToken("")).toBeNull();
     expect(verifyTripReviewToken(".")).toBeNull();
+  });
+
+  // F5: TTL enforcement
+  it("returns null for a token older than 30 days", () => {
+    const oldDate = new Date(Date.now() - 31 * 24 * 60 * 60 * 1000).toISOString();
+    const token = signTripReviewToken({ tripId: "old-trip", issuedAt: oldDate });
+    expect(verifyTripReviewToken(token)).toBeNull();
+  });
+
+  it("accepts a token issued today (within TTL)", () => {
+    const payload = { tripId: "fresh-trip", issuedAt: new Date().toISOString() };
+    const token = signTripReviewToken(payload);
+    expect(verifyTripReviewToken(token)).toEqual(payload);
+  });
+
+  // F5: Secret isolation
+  it("throws when TRIP_REVIEW_SECRET is not configured", () => {
+    delete process.env["TRIP_REVIEW_SECRET"];
+    expect(() =>
+      signTripReviewToken({ tripId: "test", issuedAt: new Date().toISOString() })
+    ).toThrow("TRIP_REVIEW_SECRET is not configured");
   });
 });

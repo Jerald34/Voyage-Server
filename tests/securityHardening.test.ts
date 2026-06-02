@@ -1,0 +1,400 @@
+/**
+ * Security hardening regression tests — Group 1
+ *
+ * F1: OAuth account-takeover prevention (unverified email must not link)
+ * F3: OAuth login-CSRF state parameter enforcement
+ * F4: Rate-limit returns 429 after threshold on auth endpoints
+ * F7: User-enumeration non-disclosure (password reset & email verification)
+ *
+ * Uses the full Express app via supertest with prisma mocked in-memory.
+ */
+
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import request from "supertest";
+
+// ── In-memory data stores shared by the prisma mock ─────────────────────────
+
+type AnyRow = Record<string, any>;
+const store = {
+  users: [] as AnyRow[],
+  sessions: [] as AnyRow[],
+  providerAccounts: [] as AnyRow[],
+  verificationTokens: [] as AnyRow[],
+  passwordResetTokens: [] as AnyRow[]
+};
+
+// ── Module mocks ─────────────────────────────────────────────────────────────
+
+vi.mock("../src/services/oauth", () => ({
+  verifyGoogleAuthorizationCode: vi.fn(),
+  verifyAppleIdToken: vi.fn()
+}));
+
+vi.mock("../src/services/email", () => ({
+  sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
+  sendPasswordResetEmail: vi.fn().mockResolvedValue(undefined),
+  sendAgencyInvitationEmail: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock("../src/db/prisma", () => ({
+  prisma: {
+    session: {
+      findUnique: vi.fn(async ({ where }: AnyRow) => {
+        const session = store.sessions.find((s) => s.tokenHash === where.tokenHash);
+        if (!session) return null;
+        const user = store.users.find((u) => u.id === session.userId);
+        return { ...session, user: { ...user, memberships: user?.memberships ?? [] } };
+      }),
+      create: vi.fn(async ({ data }: AnyRow) => {
+        const session = { id: `session-${store.sessions.length + 1}`, createdAt: new Date(), updatedAt: new Date(), ...data };
+        store.sessions.push(session);
+        return session;
+      }),
+      deleteMany: vi.fn(async () => ({ count: 0 }))
+    },
+    user: {
+      findUnique: vi.fn(async ({ where }: AnyRow) => {
+        const user = store.users.find(
+          (u) =>
+            (where.emailNormalized && u.emailNormalized === where.emailNormalized) ||
+            (where.id && u.id === where.id)
+        );
+        return user ? { ...user, memberships: user.memberships ?? [] } : null;
+      }),
+      create: vi.fn(async ({ data }: AnyRow) => {
+        const user = { id: `user-${store.users.length + 1}`, role: "USER", status: "ACTIVE", accountType: "PENDING", emailVerifiedAt: null, avatarImageId: null, memberships: [], ...data };
+        store.users.push(user);
+        return user;
+      }),
+      update: vi.fn(async ({ where, data }: AnyRow) => {
+        const user = store.users.find((u) => u.id === where.id);
+        if (!user) throw new Error(`Missing user ${where.id}`);
+        Object.assign(user, data);
+        return { ...user, memberships: user.memberships ?? [] };
+      })
+    },
+    authProviderAccount: {
+      findUnique: vi.fn(async ({ where }: AnyRow) => {
+        const key = where.provider_providerAccountId;
+        const account = store.providerAccounts.find(
+          (a) => a.provider === key.provider && a.providerAccountId === key.providerAccountId
+        );
+        if (!account) return null;
+        const user = store.users.find((u) => u.id === account.userId);
+        return { ...account, user: { ...user, memberships: user?.memberships ?? [] } };
+      }),
+      create: vi.fn(async ({ data }: AnyRow) => {
+        const account = { id: `provider-${store.providerAccounts.length + 1}`, createdAt: new Date(), updatedAt: new Date(), ...data };
+        store.providerAccounts.push(account);
+        const user = store.users.find((u) => u.id === account.userId);
+        return { ...account, user: { ...user, memberships: user?.memberships ?? [] } };
+      })
+    },
+    emailVerificationToken: {
+      updateMany: vi.fn(async () => ({ count: 0 })),
+      create: vi.fn(async ({ data }: AnyRow) => {
+        const token = { id: `vt-${store.verificationTokens.length + 1}`, createdAt: new Date(), usedAt: null, ...data };
+        store.verificationTokens.push(token);
+        return token;
+      }),
+      findUnique: vi.fn(async ({ where }: AnyRow) => store.verificationTokens.find((t) => t.tokenHash === where.tokenHash) ?? null),
+      update: vi.fn(async ({ where, data }: AnyRow) => {
+        const token = store.verificationTokens.find((t) => t.id === where.id);
+        if (token) Object.assign(token, data);
+        return token;
+      })
+    },
+    passwordResetToken: {
+      updateMany: vi.fn(async () => ({ count: 0 })),
+      create: vi.fn(async ({ data }: AnyRow) => {
+        const token = { id: `prt-${store.passwordResetTokens.length + 1}`, createdAt: new Date(), usedAt: null, ...data };
+        store.passwordResetTokens.push(token);
+        return token;
+      }),
+      findUnique: vi.fn(async () => null),
+      update: vi.fn(async () => ({}))
+    }
+  }
+}));
+
+import { createApp } from "../src/app";
+import { verifyGoogleAuthorizationCode } from "../src/services/oauth";
+
+// ── Helpers ──────────────────────────────────────────────────────────────────
+
+function seedUser(overrides: AnyRow = {}) {
+  const user = {
+    id: "user-existing",
+    email: "alice@example.com",
+    emailNormalized: "alice@example.com",
+    passwordHash: null,
+    displayName: "Alice",
+    role: "USER",
+    status: "ACTIVE",
+    accountType: "PERSONAL",
+    emailVerifiedAt: new Date("2026-01-01T00:00:00.000Z"),
+    avatarImageId: null,
+    memberships: [],
+    ...overrides
+  };
+  store.users.push(user);
+  return user;
+}
+
+function extractStateCookie(setCookie: string | string[] | undefined): string | undefined {
+  const header = Array.isArray(setCookie) ? setCookie : [setCookie].filter(Boolean) as string[];
+  return header.map((c) => c.split(";")[0]).find((c) => c.startsWith("voyage_oauth_state="));
+}
+
+function extractSessionCookie(setCookie: string | string[] | undefined): string | undefined {
+  const header = Array.isArray(setCookie) ? setCookie : [setCookie].filter(Boolean) as string[];
+  return header.map((c) => c.split(";")[0]).find((c) => c.startsWith("voyage_session="));
+}
+
+async function getOAuthStateForTest(app: ReturnType<typeof createApp>): Promise<{ stateCookie: string; stateValue: string }> {
+  const startRes = await request(app).get("/auth/google/start");
+  const location = startRes.headers["location"] as string | undefined;
+  const stateValue = location ? new URL(location).searchParams.get("state") ?? "" : "";
+  const stateCookie = extractStateCookie(startRes.headers["set-cookie"]) ?? "";
+  return { stateCookie, stateValue };
+}
+
+beforeEach(() => {
+  store.users = [];
+  store.sessions = [];
+  store.providerAccounts = [];
+  store.verificationTokens = [];
+  store.passwordResetTokens = [];
+  vi.clearAllMocks();
+
+  // Provide Google OAuth credentials so /google/start doesn't 501.
+  process.env["GOOGLE_CLIENT_ID"] = "test-client-id";
+  process.env["GOOGLE_CLIENT_SECRET"] = "test-client-secret";
+  process.env["GOOGLE_REDIRECT_URI"] = "http://localhost:4000/auth/google/callback";
+});
+
+afterEach(() => {
+  delete process.env["GOOGLE_CLIENT_ID"];
+  delete process.env["GOOGLE_CLIENT_SECRET"];
+  delete process.env["GOOGLE_REDIRECT_URI"];
+});
+
+// ── F1 tests ─────────────────────────────────────────────────────────────────
+
+describe("F1 — OAuth account-linking with unverified email", () => {
+  it("refuses to link a Google account to an existing user when email_verified=false", async () => {
+    seedUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "attacker-google-sub",
+      email: "alice@example.com",
+      emailVerified: false,
+      displayName: "Attacker"
+    });
+
+    const app = createApp();
+    const { stateCookie, stateValue } = await getOAuthStateForTest(app);
+
+    const res = await request(app)
+      .get(`/auth/google/callback?code=attacker-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
+
+    expect(res.status).toBe(403);
+    expect(res.body?.error?.code).toBe("OAUTH_EMAIL_UNVERIFIED");
+    // No session must have been created.
+    expect(extractSessionCookie(res.headers["set-cookie"])).toBeUndefined();
+    // No provider account must have been linked.
+    expect(store.providerAccounts).toHaveLength(0);
+    // Original user must be untouched.
+    expect(store.users).toHaveLength(1);
+    expect(store.users[0].id).toBe("user-existing");
+  });
+
+  it("allows linking when email_verified=true", async () => {
+    seedUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "legit-google-sub",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice from Google"
+    });
+
+    const app = createApp();
+    const { stateCookie, stateValue } = await getOAuthStateForTest(app);
+
+    const res = await request(app)
+      .get(`/auth/google/callback?code=legit-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
+
+    expect(res.status).toBe(302);
+    expect(extractSessionCookie(res.headers["set-cookie"])).toBeDefined();
+    expect(store.providerAccounts).toHaveLength(1);
+  });
+});
+
+// ── F3 tests ─────────────────────────────────────────────────────────────────
+
+describe("F3 — OAuth login-CSRF state enforcement", () => {
+  it("rejects Google callback with no state cookie and no state query param", async () => {
+    seedUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "any-sub",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice"
+    });
+
+    const app = createApp();
+    const res = await request(app).get("/auth/google/callback?code=some-code");
+
+    expect(res.status).toBe(400);
+    expect(res.body?.error?.code).toBe("OAUTH_STATE_MISMATCH");
+    expect(extractSessionCookie(res.headers["set-cookie"])).toBeUndefined();
+  });
+
+  it("rejects Google callback when state query param doesn't match state cookie", async () => {
+    seedUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "any-sub",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice"
+    });
+
+    const app = createApp();
+    const { stateCookie } = await getOAuthStateForTest(app);
+
+    const res = await request(app)
+      .get("/auth/google/callback?code=some-code&state=WRONG_STATE_VALUE")
+      .set("Cookie", stateCookie);
+
+    expect(res.status).toBe(400);
+    expect(res.body?.error?.code).toBe("OAUTH_STATE_MISMATCH");
+    expect(extractSessionCookie(res.headers["set-cookie"])).toBeUndefined();
+  });
+
+  it("accepts Google callback when state matches", async () => {
+    seedUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "any-sub",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice"
+    });
+
+    const app = createApp();
+    const { stateCookie, stateValue } = await getOAuthStateForTest(app);
+
+    const res = await request(app)
+      .get(`/auth/google/callback?code=valid-code&state=${stateValue}`)
+      .set("Cookie", stateCookie);
+
+    expect(res.status).toBe(302);
+    expect(extractSessionCookie(res.headers["set-cookie"])).toBeDefined();
+  });
+});
+
+// ── F4 tests ─────────────────────────────────────────────────────────────────
+
+describe("F4 — Rate limiting on auth endpoints", () => {
+  it("returns 429 after exceeding login rate limit", async () => {
+    const app = createApp();
+    // Login limit: 10 per 15 min per IP. Send 11 requests.
+    const loginBody = { email: "brute@example.com", password: "wrong" };
+    let lastStatus = 0;
+
+    for (let i = 0; i < 11; i++) {
+      const res = await request(app).post("/auth/login").send(loginBody);
+      lastStatus = res.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
+  it("returns 429 after exceeding email verification request rate limit", async () => {
+    const app = createApp();
+    let lastStatus = 0;
+
+    // Limit: 5 per hour per IP. Send 6 requests.
+    for (let i = 0; i < 6; i++) {
+      const res = await request(app)
+        .post("/auth/email/verification/request")
+        .send({ email: "target@example.com" });
+      lastStatus = res.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+
+  it("returns 429 after exceeding password reset request rate limit", async () => {
+    const app = createApp();
+    let lastStatus = 0;
+
+    // Limit: 5 per hour per IP. Send 6 requests.
+    for (let i = 0; i < 6; i++) {
+      const res = await request(app)
+        .post("/auth/password/reset/request")
+        .send({ email: "target@example.com" });
+      lastStatus = res.status;
+    }
+
+    expect(lastStatus).toBe(429);
+  });
+});
+
+// ── F7 tests ─────────────────────────────────────────────────────────────────
+
+describe("F7 — User enumeration prevention", () => {
+  it("password reset returns 202 for an unknown email (non-enumerating)", async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .post("/auth/password/reset/request")
+      .send({ email: "nobody@example.com" });
+
+    // Must return 202 regardless of whether the email exists.
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("password reset returns 202 for a known email (same response as unknown)", async () => {
+    seedUser();
+    const app = createApp();
+
+    const res = await request(app)
+      .post("/auth/password/reset/request")
+      .send({ email: "alice@example.com" });
+
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("email verification request returns 202 for an unknown email (non-enumerating)", async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .post("/auth/email/verification/request")
+      .send({ email: "nobody@example.com" });
+
+    // Must return 202 — no 404 EMAIL_NOT_FOUND.
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+  });
+
+  it("email verification request returns 202 for an already-verified email (non-enumerating)", async () => {
+    seedUser({ email: "alice@example.com", emailNormalized: "alice@example.com", emailVerifiedAt: new Date() });
+    const app = createApp();
+
+    const res = await request(app)
+      .post("/auth/email/verification/request")
+      .send({ email: "alice@example.com" });
+
+    // Must return 202 — no 409 EMAIL_ALREADY_VERIFIED.
+    expect(res.status).toBe(202);
+    expect(res.body).toEqual({ ok: true });
+  });
+});

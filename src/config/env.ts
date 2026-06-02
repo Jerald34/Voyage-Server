@@ -1,10 +1,13 @@
 import "dotenv/config";
 import { z } from "zod";
 
+/** Default DATABASE_URL used in local development only — never valid in production. */
+const DEV_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/voyage";
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
-  DATABASE_URL: z.string().default("postgresql://postgres:postgres@localhost:5432/voyage"),
+  DATABASE_URL: z.string().default(DEV_DATABASE_URL),
   APP_ORIGIN: z.string().default("http://localhost:3000"),
   // Public origin of THIS API server, used to build absolute URLs (e.g. the photo proxy)
   // that get embedded in tool outputs and persisted in PlaceSnapshot metadata. Defaults to
@@ -31,12 +34,18 @@ const envSchema = z.object({
   S3_SECRET_ACCESS_KEY: z.string().default(""),
   GOOGLE_CLIENT_ID: z.string().default(""),
   GOOGLE_CLIENT_SECRET: z.string().default(""),
-  GOOGLE_REDIRECT_URI: z.string().default("http://localhost:4000/auth/google/callback"),
+  // OAuth callbacks must return through the app-origin `/api` proxy so the session
+  // cookie set on the callback is first-party to the app (required for iOS PWA).
+  // In production set this to `${APP_ORIGIN}/api/auth/google/callback` and register
+  // that exact URL in the Google Cloud console.
+  GOOGLE_REDIRECT_URI: z.string().default("http://localhost:3000/api/auth/google/callback"),
   APPLE_CLIENT_ID: z.string().default(""),
   APPLE_TEAM_ID: z.string().default(""),
   APPLE_KEY_ID: z.string().default(""),
   APPLE_PRIVATE_KEY: z.string().default(""),
-  APPLE_REDIRECT_URI: z.string().default("http://localhost:4000/auth/apple/callback"),
+  // See GOOGLE_REDIRECT_URI — Apple callbacks must likewise return via the `/api`
+  // proxy: `${APP_ORIGIN}/api/auth/apple/callback`, registered in the Apple console.
+  APPLE_REDIRECT_URI: z.string().default("http://localhost:3000/api/auth/apple/callback"),
   LM_STUDIO_BASE_URL: z.string().default("http://localhost:1234/v1"),
   LM_STUDIO_MODEL: z.string().default("local-model"),
   LM_STUDIO_TIMEOUT_MS: z.coerce.number().int().positive().default(120000),
@@ -68,10 +77,54 @@ const envSchema = z.object({
   REVIEW_SCHEDULER_ENABLED: z.preprocess(
     (value) => (typeof value === "string" ? value.toLowerCase() !== "false" : value),
     z.boolean().default(true)
-  )
+  ),
+  // F5: Dedicated HMAC secret for trip-review tokens. Required in production.
+  TRIP_REVIEW_SECRET: z.string().default("")
 });
 
-export const env = envSchema.parse(process.env);
+// ---------------------------------------------------------------------------
+// F6 — Production secret validation
+// ---------------------------------------------------------------------------
+// If NODE_ENV=production, assert that all required secrets are present.
+// This causes the process to fail at boot instead of silently using defaults
+// that expose the deployment to security vulnerabilities.
+//
+// This check is skipped in development and test so local dev and CI continue
+// to work without a full production secret configuration.
+// ---------------------------------------------------------------------------
+
+function assertProductionSecrets(parsed: z.infer<typeof envSchema>): void {
+  if (parsed.NODE_ENV !== "production") return;
+
+  const errors: string[] = [];
+
+  if (!parsed.PASSWORD_PEPPER) {
+    errors.push("PASSWORD_PEPPER must be set in production (bcrypt pepper cannot be empty).");
+  }
+
+  if (!parsed.TRIP_REVIEW_SECRET) {
+    errors.push("TRIP_REVIEW_SECRET must be set in production (HMAC key for review tokens).");
+  }
+
+  if (parsed.DATABASE_URL === DEV_DATABASE_URL) {
+    errors.push(
+      "DATABASE_URL is set to the insecure development default. " +
+        "Provide a real database URL for the production deployment."
+    );
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      `[env] Production deployment is missing required secrets:\n` +
+        errors.map((e) => `  - ${e}`).join("\n") +
+        "\n\nSet the above environment variables before starting in production."
+    );
+  }
+}
+
+const _parsed = envSchema.parse(process.env);
+assertProductionSecrets(_parsed);
+export const env = _parsed;
 
 export function isProduction() {
   return env.NODE_ENV === "production";

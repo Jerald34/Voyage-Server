@@ -167,7 +167,10 @@ export async function uploadChatImages(req: Request, res: Response, next: NextFu
 export async function runStream(req: Request, res: Response, next: NextFunction) {
   try {
     const runId = String(req.params.id);
-    const run = await agentService.startRun(runId);
+    // F2: Pass the resolved agencyId so the run lookup is scoped to this tenant.
+    // A member of agency A cannot stream a run belonging to agency B; they will
+    // receive 404 RUN_NOT_FOUND, matching the thread-level scoping pattern.
+    const run = await agentService.startRun(runId, undefined, getAgencyId(req));
     const orchestrator = getAgentOrchestrator();
 
     res.setHeader("Content-Type", "text/event-stream");
@@ -208,8 +211,13 @@ export async function runStream(req: Request, res: Response, next: NextFunction)
 export async function cancelRun(req: Request, res: Response, next: NextFunction) {
   try {
     const runId = String(req.params.id);
+    const agencyId = getAgencyId(req);
+    // F2: Scope the agency check first — cancelRun throws 404 RUN_NOT_FOUND
+    // if the run doesn't belong to this agency, so we never cancel a run we
+    // haven't confirmed ownership of.
+    await agentService.cancelRun(runId, agencyId);
+    // Only abort the in-memory orchestrator after confirming ownership.
     cancelAgentRun(runId);
-    await agentService.cancelRun(runId);
     res.status(204).send();
   } catch (error) {
     next(error);
@@ -218,7 +226,8 @@ export async function cancelRun(req: Request, res: Response, next: NextFunction)
 
 export async function listRunEvents(req: Request, res: Response, next: NextFunction) {
   try {
-    const events = await agentService.listRunEvents(String(req.params.id));
+    // F2: Pass agencyId so listRunEvents rejects access to runs in other agencies.
+    const events = await agentService.listRunEvents(String(req.params.id), getAgencyId(req));
     res.json(events);
   } catch (error) {
     next(error);

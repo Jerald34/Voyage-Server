@@ -178,11 +178,12 @@ export function createAuthService(options: AuthServiceOptions) {
     },
 
     async requestPasswordReset(input: { email: string }) {
+      // F7: Non-enumerating — always return successfully regardless of whether
+      // the email exists. This prevents an attacker from using the 404 vs 202
+      // difference to determine which email addresses have Voyage accounts.
       const user = await options.repository.findUserByEmailNormalized(normalizeEmail(input.email));
-      if (!user) {
-        throw new ApiError(404, "EMAIL_NOT_FOUND", "We couldn't find a Voyage account with that email.");
-      }
-      if (user.status !== "ACTIVE") {
+      if (!user || user.status !== "ACTIVE") {
+        // Silently no-op for unknown or disabled accounts.
         return;
       }
 
@@ -229,15 +230,13 @@ export function createAuthService(options: AuthServiceOptions) {
     requestEmailVerification,
 
     async requestEmailVerificationByEmail(email: string) {
+      // F7: Non-enumerating — never surface EMAIL_NOT_FOUND or EMAIL_ALREADY_VERIFIED
+      // to the caller. An attacker could otherwise use these status codes to
+      // enumerate which email addresses are registered and their verification state.
       const user = await options.repository.findUserByEmailNormalized(normalizeEmail(email));
-      if (!user) {
-        throw new ApiError(404, "EMAIL_NOT_FOUND", "We couldn't find a Voyage account with that email.");
-      }
-      if (user.status !== "ACTIVE") {
+      if (!user || user.status !== "ACTIVE" || user.emailVerifiedAt) {
+        // Silently no-op for unknown, disabled, or already-verified accounts.
         return;
-      }
-      if (user.emailVerifiedAt) {
-        throw new ApiError(409, "EMAIL_ALREADY_VERIFIED", "This email address is already verified. Try signing in.");
       }
       await requestEmailVerification(user.id).catch((error) => {
         console.error("[auth] Failed to resend verification email:", error);
@@ -313,6 +312,8 @@ export function createAuthService(options: AuthServiceOptions) {
       const verifiedAt = input.emailVerified ? now() : null;
 
       if (!user) {
+        // New user: create account. If email is unverified by the provider, leave
+        // emailVerifiedAt null — user can verify via the normal email flow later.
         user = await options.repository.createUser({
           email: input.email.trim(),
           emailNormalized,
@@ -321,6 +322,18 @@ export function createAuthService(options: AuthServiceOptions) {
           emailVerifiedAt: verifiedAt
         });
       } else {
+        // F1: Existing user with a matching email — only link when the provider
+        // has confirmed ownership (emailVerified === true). An unverified provider
+        // email proves only that the OAuth provider issued a token, NOT that the
+        // human controls this email address. Linking without verification allows
+        // account takeover of any existing Voyage account.
+        if (!input.emailVerified) {
+          throw new ApiError(
+            403,
+            "OAUTH_EMAIL_UNVERIFIED",
+            "The email address on this account has not been verified by the sign-in provider. Please verify your email with the provider and try again."
+          );
+        }
         assertActiveUser(user);
         if (verifiedAt && !user.emailVerifiedAt) {
           user = await options.repository.updateUser(user.id, { emailVerifiedAt: verifiedAt });
