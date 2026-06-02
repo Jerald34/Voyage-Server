@@ -22,7 +22,8 @@ import type {
   AgentTaskUpdateInput,
   AgentTaskRecord,
   AgentSourceInput,
-  AgentRunStatus
+  AgentRunStatus,
+  CompleteRunUsage
 } from "./agentTypes";
 import { createPrismaAgentRepository } from "./agentRepository";
 
@@ -486,7 +487,7 @@ export function createAgentService(options: {
       return created;
     },
 
-    async completeRun(runId: string, assistantContent: string) {
+    async completeRun(runId: string, assistantContent: string, usage?: CompleteRunUsage) {
       agentLogger.agentResponse(runId, assistantContent);
       const run = await getRun(runId);
       assertRunOpen(run);
@@ -510,7 +511,8 @@ export function createAgentService(options: {
       const completed = await options.repository.completeRunIfOpen(runId, {
         assistantContent,
         completedAt,
-        processSnapshot: processSnapshot ?? undefined
+        processSnapshot: processSnapshot ?? undefined,
+        usage
       });
       if (!completed) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");

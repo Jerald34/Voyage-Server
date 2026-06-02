@@ -1,4 +1,15 @@
 import type { AgentEvent } from "./agentSchemas";
+import type { UsageSummary } from "./agentRunUsage";
+
+export interface CompleteRunUsage {
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+  thoughtsTokens: number;
+  costUsd: number;
+  detail: UsageSummary["detail"];
+}
 
 export type AgentThreadStatus = "ACTIVE" | "ARCHIVED";
 export type AgentMessageRole = "USER" | "ASSISTANT" | "SYSTEM_VISIBLE";
@@ -195,7 +206,8 @@ export type AgentOrchestratorAgentService = {
   failToolCall(toolCallId: string, code: string, message: string, completedAt: Date): Promise<unknown>;
   completeRun(
     runId: string,
-    assistantContent: string
+    assistantContent: string,
+    usage?: CompleteRunUsage
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] }>;
   failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
   listOpenTasksForThread(threadId: string): Promise<Array<{ id: string; label: string; status: string }>>;
@@ -298,6 +310,7 @@ export interface AgentRepository {
       assistantContent: string;
       completedAt: Date;
       processSnapshot?: Record<string, unknown>;
+      usage?: CompleteRunUsage;
     }
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] } | null>;
   failRunIfOpen(
