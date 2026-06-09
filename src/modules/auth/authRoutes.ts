@@ -29,6 +29,7 @@ const OAUTH_STATE_COOKIE = "voyage_oauth_state";
 const OAUTH_NONCE_COOKIE = "voyage_oauth_nonce";
 /** 10 minutes — enough time for the user to complete the OAuth flow. */
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const OAUTH_PROVIDER_DENIED_MESSAGE = "The OAuth provider denied the sign-in request. Please try again.";
 
 // These short-lived OAuth CSRF cookies stay `SameSite=None` (unlike the session
 // cookie, which is now Lax via the same-origin proxy). They must survive the
@@ -70,6 +71,10 @@ function verifyOAuthState(expected: string | undefined, received: string) {
   if (!expected || expected !== received) {
     throw new ApiError(400, "OAUTH_STATE_MISMATCH", "OAuth state parameter is missing or invalid. Please try signing in again.");
   }
+}
+
+function rejectOAuthProviderDenied() {
+  throw new ApiError(400, "OAUTH_PROVIDER_ERROR", OAUTH_PROVIDER_DENIED_MESSAGE);
 }
 
 export const authRoutes = Router();
@@ -226,10 +231,14 @@ authRoutes.get("/google/start", (_request, response, next) => {
 authRoutes.get("/google/callback", async (request, response, next) => {
   try {
     const expectedState = consumeExpectedOAuthState(request, response);
-    const { code, state } = googleCallbackQuerySchema.parse(request.query);
+    const { code, error, state } = googleCallbackQuerySchema.parse(request.query);
 
     // F3: Verify state cookie before processing the authorization code.
     verifyOAuthState(expectedState, state ?? "");
+
+    if (error) {
+      rejectOAuthProviderDenied();
+    }
 
     if (!code) {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Google authorization code is required.");
@@ -266,10 +275,14 @@ authRoutes.get("/apple/start", (_request, response, next) => {
 authRoutes.post("/apple/callback", async (request, response, next) => {
   try {
     const expectedState = consumeExpectedOAuthState(request, response);
-    const { id_token: idToken, state } = appleCallbackBodySchema.parse(request.body);
+    const { error, id_token: idToken, state } = appleCallbackBodySchema.parse(request.body);
 
     // F3: Verify state (round-tripped via form_post body for Apple).
     verifyOAuthState(expectedState, state ?? "");
+
+    if (error) {
+      rejectOAuthProviderDenied();
+    }
 
     if (!idToken) {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Apple id_token is required.");

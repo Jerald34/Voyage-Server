@@ -15,7 +15,17 @@ const registerPasswordSchema = z.string().min(8).max(1024);
 const resetPasswordSchema = z.string().min(8).max(1024);
 const oauthStateSchema = z.string().min(1).max(512);
 const googleAuthorizationCodeSchema = z.string().min(1).max(512);
+const googleOAuthScopeSchema = z.string().min(1).max(2048);
+const googleOAuthShortStringSchema = z.string().min(1).max(64);
+const googleOAuthErrorSchema = z.string().min(1).max(128);
+const googleOAuthErrorDescriptionSchema = z.string().min(1).max(1024);
+const googleOAuthErrorUriSchema = z.string().url().max(2048);
+const googleOAuthHdSchema = z.string().min(1).max(255);
 const appleIdTokenSchema = z.string().min(1).max(4096);
+const appleOAuthCodeSchema = z.string().min(1).max(512);
+const appleOAuthUserSchema = z.string().min(1).max(8192);
+const appleOAuthErrorSchema = z.string().min(1).max(128);
+const appleOAuthErrorDescriptionSchema = z.string().min(1).max(1024);
 
 export const registerSchema = z.object({
   email: normalizedEmailSchema,
@@ -76,10 +86,21 @@ export const verificationRequestSchema = z.object({
 
 export const googleCallbackQuerySchema = z.object({
   code: googleAuthorizationCodeSchema.optional(),
-  state: oauthStateSchema.optional()
+  state: oauthStateSchema.optional(),
+  scope: googleOAuthScopeSchema.optional(),
+  authuser: googleOAuthShortStringSchema.optional(),
+  prompt: googleOAuthShortStringSchema.optional(),
+  error: googleOAuthErrorSchema.optional(),
+  error_description: googleOAuthErrorDescriptionSchema.optional(),
+  error_uri: googleOAuthErrorUriSchema.optional(),
+  hd: googleOAuthHdSchema.optional()
 }).strict();
 
 export const appleCallbackBodySchema = z.object({
   id_token: appleIdTokenSchema.optional(),
-  state: oauthStateSchema.optional()
+  state: oauthStateSchema.optional(),
+  code: appleOAuthCodeSchema.optional(),
+  user: appleOAuthUserSchema.optional(),
+  error: appleOAuthErrorSchema.optional(),
+  error_description: appleOAuthErrorDescriptionSchema.optional()
 }).strict();

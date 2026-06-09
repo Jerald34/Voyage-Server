@@ -251,6 +251,20 @@ const VALID_REVIEW_TOKEN = "review-token-123456";
 const VALID_GOOGLE_CODE = "google-code-123456";
 const VALID_OAUTH_STATE = "oauth-state-123456";
 const VALID_APPLE_ID_TOKEN = `apple.${"x".repeat(64)}.token`;
+const VALID_GOOGLE_SCOPE = "openid email profile";
+const VALID_GOOGLE_AUTHUSER = "0";
+const VALID_GOOGLE_PROMPT = "consent";
+const VALID_GOOGLE_ERROR = "access_denied";
+const VALID_GOOGLE_ERROR_DESCRIPTION = "The user denied the request.";
+const VALID_GOOGLE_ERROR_URI = "https://accounts.google.com/error/access_denied";
+const VALID_APPLE_CODE = "apple-code-123456";
+const VALID_APPLE_USER_JSON = JSON.stringify({
+  name: {
+    firstName: "Alice",
+    lastName: "Example"
+  },
+  email: "alice@example.com"
+});
 
 class ThrowingStore implements Store {
   localKeys = false;
@@ -447,6 +461,181 @@ describe("F3 — OAuth login-CSRF state enforcement", () => {
 });
 
 // ── F4 tests ─────────────────────────────────────────────────────────────────
+
+describe("F3 — OAuth callback allowlist and provider denial handling", () => {
+  it("accepts Google callback with matching state, code, and allowed provider fields", async () => {
+    seedUser();
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "google-sub-allowlisted",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice"
+    });
+
+    const app = createApp();
+    const { stateCookie, stateValue } = await getOAuthStateForTest(app);
+
+    const response = await request(app)
+      .get(
+        `/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${stateValue}&scope=${encodeURIComponent(VALID_GOOGLE_SCOPE)}&authuser=${VALID_GOOGLE_AUTHUSER}&prompt=${VALID_GOOGLE_PROMPT}`
+      )
+      .set("Cookie", stateCookie);
+
+    expect(response.status).toBe(302);
+    expect(verifyGoogleAuthorizationCode).toHaveBeenCalledWith(VALID_GOOGLE_CODE);
+  });
+
+  it("accepts Apple callback with matching state, id_token, and first-authorization user JSON", async () => {
+    seedUser();
+    vi.mocked(verifyAppleIdToken).mockResolvedValue({
+      provider: "APPLE",
+      providerAccountId: "apple-sub-allowlisted",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice"
+    });
+
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/auth/apple/callback")
+      .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+      .type("form")
+      .send({
+        id_token: VALID_APPLE_ID_TOKEN,
+        state: VALID_OAUTH_STATE,
+        code: VALID_APPLE_CODE,
+        user: VALID_APPLE_USER_JSON
+      });
+
+    expect(response.status).toBe(302);
+    expect(verifyAppleIdToken).toHaveBeenCalledWith(VALID_APPLE_ID_TOKEN);
+  });
+
+  it.each([
+    {
+      provider: "Google",
+      request: () =>
+        request(createApp())
+          .get(
+            `/auth/google/callback?state=${VALID_OAUTH_STATE}&error=${VALID_GOOGLE_ERROR}&error_description=${encodeURIComponent(VALID_GOOGLE_ERROR_DESCRIPTION)}&error_uri=${encodeURIComponent(VALID_GOOGLE_ERROR_URI)}`
+          )
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`),
+      verifier: verifyGoogleAuthorizationCode
+    },
+    {
+      provider: "Apple",
+      request: () =>
+        request(createApp())
+          .post("/auth/apple/callback")
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+          .type("form")
+          .send({
+            state: VALID_OAUTH_STATE,
+            error: "access_denied",
+            error_description: "The user denied the request."
+          }),
+      verifier: verifyAppleIdToken
+    }
+  ])("treats $provider denial callbacks as controlled provider errors", async ({ request: makeRequest, verifier }) => {
+    const response = await makeRequest();
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: {
+        code: "OAUTH_PROVIDER_ERROR",
+        message: "The OAuth provider denied the sign-in request. Please try again."
+      }
+    });
+    expect(verifier).not.toHaveBeenCalled();
+    expect(extractStateCookie(response.headers["set-cookie"])).toBe("voyage_oauth_state=");
+  });
+
+  it.each([
+    {
+      name: "Google unknown callback key",
+      request: () =>
+        request(createApp())
+          .get(`/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${VALID_OAUTH_STATE}&unexpected=1`)
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`),
+      verifier: verifyGoogleAuthorizationCode
+    },
+    {
+      name: "Apple unknown callback key",
+      request: () =>
+        request(createApp())
+          .post("/auth/apple/callback")
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+          .type("form")
+          .send({ id_token: VALID_APPLE_ID_TOKEN, state: VALID_OAUTH_STATE, unexpected: true }),
+      verifier: verifyAppleIdToken
+    }
+  ])("rejects $name", async ({ request: makeRequest, verifier }) => {
+    const response = await makeRequest();
+
+    expectValidationError(response);
+    expect(verifier).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "Google callback array value",
+      request: () =>
+        request(createApp())
+          .get(`/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${VALID_OAUTH_STATE}&scope=openid&scope=profile`)
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`),
+      verifier: verifyGoogleAuthorizationCode
+    },
+    {
+      name: "Apple callback array value",
+      request: () =>
+        request(createApp())
+          .post("/auth/apple/callback")
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+          .type("form")
+          .send({ id_token: VALID_APPLE_ID_TOKEN, state: VALID_OAUTH_STATE, user: ["one", "two"] }),
+      verifier: verifyAppleIdToken
+    }
+  ])("rejects $name", async ({ request: makeRequest, verifier }) => {
+    const response = await makeRequest();
+
+    expectValidationError(response);
+    expect(verifier).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "Google overlong scope",
+      request: () =>
+        request(createApp())
+          .get(
+            `/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${VALID_OAUTH_STATE}&scope=${"s".repeat(2049)}`
+          )
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`),
+      verifier: verifyGoogleAuthorizationCode
+    },
+    {
+      name: "Apple overlong user JSON",
+      request: () =>
+        request(createApp())
+          .post("/auth/apple/callback")
+          .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+          .type("form")
+          .send({
+            id_token: VALID_APPLE_ID_TOKEN,
+            state: VALID_OAUTH_STATE,
+            user: "u".repeat(8193)
+          }),
+      verifier: verifyAppleIdToken
+    }
+  ])("rejects $name", async ({ request: makeRequest, verifier }) => {
+    const response = await makeRequest();
+
+    expectValidationError(response);
+    expect(verifier).not.toHaveBeenCalled();
+  });
+});
 
 describe("strict public request validation", () => {
   it("rejects registration payloads with an unknown role key before authService runs", async () => {
