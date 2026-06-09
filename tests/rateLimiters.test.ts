@@ -1,8 +1,14 @@
 import express, { type RequestHandler } from "express";
 import type { Store } from "express-rate-limit";
 import request from "supertest";
-import { describe, expect, it } from "vitest";
-import { createRateLimiters, hashRateLimitKey } from "../src/http/rateLimiters";
+import { describe, expect, it, vi } from "vitest";
+import {
+  createRateLimiters,
+  hashRateLimitKey,
+  initializeRateLimiterStoreLifecycle,
+  type RateLimiterRedisClient,
+  type RateLimiterRedisStoreConstructor
+} from "../src/http/rateLimiters";
 
 type RecordingBackend = {
   counts: Map<string, number>;
@@ -80,6 +86,18 @@ class RecordingStore implements Store {
   async resetKey(key: string) {
     this.backend.counts.delete(key);
     this.backend.resetTimes.delete(key);
+  }
+}
+
+class CapturingRedisStore extends RecordingStore {
+  readonly sendCommand: (...args: string[]) => Promise<unknown>;
+
+  constructor(
+    options: { prefix: string; sendCommand: (...args: string[]) => Promise<unknown> },
+    backend: RecordingBackend = createRecordingBackend()
+  ) {
+    super(options.prefix, backend);
+    this.sendCommand = options.sendCommand;
   }
 }
 
@@ -338,5 +356,108 @@ describe("rateLimiters", () => {
     expect(response.headers["x-ratelimit-limit"]).toBeUndefined();
     expect(response.headers["x-ratelimit-remaining"]).toBeUndefined();
     expect(response.headers["x-ratelimit-reset"]).toBeUndefined();
+  });
+
+  it("connects one Redis client, builds distinct prefixed Redis stores, and closes idempotently", async () => {
+    const createdStores: CapturingRedisStore[] = [];
+    const redisClient: RateLimiterRedisClient = {
+      isOpen: true,
+      connect: vi.fn(async () => {}),
+      sendCommand: vi.fn(async () => "OK"),
+      quit: vi.fn(async () => {}),
+      disconnect: vi.fn(async () => {}),
+      on: vi.fn()
+    };
+    const lifecycle = await initializeRateLimiterStoreLifecycle({
+      redisUrl: "redis://cache.example.test:6379/0",
+      createRedisClient: () => redisClient,
+      createRedisStore: class implements Store {
+        localKeys = false;
+        prefix?: string;
+
+        private inner: CapturingRedisStore;
+
+        constructor(options: { prefix: string; sendCommand: (...args: string[]) => Promise<unknown> }) {
+          this.inner = new CapturingRedisStore(options);
+          this.prefix = options.prefix;
+          createdStores.push(this.inner);
+        }
+
+        init(options: { windowMs: number }) {
+          this.inner.init(options);
+        }
+
+        get(key: string) {
+          return this.inner.get(key);
+        }
+
+        increment(key: string) {
+          return this.inner.increment(key);
+        }
+
+        decrement(key: string) {
+          return this.inner.decrement(key);
+        }
+
+        resetKey(key: string) {
+          return this.inner.resetKey(key);
+        }
+      } satisfies RateLimiterRedisStoreConstructor
+    });
+
+    const app = createGetApp(
+      "/health",
+      createRateLimiters({ storeFactory: lifecycle.storeFactory }).health
+    );
+
+    const response = await request(app)
+      .get("/health")
+      .set("X-Forwarded-For", "203.0.113.90");
+
+    expect(response.status).toBe(200);
+    expect(redisClient.connect).toHaveBeenCalledTimes(1);
+    expect(createdStores.map((store) => store.prefix)).toEqual([
+      "voyage:rate-limit:baseline:",
+      "voyage:rate-limit:health:",
+      "voyage:rate-limit:login:",
+      "voyage:rate-limit:registration:",
+      "voyage:rate-limit:email-request:",
+      "voyage:rate-limit:token-confirm:",
+      "voyage:rate-limit:oauth:",
+      "voyage:rate-limit:invitation-lookup:",
+      "voyage:rate-limit:public-share-read:",
+      "voyage:rate-limit:public-share-write:",
+      "voyage:rate-limit:review-check:",
+      "voyage:rate-limit:review-submit:",
+      "voyage:rate-limit:photo-proxy:"
+    ]);
+    expect(new Set(createdStores.map((store) => store.prefix)).size).toBe(createdStores.length);
+
+    await lifecycle.close();
+    await lifecycle.close();
+
+    expect(redisClient.quit).toHaveBeenCalledTimes(1);
+    expect(redisClient.disconnect).not.toHaveBeenCalled();
+  });
+
+  it("fails initialization when the Redis client cannot connect", async () => {
+    const redisClient: RateLimiterRedisClient = {
+      connect: vi.fn(async () => {
+        throw new Error("redis connect failed");
+      }),
+      sendCommand: vi.fn(async () => "OK"),
+      disconnect: vi.fn(async () => {}),
+      on: vi.fn()
+    };
+
+    await expect(
+      initializeRateLimiterStoreLifecycle({
+        redisUrl: "redis://cache.example.test:6379/0",
+        createRedisClient: () => redisClient,
+        createRedisStore: CapturingRedisStore as unknown as RateLimiterRedisStoreConstructor
+      })
+    ).rejects.toThrow("redis connect failed");
+    expect(redisClient.connect).toHaveBeenCalledTimes(1);
+    expect(redisClient.disconnect).toHaveBeenCalledTimes(1);
   });
 });

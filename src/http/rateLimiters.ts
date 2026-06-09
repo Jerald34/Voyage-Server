@@ -1,8 +1,11 @@
 import type { RequestHandler, Request } from "express";
 import rateLimit, { MemoryStore, ipKeyGenerator, type Store } from "express-rate-limit";
 import { createHash } from "node:crypto";
+import { createRequire } from "node:module";
 import { isIP } from "node:net";
 import { env } from "../config/env";
+
+const moduleRequire = createRequire(__filename);
 
 export type RateLimiterSet = {
   baseline: RequestHandler;
@@ -36,7 +39,41 @@ type RateLimiterConfig = {
   limit: number;
   secondaryKey?: (request: Request) => string;
 };
-type StoreFactory = (prefix: string) => Store | undefined;
+export type RateLimiterStoreFactory = (prefix: string) => Store | undefined;
+
+type RedisStoreOptions = {
+  prefix: string;
+  sendCommand: (...args: string[]) => Promise<unknown>;
+};
+
+export type RateLimiterRedisClient = {
+  connect(): Promise<void>;
+  sendCommand(args: string[]): Promise<unknown>;
+  quit?: () => Promise<void>;
+  disconnect?: () => Promise<void>;
+  on?: (event: string, listener: (error: Error) => void) => unknown;
+  isOpen?: boolean;
+};
+
+export type RateLimiterRedisStoreConstructor = new (options: RedisStoreOptions) => Store;
+
+export type RateLimiterStoreLifecycle = {
+  close(): Promise<void>;
+  storeFactory?: RateLimiterStoreFactory;
+  usingRedis: boolean;
+};
+
+type RedisDependencyBundle = {
+  createRedisClient: (url: string) => RateLimiterRedisClient;
+  RedisStore: RateLimiterRedisStoreConstructor;
+};
+
+type InitializeRateLimiterStoreLifecycleOptions = {
+  redisUrl?: string;
+  createRedisClient?: (url: string) => RateLimiterRedisClient;
+  createRedisStore?: RateLimiterRedisStoreConstructor;
+  onRedisError?: (error: Error) => void;
+};
 
 export function hashRateLimitKey(value: string): string {
   return createHash("sha256").update(value).digest("hex");
@@ -81,7 +118,7 @@ function createMemoryStore(prefix: string): Store {
   };
 }
 
-function createLimiter(config: RateLimiterConfig, storeFactory?: StoreFactory): RequestHandler {
+function createLimiter(config: RateLimiterConfig, storeFactory?: RateLimiterStoreFactory): RequestHandler {
   const prefix = `${env.RATE_LIMIT_PREFIX}${config.policyId}:`;
   const store = storeFactory?.(prefix) ?? createMemoryStore(prefix);
 
@@ -100,7 +137,102 @@ function createLimiter(config: RateLimiterConfig, storeFactory?: StoreFactory): 
   });
 }
 
-export function createRateLimiters(options?: { storeFactory?: (prefix: string) => Store | undefined }): RateLimiterSet {
+function loadRedisDependencies(): RedisDependencyBundle {
+  const redisModule = moduleRequire("redis") as {
+    createClient?: (options: { url: string }) => RateLimiterRedisClient;
+  };
+  const rateLimitRedisModule = moduleRequire("rate-limit-redis") as {
+    RedisStore?: RateLimiterRedisStoreConstructor;
+    default?: RateLimiterRedisStoreConstructor;
+  };
+
+  if (typeof redisModule.createClient !== "function") {
+    throw new Error("The installed redis package does not expose createClient().");
+  }
+
+  const RedisStore = rateLimitRedisModule.RedisStore ?? rateLimitRedisModule.default;
+  if (typeof RedisStore !== "function") {
+    throw new Error("The installed rate-limit-redis package does not expose a RedisStore constructor.");
+  }
+
+  return {
+    createRedisClient: (url) => redisModule.createClient!({ url }),
+    RedisStore
+  };
+}
+
+async function disconnectRedisClient(client: RateLimiterRedisClient): Promise<void> {
+  if (client.isOpen === false) {
+    return;
+  }
+
+  if (typeof client.quit === "function") {
+    try {
+      await client.quit();
+      return;
+    } catch (error) {
+      if (typeof client.disconnect !== "function") {
+        throw error;
+      }
+    }
+  }
+
+  if (typeof client.disconnect === "function") {
+    await client.disconnect();
+  }
+}
+
+export async function initializeRateLimiterStoreLifecycle(
+  options: InitializeRateLimiterStoreLifecycleOptions = {}
+): Promise<RateLimiterStoreLifecycle> {
+  const redisUrl = (options.redisUrl ?? env.RATE_LIMIT_REDIS_URL).trim();
+  if (!redisUrl) {
+    return {
+      usingRedis: false,
+      close: async () => {}
+    };
+  }
+
+  const dependencies = options.createRedisClient === undefined || options.createRedisStore === undefined
+    ? loadRedisDependencies()
+    : undefined;
+  const createRedisClient = options.createRedisClient ?? dependencies!.createRedisClient;
+  const RedisStore = options.createRedisStore ?? dependencies!.RedisStore;
+  const redisClient = createRedisClient(redisUrl);
+  const onRedisError = options.onRedisError ?? ((error: Error) => {
+    console.error("[rate-limit] Redis client error", error);
+  });
+
+  redisClient.on?.("error", onRedisError);
+
+  try {
+    await redisClient.connect();
+  } catch (error) {
+    await disconnectRedisClient(redisClient);
+    throw error;
+  }
+
+  let closed = false;
+
+  return {
+    usingRedis: true,
+    storeFactory: (prefix) =>
+      new RedisStore({
+        prefix,
+        sendCommand: (...args: string[]) => redisClient.sendCommand(args)
+      }),
+    close: async () => {
+      if (closed) {
+        return;
+      }
+
+      closed = true;
+      await disconnectRedisClient(redisClient);
+    }
+  };
+}
+
+export function createRateLimiters(options?: { storeFactory?: RateLimiterStoreFactory }): RateLimiterSet {
   const storeFactory = options?.storeFactory;
 
   return {

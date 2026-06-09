@@ -36,6 +36,32 @@ vi.mock("../src/services/email", () => ({
   sendAgencyInvitationEmail: vi.fn().mockResolvedValue(undefined)
 }));
 
+vi.mock("../src/modules/shares/shareService", () => ({
+  shareService: {
+    getShareByToken: vi.fn(async (token: string) => ({
+      share: { token },
+      agency: { id: "agency-1" },
+      itinerary: {},
+      trip: null,
+      creator: null
+    })),
+    addComment: vi.fn(async () => ({ id: "comment-1" })),
+    listPublicComments: vi.fn(async () => [])
+  }
+}));
+
+vi.mock("../src/modules/shares/publicShareService", () => ({
+  buildShareResponse: vi.fn(() => ({ share: { token: "share-token" }, itinerary: {} }))
+}));
+
+vi.mock("../src/modules/reviews/reviewService", () => ({
+  reviewService: {
+    checkTripReviewToken: vi.fn(async () => ({ ok: true })),
+    submitTripReview: vi.fn(async () => ({ id: "review-1" })),
+    rateProposal: vi.fn(async () => ({ ok: true }))
+  }
+}));
+
 vi.mock("../src/db/prisma", () => ({
   prisma: {
     session: {
@@ -159,6 +185,52 @@ async function getOAuthStateForTest(app: ReturnType<typeof createApp>): Promise<
   return { stateCookie, stateValue };
 }
 
+type RateLimitRouteCase = {
+  name: string;
+  method: "get" | "post";
+  path: string;
+  limit: number;
+  body?: Record<string, unknown>;
+};
+
+const TEST_IP = "203.0.113.77";
+
+const publicRateLimitRouteCases: RateLimitRouteCase[] = [
+  { name: "health", method: "get", path: "/health", limit: 120 },
+  { name: "registration", method: "post", path: "/auth/register", limit: 5, body: {} },
+  { name: "login", method: "post", path: "/auth/login", limit: 10, body: {} },
+  { name: "email check", method: "post", path: "/auth/email/check", limit: 5, body: {} },
+  { name: "email verification request", method: "post", path: "/auth/email/verification/request", limit: 5, body: {} },
+  { name: "password reset request", method: "post", path: "/auth/password/reset/request", limit: 5, body: {} },
+  { name: "email verification confirm", method: "post", path: "/auth/email/verification/confirm", limit: 20, body: {} },
+  { name: "password reset confirm", method: "post", path: "/auth/password/reset/confirm", limit: 20, body: {} },
+  { name: "google oauth start", method: "get", path: "/auth/google/start", limit: 20 },
+  { name: "google oauth callback", method: "get", path: "/auth/google/callback?code=test-code", limit: 20 },
+  { name: "apple oauth start", method: "get", path: "/auth/apple/start", limit: 20 },
+  { name: "apple oauth callback", method: "post", path: "/auth/apple/callback", limit: 20, body: {} },
+  { name: "invitation lookup", method: "get", path: "/invitations/lookup", limit: 30 },
+  { name: "public share read", method: "get", path: "/shared/share-token", limit: 60 },
+  { name: "public share comments read", method: "get", path: "/shared/share-token/comments", limit: 60 },
+  { name: "public share comment write", method: "post", path: "/shared/share-token/comments", limit: 10, body: {} },
+  { name: "public share rating write", method: "post", path: "/shared/share-token/rate", limit: 10, body: {} },
+  { name: "review check", method: "get", path: "/reviews/trip-token/check", limit: 30 },
+  { name: "review submit", method: "post", path: "/reviews/trip-token/submit", limit: 10, body: {} },
+  { name: "photo proxy", method: "get", path: "/images/place-photo?name=invalid-photo-name", limit: 60 }
+];
+
+async function sendRateLimitRequest(app: ReturnType<typeof createApp>, routeCase: RateLimitRouteCase) {
+  if (routeCase.method === "get") {
+    return request(app)
+      .get(routeCase.path)
+      .set("X-Forwarded-For", TEST_IP);
+  }
+
+  return request(app)
+    .post(routeCase.path)
+    .set("X-Forwarded-For", TEST_IP)
+    .send(routeCase.body ?? {});
+}
+
 beforeEach(() => {
   store.users = [];
   store.sessions = [];
@@ -166,6 +238,7 @@ beforeEach(() => {
   store.verificationTokens = [];
   store.passwordResetTokens = [];
   vi.clearAllMocks();
+  vi.spyOn(console, "log").mockImplementation(() => {});
 
   // Provide Google OAuth credentials so /google/start doesn't 501.
   process.env["GOOGLE_CLIENT_ID"] = "test-client-id";
@@ -300,7 +373,7 @@ describe("F3 — OAuth login-CSRF state enforcement", () => {
 
 // ── F4 tests ─────────────────────────────────────────────────────────────────
 
-describe("F4 — Rate limiting on auth endpoints", () => {
+describe("F4 - Rate limiting on auth endpoints", () => {
   it("returns 429 after exceeding login rate limit", async () => {
     const app = createApp();
     // Login limit: 10 per 15 min per IP. Send 11 requests.
@@ -343,6 +416,112 @@ describe("F4 — Rate limiting on auth endpoints", () => {
     }
 
     expect(lastStatus).toBe(429);
+  });
+
+  it.each(publicRateLimitRouteCases)("returns 429 after exceeding the $name policy", async (routeCase) => {
+    const app = createApp();
+
+    for (let index = 0; index < routeCase.limit; index += 1) {
+      const response = await sendRateLimitRequest(app, routeCase);
+      expect(response.status).not.toBe(429);
+    }
+
+    const blockedResponse = await sendRateLimitRequest(app, routeCase);
+
+    expect(blockedResponse.status).toBe(429);
+    expect(blockedResponse.body?.error?.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+
+  it("counts 404 responses toward the baseline limiter", async () => {
+    const app = createApp();
+
+    for (let index = 0; index < 300; index += 1) {
+      const response = await request(app)
+        .get("/missing")
+        .set("X-Forwarded-For", TEST_IP);
+
+      expect(response.status).toBe(404);
+    }
+
+    const blockedResponse = await request(app)
+      .get("/missing")
+      .set("X-Forwarded-For", TEST_IP);
+
+    expect(blockedResponse.status).toBe(429);
+    expect(blockedResponse.body?.error?.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+
+  it("skips the baseline limiter for /health so the health policy remains meaningful", async () => {
+    const app = createApp();
+
+    for (let index = 0; index < 301; index += 1) {
+      await request(app)
+        .get("/missing")
+        .set("X-Forwarded-For", TEST_IP);
+    }
+
+    const response = await request(app)
+      .get("/health")
+      .set("X-Forwarded-For", TEST_IP);
+
+    expect(response.status).toBe(200);
+    expect(response.headers["ratelimit-limit"]).toBe("120");
+    expect(response.headers["ratelimit-remaining"]).toBeDefined();
+    expect(response.headers["ratelimit-reset"]).toBeDefined();
+    expect(response.headers["x-ratelimit-limit"]).toBeUndefined();
+    expect(response.headers["x-ratelimit-remaining"]).toBeUndefined();
+    expect(response.headers["x-ratelimit-reset"]).toBeUndefined();
+  });
+
+  it("shares the public-share write bucket between comments and ratings", async () => {
+    const app = createApp();
+
+    for (let index = 0; index < 5; index += 1) {
+      await request(app)
+        .post("/shared/share-token/comments")
+        .set("X-Forwarded-For", TEST_IP)
+        .send({});
+    }
+
+    for (let index = 0; index < 5; index += 1) {
+      await request(app)
+        .post("/shared/share-token/rate")
+        .set("X-Forwarded-For", TEST_IP)
+        .send({});
+    }
+
+    const blockedResponse = await request(app)
+      .post("/shared/share-token/comments")
+      .set("X-Forwarded-For", TEST_IP)
+      .send({});
+
+    expect(blockedResponse.status).toBe(429);
+    expect(blockedResponse.body?.error?.code).toBe("RATE_LIMIT_EXCEEDED");
+  });
+
+  it("isolates in-memory counters across fresh createApp calls when Redis is not configured", async () => {
+    const firstApp = createApp();
+    const secondApp = createApp();
+
+    for (let index = 0; index < 10; index += 1) {
+      await request(firstApp)
+        .post("/auth/login")
+        .set("X-Forwarded-For", TEST_IP)
+        .send({});
+    }
+
+    const blockedResponse = await request(firstApp)
+      .post("/auth/login")
+      .set("X-Forwarded-For", TEST_IP)
+      .send({});
+
+    const freshResponse = await request(secondApp)
+      .post("/auth/login")
+      .set("X-Forwarded-For", TEST_IP)
+      .send({});
+
+    expect(blockedResponse.status).toBe(429);
+    expect(freshResponse.status).not.toBe(429);
   });
 });
 
