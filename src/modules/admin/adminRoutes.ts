@@ -1,5 +1,7 @@
 import { Router } from "express";
+import { z } from "zod";
 import { requireSuperAdmin } from "../../http/authMiddleware";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyReviewSchema } from "../agencies/agencySchemas";
 import { agencyService } from "../agencies/agencyService";
 import { createUsageService, usageQuerySchema } from "./usageService";
@@ -8,6 +10,18 @@ import { supportService } from "../support/supportService";
 import { updateReportSchema } from "../support/supportSchemas";
 
 const usageService = createUsageService({ repository: usageRepository });
+const adminAgencyStatusQuerySchema = z
+  .object({
+    status: z.enum(["PENDING_REVIEW", "VERIFIED", "REJECTED", "SUSPENDED"]).optional()
+  })
+  .strict();
+const adminReportStatusQuerySchema = z
+  .object({
+    status: z.enum(["NEW", "IN_PROGRESS", "RESOLVED", "WONT_FIX"]).optional()
+  })
+  .strict();
+const reportIdParamsSchema = idParamsSchema("id");
+const agencyIdParamsSchema = idParamsSchema("agencyId");
 
 export const adminRoutes = Router();
 
@@ -33,7 +47,7 @@ adminRoutes.get("/agencies/pending-count", requireSuperAdmin, async (request, re
 
 adminRoutes.get("/agencies", requireSuperAdmin, async (request, response, next) => {
   try {
-    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const { status } = adminAgencyStatusQuerySchema.parse(request.query);
     const agencies = await agencyService.listAllAgencies(request.authUser!, status);
     response.json({ agencies });
   } catch (error) {
@@ -51,7 +65,7 @@ adminRoutes.get("/usage", requireSuperAdmin, async (request, response, next) => 
 
 adminRoutes.get("/reports", requireSuperAdmin, async (request, response, next) => {
   try {
-    const status = typeof request.query.status === "string" ? request.query.status : undefined;
+    const { status } = adminReportStatusQuerySchema.parse(request.query);
     const reports = await supportService.listReports(request.authUser!, { status });
     response.json({ reports });
   } catch (error) { next(error); }
@@ -59,14 +73,16 @@ adminRoutes.get("/reports", requireSuperAdmin, async (request, response, next) =
 
 adminRoutes.get("/reports/:id", requireSuperAdmin, async (request, response, next) => {
   try {
-    response.json({ report: await supportService.getReport(request.authUser!, String(request.params.id)) });
+    const { id } = reportIdParamsSchema.parse(request.params);
+    response.json({ report: await supportService.getReport(request.authUser!, id) });
   } catch (error) { next(error); }
 });
 
 adminRoutes.patch("/reports/:id", requireSuperAdmin, async (request, response, next) => {
   try {
+    const { id } = reportIdParamsSchema.parse(request.params);
     const input = updateReportSchema.parse(request.body);
-    response.json({ report: await supportService.updateReport(request.authUser!, String(request.params.id), input) });
+    response.json({ report: await supportService.updateReport(request.authUser!, id, input) });
   } catch (error) { next(error); }
 });
 
@@ -74,7 +90,8 @@ adminRoutes.patch("/reports/:id", requireSuperAdmin, async (request, response, n
 
 adminRoutes.get("/agencies/:agencyId", requireSuperAdmin, async (request, response, next) => {
   try {
-    const agency = await agencyService.getAgencyDetail(request.authUser!, String(request.params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const agency = await agencyService.getAgencyDetail(request.authUser!, agencyId);
     response.json({ agency });
   } catch (error) {
     next(error);
@@ -83,7 +100,8 @@ adminRoutes.get("/agencies/:agencyId", requireSuperAdmin, async (request, respon
 
 adminRoutes.post("/agencies/:agencyId/approve", requireSuperAdmin, async (request, response, next) => {
   try {
-    const agency = await agencyService.approveAgency(request.authUser!, String(request.params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const agency = await agencyService.approveAgency(request.authUser!, agencyId);
     response.json({ agency });
   } catch (error) {
     next(error);
@@ -92,8 +110,9 @@ adminRoutes.post("/agencies/:agencyId/approve", requireSuperAdmin, async (reques
 
 adminRoutes.post("/agencies/:agencyId/reject", requireSuperAdmin, async (request, response, next) => {
   try {
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const input = agencyReviewSchema.parse(request.body);
-    const agency = await agencyService.rejectAgency(request.authUser!, String(request.params.agencyId), input);
+    const agency = await agencyService.rejectAgency(request.authUser!, agencyId, input);
     response.json({ agency });
   } catch (error) {
     next(error);
@@ -102,8 +121,9 @@ adminRoutes.post("/agencies/:agencyId/reject", requireSuperAdmin, async (request
 
 adminRoutes.post("/agencies/:agencyId/suspend", requireSuperAdmin, async (request, response, next) => {
   try {
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const input = agencyReviewSchema.parse(request.body);
-    const agency = await agencyService.suspendAgency(request.authUser!, String(request.params.agencyId), input);
+    const agency = await agencyService.suspendAgency(request.authUser!, agencyId, input);
     response.json({ agency });
   } catch (error) {
     next(error);
@@ -112,7 +132,8 @@ adminRoutes.post("/agencies/:agencyId/suspend", requireSuperAdmin, async (reques
 
 adminRoutes.post("/agencies/:agencyId/unsuspend", requireSuperAdmin, async (request, response, next) => {
   try {
-    const agency = await agencyService.unsuspendAgency(request.authUser!, String(request.params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const agency = await agencyService.unsuspendAgency(request.authUser!, agencyId);
     response.json({ agency });
   } catch (error) {
     next(error);

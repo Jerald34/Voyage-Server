@@ -10,6 +10,15 @@ import {
 import { createPrismaAgentRepository } from "./agentRepository";
 import { ApiError } from "../../http/errors";
 import { isCloudinaryConfigured, uploadChatImage } from "../../services/cloudinary";
+import {
+  agentRunParamsSchema,
+  agentThreadParamsSchema,
+  createMessageSchema,
+  createThreadSchema,
+  listThreadMessagesQuerySchema,
+  saveItineraryThreadSchema,
+  updateThreadTitleSchema
+} from "./agentSchemas";
 
 const agentRepository = createPrismaAgentRepository();
 
@@ -35,7 +44,8 @@ export async function listThreads(req: Request, res: Response, next: NextFunctio
 
 export async function createThread(req: Request, res: Response, next: NextFunction) {
   try {
-    const thread = await agentService.createThread(getAgencyId(req), getUserId(req), req.body);
+    const input = createThreadSchema.parse(req.body);
+    const thread = await agentService.createThread(getAgencyId(req), getUserId(req), input);
     res.status(201).json({ thread });
   } catch (error) {
     next(error);
@@ -44,7 +54,8 @@ export async function createThread(req: Request, res: Response, next: NextFuncti
 
 export async function getThread(req: Request, res: Response, next: NextFunction) {
   try {
-    const thread = await agentService.getThread(getAgencyId(req), String(req.params.id));
+    const { id } = agentThreadParamsSchema.parse(req.params);
+    const thread = await agentService.getThread(getAgencyId(req), id);
     res.json({ thread });
   } catch (error) {
     next(error);
@@ -53,7 +64,8 @@ export async function getThread(req: Request, res: Response, next: NextFunction)
 
 export async function deleteThread(req: Request, res: Response, next: NextFunction) {
   try {
-    await agentService.deleteThread(getAgencyId(req), String(req.params.id));
+    const { id } = agentThreadParamsSchema.parse(req.params);
+    await agentService.deleteThread(getAgencyId(req), id);
     res.status(204).send();
   } catch (error) {
     next(error);
@@ -62,7 +74,9 @@ export async function deleteThread(req: Request, res: Response, next: NextFuncti
 
 export async function saveItineraryThread(req: Request, res: Response, next: NextFunction) {
   try {
-    const saved = await agentService.saveItineraryThread(getAgencyId(req), String(req.params.id), req.body);
+    const { id } = agentThreadParamsSchema.parse(req.params);
+    const input = saveItineraryThreadSchema.parse(req.body);
+    const saved = await agentService.saveItineraryThread(getAgencyId(req), id, input);
     res.json(saved);
   } catch (error) {
     next(error);
@@ -71,10 +85,12 @@ export async function saveItineraryThread(req: Request, res: Response, next: Nex
 
 export async function updateThreadTitle(req: Request, res: Response, next: NextFunction) {
   try {
+    const { id } = agentThreadParamsSchema.parse(req.params);
+    const input = updateThreadTitleSchema.parse(req.body);
     const thread = await agentService.updateThreadTitle(
       getAgencyId(req),
-      String(req.params.id),
-      req.body
+      id,
+      input
     );
     res.json({ thread });
   } catch (error) {
@@ -86,31 +102,32 @@ export async function createMessage(req: Request, res: Response, next: NextFunct
   try {
     const agencyId = getAgencyId(req);
     const userId = getUserId(req);
-    const imageUrls: string[] | undefined = Array.isArray(req.body.imageUrls) ? req.body.imageUrls : undefined;
+    const { id } = agentThreadParamsSchema.parse(req.params);
+    const input = createMessageSchema.parse(req.body);
 
     const { message, run } = await agentService.appendUserMessageAndCreateRun(
       agencyId,
-      String(req.params.id),
+      id,
       userId,
-      req.body.content,
-      imageUrls
+      input.content,
+      input.imageUrls
     );
 
     // Background run initiation
     startAgentRunInBackground({
       agencyId,
-      threadId: String(req.params.id),
+      threadId: id,
       runId: run.id,
       userId,
       userContent: message.content,
-      imageUrls
+      imageUrls: input.imageUrls
     });
 
     res.status(201).json({
       message,
       run,
       runId: run.id,
-      threadId: String(req.params.id),
+      threadId: id,
       streamUrl: `/agencies/${agencyId}/agent/runs/${run.id}/stream`
     });
   } catch (error) {
@@ -166,7 +183,7 @@ export async function uploadChatImages(req: Request, res: Response, next: NextFu
 
 export async function runStream(req: Request, res: Response, next: NextFunction) {
   try {
-    const runId = String(req.params.id);
+    const { id: runId } = agentRunParamsSchema.parse(req.params);
     // F2: Pass the resolved agencyId so the run lookup is scoped to this tenant.
     // A member of agency A cannot stream a run belonging to agency B; they will
     // receive 404 RUN_NOT_FOUND, matching the thread-level scoping pattern.
@@ -210,7 +227,7 @@ export async function runStream(req: Request, res: Response, next: NextFunction)
 
 export async function cancelRun(req: Request, res: Response, next: NextFunction) {
   try {
-    const runId = String(req.params.id);
+    const { id: runId } = agentRunParamsSchema.parse(req.params);
     const agencyId = getAgencyId(req);
     // F2: Scope the agency check first — cancelRun throws 404 RUN_NOT_FOUND
     // if the run doesn't belong to this agency, so we never cancel a run we
@@ -226,8 +243,9 @@ export async function cancelRun(req: Request, res: Response, next: NextFunction)
 
 export async function listRunEvents(req: Request, res: Response, next: NextFunction) {
   try {
+    const { id } = agentRunParamsSchema.parse(req.params);
     // F2: Pass agencyId so listRunEvents rejects access to runs in other agencies.
-    const events = await agentService.listRunEvents(String(req.params.id), getAgencyId(req));
+    const events = await agentService.listRunEvents(id, getAgencyId(req));
     res.json(events);
   } catch (error) {
     next(error);
@@ -237,10 +255,10 @@ export async function listRunEvents(req: Request, res: Response, next: NextFunct
 export async function listThreadMessages(req: Request, res: Response, next: NextFunction) {
   try {
     const agencyId = getAgencyId(req);
-    const threadId = String(req.params.id);
-    const cursor = typeof req.query.cursor === "string" && req.query.cursor ? req.query.cursor : null;
-    const rawLimit = Number(req.query.limit ?? 50);
-    const limit = Number.isFinite(rawLimit) ? Math.min(Math.max(rawLimit, 1), 200) : 50;
+    const { id: threadId } = agentThreadParamsSchema.parse(req.params);
+    const query = listThreadMessagesQuerySchema.parse(req.query);
+    const cursor = query.cursor ?? null;
+    const limit = query.limit;
 
     // Throws 404 if thread doesn't belong to agencyId — matches getThread behavior.
     await agentService.getThread(agencyId, threadId);

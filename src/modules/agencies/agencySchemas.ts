@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { requiredTextSchema, uuidSchema } from "../../http/requestSchemas";
 
 const trimmedRequiredBusinessEmailSchema = z.preprocess((value) => {
   if (typeof value !== "string") {
@@ -26,22 +27,26 @@ const trimmedDigitsOnlyBusinessPhoneSchema = z.preprocess((value) => {
 }, z.string().min(7, "Enter a valid phone number (7–15 digits)").max(15, "Enter a valid phone number (7–15 digits)").regex(/^\d+$/, "Business phone must contain digits only."));
 
 export const createAgencySchema = z.object({
-  name: z.string().min(1).max(160),
+  name: requiredTextSchema(160),
   businessPhone: trimmedDigitsOnlyBusinessPhoneSchema,
   businessEmail: trimmedRequiredBusinessEmailSchema,
-  country: z.string().min(1).max(100),
-  city: z.string().min(1).max(100),
-  logoImageId: z.string().uuid().optional(),
-});
+  country: requiredTextSchema(100),
+  city: requiredTextSchema(100),
+  logoImageId: uuidSchema.optional()
+}).strict();
 
 export const updateAgencySettingsSchema = z.object({
-  name: z.string().min(1).max(160),
+  name: requiredTextSchema(160),
   businessPhone: trimmedDigitsOnlyBusinessPhoneSchema,
   businessEmail: trimmedNullableBusinessEmailSchema,
-  country: z.string().min(1).max(100),
-  city: z.string().min(1).max(100)
-});
+  country: requiredTextSchema(100),
+  city: requiredTextSchema(100)
+}).strict();
 
 export const agencyReviewSchema = z.object({
-  reason: z.string().min(1).max(1000)
-});
+  reason: requiredTextSchema(1000)
+}).strict();
+
+export const deleteAgencySchema = z.object({
+  confirmName: requiredTextSchema(160)
+}).strict();

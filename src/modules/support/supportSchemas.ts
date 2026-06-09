@@ -1,15 +1,23 @@
 import { z } from "zod";
+import { nullableTextSchema, optionalTextSchema, requiredTextSchema } from "../../http/requestSchemas";
 
 export const createReportSchema = z.object({
   category: z.enum(["BUG", "BILLING", "FEATURE", "OTHER"]),
-  subject: z.string().min(1).max(150),
-  message: z.string().min(1).max(5000),
-  appContext: z.string().max(300).optional()
-});
+  subject: requiredTextSchema(150),
+  message: requiredTextSchema(5000),
+  appContext: optionalTextSchema(300)
+}).strict();
 
 export const updateReportSchema = z.object({
   status: z.enum(["NEW", "IN_PROGRESS", "RESOLVED", "WONT_FIX"]).optional(),
-  adminNotes: z.string().max(5000).optional(),
-  githubIssueUrl: z.string().url().optional(),
-  githubIssueNumber: z.number().int().optional()
-});
+  adminNotes: nullableTextSchema(5000),
+  githubIssueUrl: z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+
+    const trimmed = value.trim();
+    return trimmed === "" ? null : trimmed;
+  }, z.string().url().nullable().optional()),
+  githubIssueNumber: z.number().int().positive().optional()
+}).strict();

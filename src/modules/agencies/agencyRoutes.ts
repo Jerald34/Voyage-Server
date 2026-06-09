@@ -2,10 +2,16 @@ import { Router } from "express";
 import { ApiError } from "../../http/errors";
 import { requireAuth } from "../../http/authMiddleware";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
-import { createAgencySchema, updateAgencySettingsSchema } from "./agencySchemas";
+import { idParamsSchema } from "../../http/requestSchemas";
+import {
+  createAgencySchema,
+  deleteAgencySchema,
+  updateAgencySettingsSchema
+} from "./agencySchemas";
 import { agencyService } from "./agencyService";
 
 export const agencyRoutes = Router();
+const agencyIdParamsSchema = idParamsSchema("agencyId");
 
 agencyRoutes.post("/", requireAuth, async (request, response, next) => {
   try {
@@ -23,9 +29,10 @@ agencyRoutes.get("/me", requireAuth, (request, response) => {
 
 agencyRoutes.patch("/:agencyId/settings", requireAuth, async (request, response, next) => {
   try {
-    await agencyAccessService.requireAgencyAdmin(request.authUser!, String(request.params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    await agencyAccessService.requireAgencyAdmin(request.authUser!, agencyId);
     const input = updateAgencySettingsSchema.parse(request.body);
-    const agency = await agencyService.updateAgencySettings(request.authUser!, String(request.params.agencyId), {
+    const agency = await agencyService.updateAgencySettings(request.authUser!, agencyId, {
       ...input
     });
     response.json({ agency });
@@ -36,11 +43,19 @@ agencyRoutes.patch("/:agencyId/settings", requireAuth, async (request, response,
 
 agencyRoutes.delete("/:agencyId", requireAuth, async (request, response, next) => {
   try {
-    const confirmName = request.body?.confirmName;
-    if (typeof confirmName !== "string" || !confirmName.trim()) {
-      throw new ApiError(400, "NAME_CONFIRMATION_REQUIRED", "confirmName is required to delete an agency.");
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const parsed = deleteAgencySchema.safeParse(request.body);
+    if (!parsed.success) {
+      const hasOnlyConfirmNameIssues = parsed.error.issues.every(
+        (issue) => issue.path[0] === "confirmName" && issue.code !== "unrecognized_keys"
+      );
+      if (hasOnlyConfirmNameIssues) {
+        throw new ApiError(400, "NAME_CONFIRMATION_REQUIRED", "confirmName is required to delete an agency.");
+      }
+      throw parsed.error;
     }
-    await agencyService.deleteAgency(request.authUser!, String(request.params.agencyId), { confirmName });
+    const input = parsed.data;
+    await agencyService.deleteAgency(request.authUser!, agencyId, input);
     response.status(204).end();
   } catch (error) {
     next(error);

@@ -62,10 +62,10 @@ import {
 
 // ── Fixture constants ────────────────────────────────────────────────────────
 
-const AGENCY_A_ID = "11111111-1111-1111-1111-111111111111";
-const AGENCY_B_ID = "22222222-2222-2222-2222-222222222222";
-const USER_OWNER_A_ID = "33333333-3333-3333-3333-333333333333";
-const USER_OWNER_B_ID = "44444444-4444-4444-4444-444444444444";
+const AGENCY_A_ID = "11111111-1111-4111-8111-111111111111";
+const AGENCY_B_ID = "22222222-2222-4222-8222-222222222222";
+const USER_OWNER_A_ID = "33333333-3333-4333-8333-333333333333";
+const USER_OWNER_B_ID = "44444444-4444-4444-8444-444444444444";
 const SESSION_TOKEN = "test-session-token-owner-a";
 
 // Trip IDs in agencyA
@@ -314,6 +314,17 @@ describe("GET /agencies/:agencyId/rated-history", () => {
     expect(mockListRatedHistory).toHaveBeenCalledWith(
       expect.objectContaining({ page: 2, pageSize: 2 })
     );
+  });
+
+  it("5b. rejects unknown query keys before calling the service", async () => {
+    const app = createApp();
+    const res = await request(app)
+      .get(`/agencies/${AGENCY_A_ID}/rated-history?page=1&extra=unexpected`)
+      .set("Cookie", `voyage_session=${SESSION_TOKEN}`);
+
+    expect(res.status).toBe(400);
+    expect(res.body.error.code).toBe("VALIDATION_ERROR");
+    expect(mockListRatedHistory).not.toHaveBeenCalled();
   });
 
   it("6. ownerA requesting agencyB history → 403", async () => {

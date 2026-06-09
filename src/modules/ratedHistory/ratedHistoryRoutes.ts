@@ -1,7 +1,13 @@
 import { Router, type Request, type Response } from "express";
 import { requireAuth } from "../../http/authMiddleware.js";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService.js";
-import { listQuerySchema, detailParamsSchema, insertBodySchema } from "./ratedHistorySchemas.js";
+import {
+  detailParamsSchema,
+  insertBodySchema,
+  listQuerySchema,
+  targetTripParamsSchema
+} from "./ratedHistorySchemas.js";
 import { ratedHistoryService } from "./ratedHistoryService.js";
 import {
   MalformedSelectionError,
@@ -48,14 +54,15 @@ function handleServiceError(err: unknown, response: Response, next: (e: unknown)
 //   GET /:tripId         — full itinerary detail for one rated trip
 
 export const ratedHistoryListRoutes = Router({ mergeParams: true });
+const agencyIdParamsSchema = idParamsSchema("agencyId");
 
 ratedHistoryListRoutes.use(requireAuth);
 ratedHistoryListRoutes.use(async (request, _response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const access = await agencyAccessService.requireVerifiedAgencyMember(
       request.authUser!,
-      String(params.agencyId)
+      agencyId
     );
     request.resolvedAgencyId = access.agency.id;
     next();
@@ -119,8 +126,8 @@ ratedHistoryInsertRoutes.post(
   "/insert-from-rated",
   async (request: Request, response: Response, next) => {
     try {
+      const { tripId } = targetTripParamsSchema.parse(request.params);
       const body = insertBodySchema.parse(request.body);
-      const tripId = String(request.params.tripId);
       const authUser = request.authUser!;
 
       // Look up the target trip to derive agencyId for the membership check.

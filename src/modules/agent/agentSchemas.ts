@@ -1,14 +1,23 @@
 import { z } from "zod";
+import {
+  idParamsSchema,
+  longTextSchema,
+  nullableTextSchema,
+  optionalTextSchema,
+  paginationQuerySchema,
+  requiredTextSchema,
+  uuidSchema
+} from "../../http/requestSchemas";
 
 export const createThreadSchema = z.object({
-  title: z.string().max(200).optional(),
-  tripId: z.uuid().optional()
-});
+  title: optionalTextSchema(200),
+  tripId: uuidSchema.optional()
+}).strict();
 
 export const createMessageSchema = z.object({
-  content: z.string().min(1).max(12000),
+  content: z.preprocess((value) => (typeof value === "string" ? value.trim() : value), z.string().min(1).max(12000)),
   imageUrls: z.array(z.string().url()).max(3).optional()
-});
+}).strict();
 
 const optionalNullableDateSchema = z.preprocess(
   (value) => (value === "" || value === null ? null : value),
@@ -16,18 +25,30 @@ const optionalNullableDateSchema = z.preprocess(
 );
 
 export const saveItineraryThreadSchema = z.object({
-  itineraryId: z.uuid(),
-  clientName: z.string().trim().min(1).max(200),
-  destination: z.string().trim().min(1).max(500),
+  itineraryId: uuidSchema,
+  clientName: requiredTextSchema(200),
+  destination: requiredTextSchema(500),
   startDate: optionalNullableDateSchema,
   endDate: optionalNullableDateSchema,
   travelerCount: z.number().int().positive().max(999).optional(),
-  budgetLevel: z.string().trim().max(100).optional()
+  budgetLevel: optionalTextSchema(100)
+}).strict().superRefine((value, context) => {
+  if (value.startDate && value.endDate && value.startDate > value.endDate) {
+    context.addIssue({
+      code: "custom",
+      path: ["endDate"],
+      message: "endDate must be on or after startDate."
+    });
+  }
 });
 
 export const updateThreadTitleSchema = z.object({
-  title: z.string().trim().min(1).max(200)
-});
+  title: requiredTextSchema(200)
+}).strict();
+
+export const agentThreadParamsSchema = idParamsSchema("id");
+export const agentRunParamsSchema = idParamsSchema("id");
+export const listThreadMessagesQuerySchema = paginationQuerySchema;
 
 export const agentEventSchema = z.object({
   type: z.enum([

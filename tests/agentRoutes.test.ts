@@ -1,10 +1,10 @@
 import { EventEmitter } from "node:events";
 import { describe, expect, it, vi } from "vitest";
+import { startAgentRunInBackground } from "../src/modules/agent/agentFactory";
 import {
   createAgentRunStreamController,
-  replayPersistedAgentRunEvents,
-  startAgentRunInBackground
-} from "../src/modules/agent/agentRoutes";
+  replayPersistedAgentRunEvents
+} from "../src/modules/agent/agentStream";
 import type { AgentRunEventRecord } from "../src/modules/agent/agentService";
 
 function createStreamHarness() {

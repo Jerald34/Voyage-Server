@@ -3,7 +3,7 @@ import { Router } from "express";
 import { env } from "../../config/env";
 import { ApiError } from "../../http/errors";
 import { requireAuth } from "../../http/authMiddleware";
-import { requestUploadSchema } from "./imageSchemas";
+import { imageIdParamsSchema, requestUploadSchema } from "./imageSchemas";
 import { imageService } from "./imageService";
 import { isCloudinaryConfigured, uploadPlacePhoto } from "../../services/cloudinary";
 import { prisma } from "../../db/prisma";
@@ -158,7 +158,8 @@ imageRoutes.post("/upload-url", requireAuth, async (request, response, next) => 
 
 imageRoutes.post("/:imageId/complete", requireAuth, async (request, response, next) => {
   try {
-    const image = await imageService.completeUpload(request.authUser!, String(request.params.imageId));
+    const { imageId } = imageIdParamsSchema.parse(request.params);
+    const image = await imageService.completeUpload(request.authUser!, imageId);
     response.json({ image });
   } catch (error) {
     next(error);
@@ -167,7 +168,8 @@ imageRoutes.post("/:imageId/complete", requireAuth, async (request, response, ne
 
 imageRoutes.get("/:imageId/url", requireAuth, async (request, response, next) => {
   try {
-    const result = await imageService.createReadUrl(request.authUser!, String(request.params.imageId));
+    const { imageId } = imageIdParamsSchema.parse(request.params);
+    const result = await imageService.createReadUrl(request.authUser!, imageId);
     response.json(result);
   } catch (error) {
     next(error);

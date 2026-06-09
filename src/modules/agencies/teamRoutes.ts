@@ -2,7 +2,12 @@ import { Router } from "express";
 import { requireAuth } from "../../http/authMiddleware";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { prisma } from "../../db/prisma";
-import { inviteMemberSchema, changeRoleSchema } from "./teamSchemas";
+import { idParamsSchema } from "../../http/requestSchemas";
+import {
+  inviteMemberSchema,
+  changeRoleSchema,
+  transferOwnershipSchema
+} from "./teamSchemas";
 import { createTeamService } from "./teamService";
 import { createPrismaTeamRepository } from "./teamRepository";
 import { createInvitationService } from "./invitationService";
@@ -33,13 +38,16 @@ const invitationService = createInvitationService({
 export { invitationService };
 
 export const teamRoutes = Router({ mergeParams: true });
+const agencyIdParamsSchema = idParamsSchema("agencyId");
+const invitationParamsSchema = idParamsSchema("agencyId", "invitationId");
+const membershipParamsSchema = idParamsSchema("agencyId", "membershipId");
 
 teamRoutes.use(requireAuth);
 
 teamRoutes.get("/", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireVerifiedAgencyMember(request.authUser!, String(params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireVerifiedAgencyMember(request.authUser!, agencyId);
     const members = await teamService.listMembers(access.agency.id);
     response.json({ members, viewerRole: access.membership!.role });
   } catch (error) {
@@ -49,8 +57,8 @@ teamRoutes.get("/", async (request, response, next) => {
 
 teamRoutes.post("/", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, String(params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, agencyId);
     const input = inviteMemberSchema.parse(request.body);
     const agency = await prisma.agency.findUnique({
       where: { id: access.agency.id },
@@ -79,8 +87,8 @@ teamRoutes.post("/", async (request, response, next) => {
 
 teamRoutes.get("/invitations", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, String(params.agencyId));
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, agencyId);
     const invitations = await invitationService.listOutstanding(access.agency.id);
     response.json({
       invitations: invitations.map((inv) => ({
@@ -98,11 +106,11 @@ teamRoutes.get("/invitations", async (request, response, next) => {
 
 teamRoutes.delete("/invitations/:invitationId", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, String(params.agencyId));
+    const { agencyId, invitationId } = invitationParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, agencyId);
     await invitationService.revoke({
       agencyId: access.agency.id,
-      invitationId: String(request.params.invitationId),
+      invitationId,
       revokerUserId: request.authUser!.id
     });
     response.status(204).send();
@@ -113,12 +121,12 @@ teamRoutes.delete("/invitations/:invitationId", async (request, response, next) 
 
 teamRoutes.patch("/:membershipId/role", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, String(params.agencyId));
+    const { agencyId, membershipId } = membershipParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, agencyId);
     const input = changeRoleSchema.parse(request.body);
     const member = await teamService.changeMemberRole({
       agencyId: access.agency.id,
-      membershipId: String(request.params.membershipId),
+      membershipId,
       role: input.role
     });
     response.json({ member });
@@ -129,11 +137,11 @@ teamRoutes.patch("/:membershipId/role", async (request, response, next) => {
 
 teamRoutes.delete("/:membershipId", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, String(params.agencyId));
+    const { agencyId, membershipId } = membershipParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireAgencyAdmin(request.authUser!, agencyId);
     await teamService.removeMember({
       agencyId: access.agency.id,
-      membershipId: String(request.params.membershipId)
+      membershipId
     });
     response.status(204).send();
   } catch (error) {
@@ -143,9 +151,9 @@ teamRoutes.delete("/:membershipId", async (request, response, next) => {
 
 teamRoutes.post("/transfer-ownership", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
-    const access = await agencyAccessService.requireAgencyOwner(request.authUser!, String(params.agencyId));
-    const { targetMembershipId } = request.body as { targetMembershipId: string };
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
+    const access = await agencyAccessService.requireAgencyOwner(request.authUser!, agencyId);
+    const { targetMembershipId } = transferOwnershipSchema.parse(request.body);
     const currentOwnerMembership = access.membership!;
     await teamService.transferOwnership({
       agencyId: access.agency.id,
