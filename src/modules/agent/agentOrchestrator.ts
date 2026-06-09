@@ -31,6 +31,7 @@ import {
   recoverSynthesizedMessage,
   stringifyToolResults
 } from "./agentUtils";
+import { createUsageAccumulator } from "./agentRunUsage";
 import {
   detectInitialOutputMode,
   GRANULAR_ITINERARY_TOOL_NAMES,
@@ -111,12 +112,16 @@ export function createAgentOrchestrator(options: {
     await options.agentService.failRun(input.runId, details.code, details.message);
   }
 
-  async function streamAndComplete(run: AgentRunRecord, assistantMessage: string) {
+  async function streamAndComplete(
+    run: AgentRunRecord,
+    assistantMessage: string,
+    usageSummary: ReturnType<ReturnType<typeof createUsageAccumulator>["summary"]>
+  ) {
     await options.agentService.recordRunEvent(run, {
       type: "message.delta",
       payload: { delta: assistantMessage }
     });
-    await options.agentService.completeRun(run.id, assistantMessage);
+    await options.agentService.completeRun(run.id, assistantMessage, usageSummary);
   }
 
   return {
@@ -132,6 +137,7 @@ export function createAgentOrchestrator(options: {
       }
 
       const run = await options.agentService.startRun(input.runId, now());
+      const usage = createUsageAccumulator();
       try {
         await options.agentService.recordRunEvent(run, {
           type: "run.started",
@@ -288,6 +294,7 @@ export function createAgentOrchestrator(options: {
           }
 
           agentLogger.modelOutput(input.runId, modelContent, modelUsage);
+          usage.add("loop", modelUsage);
         } catch (error) {
           await failRun(input, error);
           return;
@@ -335,7 +342,7 @@ export function createAgentOrchestrator(options: {
         }
 
         if (parsedOutput.type === "text") {
-          await streamAndComplete(run, parsedOutput.assistantMessage);
+          await streamAndComplete(run, parsedOutput.assistantMessage, usage.summary());
           return;
         }
 
@@ -615,6 +622,7 @@ export function createAgentOrchestrator(options: {
             nextContent = completion.content;
             nextUsage = completion.usage;
             agentLogger.modelOutput(input.runId, nextContent, nextUsage);
+            usage.add("loop", nextUsage);
           } catch (error) {
             agentLogger.error("Continuation completion failed", input.runId, error);
             break;
@@ -679,7 +687,7 @@ export function createAgentOrchestrator(options: {
         parsedOutput = { ...parsedOutput, assistantMessage: lastAssistantMessage };
 
         if (toolResults.length === 0) {
-          await streamAndComplete(run, parsedOutput.assistantMessage);
+          await streamAndComplete(run, parsedOutput.assistantMessage, usage.summary());
           return;
         }
 
@@ -766,6 +774,7 @@ export function createAgentOrchestrator(options: {
           }
 
           agentLogger.synthesisOutput(input.runId, synthesizedMessage, synthesisUsage);
+          usage.add("synthesis", synthesisUsage);
         } catch {
           synthesizedMessage = parsedOutput.assistantMessage;
           agentLogger.error("Synthesis Failed", input.runId, "Falling back to assistant message.");
@@ -783,7 +792,7 @@ export function createAgentOrchestrator(options: {
           try { await options.onBeforeRunComplete(activeItineraryContext.itinerary); } catch { /* best-effort */ }
         }
 
-        await options.agentService.completeRun(run.id, synthesizedMessage);
+        await options.agentService.completeRun(run.id, synthesizedMessage, usage.summary());
 
       } catch (error) {
         if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }

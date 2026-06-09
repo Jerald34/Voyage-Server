@@ -343,7 +343,8 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             triggerMessageId: message.id,
             status: "QUEUED",
             modelProvider: data.modelProvider,
-            modelName: data.modelName
+            modelName: data.modelName,
+            usageUserId: data.authorUserId
           }
         });
         return { message, run } as { message: AgentMessageRecord; run: AgentRunRecord };
@@ -574,7 +575,18 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           },
           data: {
             status: "COMPLETED",
-            completedAt: data.completedAt
+            completedAt: data.completedAt,
+            ...(data.usage
+              ? {
+                  promptTokens: data.usage.promptTokens,
+                  outputTokens: data.usage.outputTokens,
+                  totalTokens: data.usage.totalTokens,
+                  cachedTokens: data.usage.cachedTokens,
+                  thoughtsTokens: data.usage.thoughtsTokens,
+                  costUsd: data.usage.costUsd,
+                  usageDetail: toJsonInput(data.usage.detail)
+                }
+              : {})
           }
         });
         if (update.count === 0) {
