@@ -64,6 +64,12 @@ describe("requestSchemas", () => {
       limit: 12
     });
 
+    expect(paginationQuerySchema.safeParse({ limit: ["12"] }).success).toBe(false);
+    expect(paginationQuerySchema.safeParse({ limit: [[12]] }).success).toBe(false);
+    expect(paginationQuerySchema.safeParse({ limit: {} }).success).toBe(false);
+    expect(paginationQuerySchema.safeParse({ limit: null }).success).toBe(false);
+    expect(paginationQuerySchema.safeParse({ limit: Infinity }).success).toBe(false);
+    expect(paginationQuerySchema.safeParse({ limit: 12.5 }).success).toBe(false);
     expect(paginationQuerySchema.safeParse({ limit: 0 }).success).toBe(false);
     expect(paginationQuerySchema.safeParse({ limit: 201 }).success).toBe(false);
     expect(paginationQuerySchema.safeParse({ limit: "3.2" }).success).toBe(false);
