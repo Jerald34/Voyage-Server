@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { isIP } from "node:net";
 import { env } from "../config/env";
+import { ApiError } from "./errors";
 
 const moduleRequire = createRequire(__filename);
 
@@ -37,6 +38,7 @@ type RateLimiterConfig = {
   policyId: string;
   windowMs: number;
   limit: number;
+  passOnStoreError?: boolean;
   secondaryKey?: (request: Request) => string;
 };
 export type RateLimiterStoreFactory = (prefix: string) => Store | undefined;
@@ -118,9 +120,34 @@ function createMemoryStore(prefix: string): Store {
   };
 }
 
+function createSensitiveStoreAdapter(store: Store): Store {
+  return {
+    prefix: store.prefix,
+    localKeys: store.localKeys,
+    init: store.init?.bind(store),
+    get: store.get?.bind(store),
+    increment: async (key) => {
+      try {
+        return await store.increment(key);
+      } catch {
+        throw new ApiError(
+          503,
+          "RATE_LIMIT_UNAVAILABLE",
+          "Request protection is temporarily unavailable. Please try again later."
+        );
+      }
+    },
+    decrement: store.decrement.bind(store),
+    resetKey: store.resetKey.bind(store),
+    resetAll: store.resetAll?.bind(store),
+    shutdown: store.shutdown?.bind(store)
+  };
+}
+
 function createLimiter(config: RateLimiterConfig, storeFactory?: RateLimiterStoreFactory): RequestHandler {
   const prefix = `${env.RATE_LIMIT_PREFIX}${config.policyId}:`;
-  const store = storeFactory?.(prefix) ?? createMemoryStore(prefix);
+  const sourceStore = storeFactory?.(prefix) ?? createMemoryStore(prefix);
+  const store = config.passOnStoreError ? sourceStore : createSensitiveStoreAdapter(sourceStore);
 
   return rateLimit({
     windowMs: config.windowMs,
@@ -128,6 +155,15 @@ function createLimiter(config: RateLimiterConfig, storeFactory?: RateLimiterStor
     store,
     standardHeaders: true,
     legacyHeaders: false,
+    passOnStoreError: config.passOnStoreError ?? false,
+    logger: {
+      error: (_error, message) => {
+        console.error(message ?? "express-rate-limit error");
+      },
+      warn: (_error, message) => {
+        console.warn(message ?? "express-rate-limit warning");
+      }
+    },
     skipSuccessfulRequests: false,
     skipFailedRequests: false,
     keyGenerator: (request) => buildRateLimitKey(config.policyId, request, config.secondaryKey?.(request)),
@@ -236,8 +272,20 @@ export function createRateLimiters(options?: { storeFactory?: RateLimiterStoreFa
   const storeFactory = options?.storeFactory;
 
   return {
-    baseline: createLimiter({ name: "baseline", policyId: "baseline", windowMs: 15 * 60 * 1000, limit: env.RATE_LIMIT_BASELINE_MAX }, storeFactory),
-    health: createLimiter({ name: "health", policyId: "health", windowMs: 60 * 1000, limit: 120 }, storeFactory),
+    baseline: createLimiter(
+      {
+        name: "baseline",
+        policyId: "baseline",
+        windowMs: 15 * 60 * 1000,
+        limit: env.RATE_LIMIT_BASELINE_MAX,
+        passOnStoreError: true
+      },
+      storeFactory
+    ),
+    health: createLimiter(
+      { name: "health", policyId: "health", windowMs: 60 * 1000, limit: 120, passOnStoreError: true },
+      storeFactory
+    ),
     login: createLimiter(
       { name: "login", policyId: "login", windowMs: 15 * 60 * 1000, limit: 10, secondaryKey: normalizeLoginEmail },
       storeFactory

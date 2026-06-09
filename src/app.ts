@@ -27,11 +27,17 @@ type CreateAppOptions = {
   rateLimiterStoreFactory?: RateLimiterStoreFactory;
 };
 
+function redactRequestPath(path: string): string {
+  return path
+    .replace(/^\/shared\/[^/]+(?=\/|$)/, "/shared/[REDACTED]")
+    .replace(/^\/reviews\/[^/]+(?=\/|$)/, "/reviews/[REDACTED]");
+}
+
 export function createApp(options: CreateAppOptions = {}) {
   const app = express();
   const rateLimiters = createRateLimiters({ storeFactory: options.rateLimiterStoreFactory });
   const baselineLimiter: RequestHandler = (request, response, next) => {
-    if (request.path === "/health") {
+    if (request.method === "OPTIONS" || request.path === "/health") {
       next();
       return;
     }
@@ -63,17 +69,17 @@ export function createApp(options: CreateAppOptions = {}) {
   // F9: Log only method + path — never query strings (which may contain OAuth
   // codes, share tokens, or review tokens).
   app.use((req, _res, next) => {
-    console.log(`[Request] ${req.method} ${req.path}`);
+    console.log(`[Request] ${req.method} ${redactRequestPath(req.path)}`);
     next();
   });
 
-  app.use(baselineLimiter);
   app.use(
     cors({
       origin: env.APP_ORIGIN,
       credentials: true
     })
   );
+  app.use(baselineLimiter);
   app.use(express.json({ limit: "1mb" }));
   app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 

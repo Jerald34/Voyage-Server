@@ -11,6 +11,7 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import request from "supertest";
+import type { Store } from "express-rate-limit";
 
 // ── In-memory data stores shared by the prisma mock ─────────────────────────
 
@@ -144,6 +145,7 @@ vi.mock("../src/db/prisma", () => ({
 }));
 
 import { createApp } from "../src/app";
+import { env } from "../src/config/env";
 import { verifyGoogleAuthorizationCode } from "../src/services/oauth";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
@@ -194,6 +196,24 @@ type RateLimitRouteCase = {
 };
 
 const TEST_IP = "203.0.113.77";
+const STORE_FAILURE_SECRET = "redis://secret-user:secret-password@cache.internal:6379";
+
+class ThrowingStore implements Store {
+  localKeys = false;
+  prefix?: string;
+
+  constructor(prefix?: string) {
+    this.prefix = prefix;
+  }
+
+  async increment(_key: string): Promise<never> {
+    throw new Error(STORE_FAILURE_SECRET);
+  }
+
+  async decrement(_key: string) {}
+
+  async resetKey(_key: string) {}
+}
 
 const publicRateLimitRouteCases: RateLimitRouteCase[] = [
   { name: "health", method: "get", path: "/health", limit: 120 },
@@ -522,6 +542,114 @@ describe("F4 - Rate limiting on auth endpoints", () => {
 
     expect(blockedResponse.status).toBe(429);
     expect(freshResponse.status).not.toBe(429);
+  });
+
+  it("keeps baseline-only traffic and health available when the shared store fails", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = createApp({
+      rateLimiterStoreFactory: (prefix) => new ThrowingStore(prefix)
+    });
+
+    const missingResponse = await request(app)
+      .get("/missing")
+      .set("X-Forwarded-For", TEST_IP);
+    const healthResponse = await request(app)
+      .get("/health")
+      .set("X-Forwarded-For", TEST_IP);
+
+    expect(missingResponse.status).toBe(404);
+    expect(healthResponse.status).toBe(200);
+    expect(healthResponse.body).toEqual({ ok: true });
+    expect(errorSpy.mock.calls.flatMap((arguments_) => arguments_).join("\n")).not.toContain(
+      STORE_FAILURE_SECRET
+    );
+  });
+
+  it("returns a controlled 503 when a sensitive limiter store fails", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = createApp({
+      rateLimiterStoreFactory: (prefix) => new ThrowingStore(prefix)
+    });
+
+    const response = await request(app)
+      .post("/auth/login")
+      .set("X-Forwarded-For", TEST_IP)
+      .send({ email: "user@example.com", password: "invalid" });
+
+    expect(response.status).toBe(503);
+    expect(response.body).toEqual({
+      error: {
+        code: "RATE_LIMIT_UNAVAILABLE",
+        message: "Request protection is temporarily unavailable. Please try again later."
+      }
+    });
+    expect(JSON.stringify(response.body)).not.toContain(STORE_FAILURE_SECRET);
+    expect(JSON.stringify(response.body)).not.toContain("redis");
+  });
+
+  it("includes credentialed CORS headers on baseline 429 responses", async () => {
+    const app = createApp();
+
+    for (let index = 0; index < 300; index += 1) {
+      await request(app)
+        .get("/missing")
+        .set("Origin", env.APP_ORIGIN)
+        .set("X-Forwarded-For", TEST_IP);
+    }
+
+    const response = await request(app)
+      .get("/missing")
+      .set("Origin", env.APP_ORIGIN)
+      .set("X-Forwarded-For", TEST_IP);
+
+    expect(response.status).toBe(429);
+    expect(response.headers["access-control-allow-origin"]).toBe(env.APP_ORIGIN);
+    expect(response.headers["access-control-allow-credentials"]).toBe("true");
+  });
+
+  it("handles repeated OPTIONS preflight without consuming baseline capacity", async () => {
+    const app = createApp();
+
+    for (let index = 0; index < 301; index += 1) {
+      const response = await request(app)
+        .options("/auth/login")
+        .set("Origin", env.APP_ORIGIN)
+        .set("Access-Control-Request-Method", "POST")
+        .set("X-Forwarded-For", TEST_IP);
+
+      expect(response.status).toBe(204);
+    }
+
+    const baselineResponse = await request(app)
+      .get("/missing")
+      .set("Origin", env.APP_ORIGIN)
+      .set("X-Forwarded-For", TEST_IP);
+
+    expect(baselineResponse.status).toBe(404);
+  });
+});
+
+describe("request logging redaction", () => {
+  it("redacts public bearer-token path segments and omits invitation query tokens", async () => {
+    const app = createApp();
+    const shareToken = "share-secret-token";
+    const reviewToken = "review-secret-token";
+    const invitationToken = "invitation-secret-token";
+
+    await request(app).get(`/shared/${shareToken}/comments`);
+    await request(app).get(`/reviews/${reviewToken}/check`);
+    await request(app).get(`/invitations/lookup?token=${invitationToken}`);
+
+    const logOutput = vi.mocked(console.log).mock.calls
+      .flatMap((arguments_) => arguments_)
+      .join("\n");
+
+    expect(logOutput).toContain("[Request] GET /shared/[REDACTED]/comments");
+    expect(logOutput).toContain("[Request] GET /reviews/[REDACTED]/check");
+    expect(logOutput).toContain("[Request] GET /invitations/lookup");
+    expect(logOutput).not.toContain(shareToken);
+    expect(logOutput).not.toContain(reviewToken);
+    expect(logOutput).not.toContain(invitationToken);
   });
 });
 
