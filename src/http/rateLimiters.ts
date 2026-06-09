@@ -1,6 +1,7 @@
 import type { RequestHandler, Request } from "express";
 import rateLimit, { MemoryStore, ipKeyGenerator, type Store } from "express-rate-limit";
 import { createHash } from "node:crypto";
+import { isIP } from "node:net";
 import { env } from "../config/env";
 
 export type RateLimiterSet = {
@@ -25,10 +26,12 @@ const RATE_LIMIT_EXCEEDED_RESPONSE = {
     message: "Too many requests. Please try again later."
   }
 } as const;
+const INVALID_IP_BUCKET = "invalid-ip";
 
 type RateLimiterName = keyof RateLimiterSet;
 type RateLimiterConfig = {
   name: RateLimiterName;
+  policyId: string;
   windowMs: number;
   limit: number;
   secondaryKey?: (request: Request) => string;
@@ -49,22 +52,37 @@ function readTokenFromParams(request: Request): string {
   return typeof token === "string" ? token : "";
 }
 
-function buildRateLimitKey(request: Request, secondaryKey?: string): string {
-  const keyParts = [ipKeyGenerator(request.ip)];
+function resolveIpBucket(request: Request): string {
+  const requestIp = typeof request.ip === "string" ? request.ip : "";
+  return isIP(requestIp) === 0 ? INVALID_IP_BUCKET : ipKeyGenerator(requestIp);
+}
+
+function buildRateLimitKey(policyId: string, request: Request, secondaryKey?: string): string {
+  const keyParts = [`policy=${policyId}`, `ip=${resolveIpBucket(request)}`];
   if (secondaryKey !== undefined) {
-    keyParts.push(hashRateLimitKey(secondaryKey));
+    keyParts.push(`subject=${hashRateLimitKey(secondaryKey)}`);
   }
-  return keyParts.join(":");
+  return keyParts.join("|");
 }
 
 function createMemoryStore(prefix: string): Store {
-  const store = new MemoryStore();
-  store.prefix = prefix;
-  return store;
+  const memoryStore = new MemoryStore();
+
+  return {
+    prefix,
+    localKeys: memoryStore.localKeys,
+    init: memoryStore.init.bind(memoryStore),
+    get: memoryStore.get.bind(memoryStore),
+    increment: memoryStore.increment.bind(memoryStore),
+    decrement: memoryStore.decrement.bind(memoryStore),
+    resetKey: memoryStore.resetKey.bind(memoryStore),
+    resetAll: memoryStore.resetAll.bind(memoryStore),
+    shutdown: memoryStore.shutdown?.bind(memoryStore)
+  };
 }
 
 function createLimiter(config: RateLimiterConfig, storeFactory?: StoreFactory): RequestHandler {
-  const prefix = `${env.RATE_LIMIT_PREFIX}${config.name.replace(/[A-Z]/g, (match) => `-${match.toLowerCase()}`)}:`;
+  const prefix = `${env.RATE_LIMIT_PREFIX}${config.policyId}:`;
   const store = storeFactory?.(prefix) ?? createMemoryStore(prefix);
 
   return rateLimit({
@@ -75,7 +93,7 @@ function createLimiter(config: RateLimiterConfig, storeFactory?: StoreFactory): 
     legacyHeaders: false,
     skipSuccessfulRequests: false,
     skipFailedRequests: false,
-    keyGenerator: (request) => buildRateLimitKey(request, config.secondaryKey?.(request)),
+    keyGenerator: (request) => buildRateLimitKey(config.policyId, request, config.secondaryKey?.(request)),
     handler: (_request, response) => {
       response.status(429).json(RATE_LIMIT_EXCEEDED_RESPONSE);
     }
@@ -86,33 +104,33 @@ export function createRateLimiters(options?: { storeFactory?: (prefix: string) =
   const storeFactory = options?.storeFactory;
 
   return {
-    baseline: createLimiter({ name: "baseline", windowMs: 15 * 60 * 1000, limit: env.RATE_LIMIT_BASELINE_MAX }, storeFactory),
-    health: createLimiter({ name: "health", windowMs: 60 * 1000, limit: 120 }, storeFactory),
+    baseline: createLimiter({ name: "baseline", policyId: "baseline", windowMs: 15 * 60 * 1000, limit: env.RATE_LIMIT_BASELINE_MAX }, storeFactory),
+    health: createLimiter({ name: "health", policyId: "health", windowMs: 60 * 1000, limit: 120 }, storeFactory),
     login: createLimiter(
-      { name: "login", windowMs: 15 * 60 * 1000, limit: 10, secondaryKey: normalizeLoginEmail },
+      { name: "login", policyId: "login", windowMs: 15 * 60 * 1000, limit: 10, secondaryKey: normalizeLoginEmail },
       storeFactory
     ),
-    registration: createLimiter({ name: "registration", windowMs: 60 * 60 * 1000, limit: 5 }, storeFactory),
-    emailRequest: createLimiter({ name: "emailRequest", windowMs: 60 * 60 * 1000, limit: 5 }, storeFactory),
-    tokenConfirm: createLimiter({ name: "tokenConfirm", windowMs: 60 * 60 * 1000, limit: 20 }, storeFactory),
-    oauth: createLimiter({ name: "oauth", windowMs: 15 * 60 * 1000, limit: 20 }, storeFactory),
-    invitationLookup: createLimiter({ name: "invitationLookup", windowMs: 15 * 60 * 1000, limit: 30 }, storeFactory),
+    registration: createLimiter({ name: "registration", policyId: "registration", windowMs: 60 * 60 * 1000, limit: 5 }, storeFactory),
+    emailRequest: createLimiter({ name: "emailRequest", policyId: "email-request", windowMs: 60 * 60 * 1000, limit: 5 }, storeFactory),
+    tokenConfirm: createLimiter({ name: "tokenConfirm", policyId: "token-confirm", windowMs: 60 * 60 * 1000, limit: 20 }, storeFactory),
+    oauth: createLimiter({ name: "oauth", policyId: "oauth", windowMs: 15 * 60 * 1000, limit: 20 }, storeFactory),
+    invitationLookup: createLimiter({ name: "invitationLookup", policyId: "invitation-lookup", windowMs: 15 * 60 * 1000, limit: 30 }, storeFactory),
     publicShareRead: createLimiter(
-      { name: "publicShareRead", windowMs: 60 * 1000, limit: 60, secondaryKey: readTokenFromParams },
+      { name: "publicShareRead", policyId: "public-share-read", windowMs: 60 * 1000, limit: 60, secondaryKey: readTokenFromParams },
       storeFactory
     ),
     publicShareWrite: createLimiter(
-      { name: "publicShareWrite", windowMs: 60 * 1000, limit: 10, secondaryKey: readTokenFromParams },
+      { name: "publicShareWrite", policyId: "public-share-write", windowMs: 60 * 1000, limit: 10, secondaryKey: readTokenFromParams },
       storeFactory
     ),
     reviewCheck: createLimiter(
-      { name: "reviewCheck", windowMs: 60 * 60 * 1000, limit: 30, secondaryKey: readTokenFromParams },
+      { name: "reviewCheck", policyId: "review-check", windowMs: 60 * 60 * 1000, limit: 30, secondaryKey: readTokenFromParams },
       storeFactory
     ),
     reviewSubmit: createLimiter(
-      { name: "reviewSubmit", windowMs: 60 * 60 * 1000, limit: 10, secondaryKey: readTokenFromParams },
+      { name: "reviewSubmit", policyId: "review-submit", windowMs: 60 * 60 * 1000, limit: 10, secondaryKey: readTokenFromParams },
       storeFactory
     ),
-    photoProxy: createLimiter({ name: "photoProxy", windowMs: 60 * 1000, limit: 60 }, storeFactory)
+    photoProxy: createLimiter({ name: "photoProxy", policyId: "photo-proxy", windowMs: 60 * 1000, limit: 60 }, storeFactory)
   };
 }

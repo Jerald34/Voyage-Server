@@ -4,18 +4,30 @@ import request from "supertest";
 import { describe, expect, it } from "vitest";
 import { createRateLimiters, hashRateLimitKey } from "../src/http/rateLimiters";
 
+type RecordingBackend = {
+  counts: Map<string, number>;
+  resetTimes: Map<string, Date>;
+};
+
+function createRecordingBackend(): RecordingBackend {
+  return {
+    counts: new Map<string, number>(),
+    resetTimes: new Map<string, Date>()
+  };
+}
+
 class RecordingStore implements Store {
   localKeys = true;
   prefix?: string;
 
   private windowMs = 60_000;
-  private counts = new Map<string, number>();
-  private resetTimes = new Map<string, Date>();
+  private backend: RecordingBackend;
 
   readonly incrementKeys: string[] = [];
 
-  constructor(prefix?: string) {
+  constructor(prefix?: string, backend: RecordingBackend = createRecordingBackend()) {
     this.prefix = prefix;
+    this.backend = backend;
   }
 
   init(options: { windowMs: number }) {
@@ -23,68 +35,84 @@ class RecordingStore implements Store {
   }
 
   async get(key: string) {
-    const totalHits = this.counts.get(key);
+    const totalHits = this.backend.counts.get(key);
     if (totalHits === undefined) {
       return undefined;
     }
 
     return {
       totalHits,
-      resetTime: this.resetTimes.get(key)
+      resetTime: this.backend.resetTimes.get(key)
     };
   }
 
   async increment(key: string) {
     this.incrementKeys.push(key);
 
-    const totalHits = (this.counts.get(key) ?? 0) + 1;
-    this.counts.set(key, totalHits);
+    const totalHits = (this.backend.counts.get(key) ?? 0) + 1;
+    this.backend.counts.set(key, totalHits);
 
-    if (!this.resetTimes.has(key)) {
-      this.resetTimes.set(key, new Date(Date.now() + this.windowMs));
+    if (!this.backend.resetTimes.has(key)) {
+      this.backend.resetTimes.set(key, new Date(Date.now() + this.windowMs));
     }
 
     return {
       totalHits,
-      resetTime: this.resetTimes.get(key)
+      resetTime: this.backend.resetTimes.get(key)
     };
   }
 
   async decrement(key: string) {
-    const totalHits = this.counts.get(key);
+    const totalHits = this.backend.counts.get(key);
     if (totalHits === undefined) {
       return;
     }
 
     if (totalHits <= 1) {
-      this.counts.delete(key);
-      this.resetTimes.delete(key);
+      this.backend.counts.delete(key);
+      this.backend.resetTimes.delete(key);
       return;
     }
 
-    this.counts.set(key, totalHits - 1);
+    this.backend.counts.set(key, totalHits - 1);
   }
 
   async resetKey(key: string) {
-    this.counts.delete(key);
-    this.resetTimes.delete(key);
+    this.backend.counts.delete(key);
+    this.backend.resetTimes.delete(key);
   }
 }
 
-function createGetApp(path: string, limiter: RequestHandler) {
+function createRequestIpOverrideMiddleware(): RequestHandler {
+  return (request, _response, next) => {
+    const override = request.headers["x-test-ip-override"];
+    if (override !== undefined) {
+      const value = Array.isArray(override) ? override[0] : override;
+
+      Object.defineProperty(request, "ip", {
+        configurable: true,
+        value: value === "__undefined__" ? undefined : value
+      });
+    }
+
+    next();
+  };
+}
+
+function createGetApp(path: string, limiter: RequestHandler, beforeLimiter?: RequestHandler) {
   const app = express();
   app.set("trust proxy", 1);
-  app.get(path, limiter, (_request, response) => {
+  app.get(path, beforeLimiter ?? ((_request, _response, next) => next()), limiter, (_request, response) => {
     response.json({ ok: true });
   });
   return app;
 }
 
-function createPostApp(path: string, limiter: RequestHandler) {
+function createPostApp(path: string, limiter: RequestHandler, beforeLimiter?: RequestHandler) {
   const app = express();
   app.set("trust proxy", 1);
   app.use(express.json());
-  app.post(path, limiter, (_request, response) => {
+  app.post(path, beforeLimiter ?? ((_request, _response, next) => next()), limiter, (_request, response) => {
     response.json({ ok: true });
   });
   return app;
@@ -179,6 +207,40 @@ describe("rateLimiters", () => {
     expect(store?.incrementKeys[0]).not.toContain("raw-token-ABC");
   });
 
+  it("uses one stable fallback bucket when request.ip is missing or malformed", async () => {
+    const stores = new Map<string, RecordingStore>();
+    const limiters = createRateLimiters({
+      storeFactory: (prefix) => {
+        const store = new RecordingStore(prefix);
+        stores.set(prefix, store);
+        return store;
+      }
+    });
+    const app = createGetApp("/health", limiters.health, createRequestIpOverrideMiddleware());
+
+    const missingResponse = await request(app)
+      .get("/health")
+      .set("X-Test-Ip-Override", "__undefined__");
+    const malformedResponse = await request(app)
+      .get("/health")
+      .set("X-Test-Ip-Override", "not-an-ip");
+    const malformedIpv6Response = await request(app)
+      .get("/health")
+      .set("X-Test-Ip-Override", ":::bad::ip:::");
+
+    expect(missingResponse.status).toBe(200);
+    expect(malformedResponse.status).toBe(200);
+    expect(malformedIpv6Response.status).toBe(200);
+
+    const healthStore = stores.get("voyage:rate-limit:health:");
+    expect(healthStore?.incrementKeys).toHaveLength(3);
+    expect(healthStore?.incrementKeys[0]).toBe(healthStore?.incrementKeys[1]);
+    expect(healthStore?.incrementKeys[1]).toBe(healthStore?.incrementKeys[2]);
+    expect(healthStore?.incrementKeys[0]).not.toBe("");
+    expect(healthStore?.incrementKeys[1]).not.toContain("not-an-ip");
+    expect(healthStore?.incrementKeys[2]).not.toContain(":::bad::ip:::");
+  });
+
   it("passes unique policy prefixes into the store factory and uses the returned store", async () => {
     const prefixes: string[] = [];
     const stores = new Map<string, RecordingStore>();
@@ -213,6 +275,32 @@ describe("rateLimiters", () => {
     ]);
     expect(new Set(prefixes).size).toBe(prefixes.length);
     expect(stores.get("voyage:rate-limit:health:")?.incrementKeys).toHaveLength(1);
+  });
+
+  it("embeds policy identity in the key so shared stores cannot collide across policies", async () => {
+    const backend = createRecordingBackend();
+    const stores = new Map<string, RecordingStore>();
+    const limiters = createRateLimiters({
+      storeFactory: (prefix) => {
+        const store = new RecordingStore(prefix, backend);
+        stores.set(prefix, store);
+        return store;
+      }
+    });
+    const publicShareWriteApp = createPostApp("/shared/:token/comments", limiters.publicShareWrite);
+    const reviewSubmitApp = createPostApp("/reviews/:tripToken/submit", limiters.reviewSubmit);
+
+    await exhaustRequests(publicShareWriteApp, "/shared/shared-token/comments", 10, { body: "ok" });
+
+    const reviewSubmitResponse = await request(reviewSubmitApp)
+      .post("/reviews/shared-token/submit")
+      .set("X-Forwarded-For", "203.0.113.10")
+      .send({ rating: 5 });
+
+    expect(reviewSubmitResponse.status).toBe(200);
+    expect(stores.get("voyage:rate-limit:public-share-write:")?.incrementKeys[0]).not.toBe(
+      stores.get("voyage:rate-limit:review-submit:")?.incrementKeys[0]
+    );
   });
 
   it("creates isolated in-memory counters for separate createRateLimiters calls", async () => {
