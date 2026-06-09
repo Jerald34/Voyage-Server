@@ -1,5 +1,6 @@
 import nodemailer, { type Transporter } from "nodemailer";
 import { env } from "../config/env";
+import { escapeHtmlText } from "../utils/html";
 
 export type VerificationEmailPayload = {
   to: string;
@@ -99,20 +100,24 @@ async function sendMail(mail: Mail) {
 const baseStyles = `font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;line-height:1.6;color:#1d2024;`;
 
 export async function sendVerificationEmail(payload: VerificationEmailPayload) {
+  const displayName = escapeHtmlText(payload.displayName);
+  const verificationUrl = escapeHtmlText(payload.verificationUrl);
   await sendMail({
     to: payload.to,
     subject: "Verify your Voyage email",
-    html: `<div style="${baseStyles}"><p>Hello ${payload.displayName},</p><p>Confirm your email to finish setting up your Voyage account.</p><p><a href="${payload.verificationUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Verify email</a></p><p style="font-size:13px;color:#666">Or paste this link in your browser:<br/>${payload.verificationUrl}</p><p style="font-size:13px;color:#666">This link expires in 24 hours.</p></div>`,
+    html: `<div style="${baseStyles}"><p>Hello ${displayName},</p><p>Confirm your email to finish setting up your Voyage account.</p><p><a href="${verificationUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Verify email</a></p><p style="font-size:13px;color:#666">Or paste this link in your browser:<br/>${verificationUrl}</p><p style="font-size:13px;color:#666">This link expires in 24 hours.</p></div>`,
     text: `Hello ${payload.displayName},\n\nConfirm your email at: ${payload.verificationUrl}\n\nThis link expires in 24 hours.`,
     logMessage: `Verification email for ${payload.to}: ${payload.verificationUrl}`
   });
 }
 
 export async function sendPasswordResetEmail(payload: PasswordResetEmailPayload) {
+  const displayName = escapeHtmlText(payload.displayName);
+  const resetUrl = escapeHtmlText(payload.resetUrl);
   await sendMail({
     to: payload.to,
     subject: "Reset your Voyage password",
-    html: `<div style="${baseStyles}"><p>Hello ${payload.displayName},</p><p>Reset your Voyage password by opening this link:</p><p><a href="${payload.resetUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Reset password</a></p><p style="font-size:13px;color:#666">If you didn't ask for this, you can ignore this email.</p></div>`,
+    html: `<div style="${baseStyles}"><p>Hello ${displayName},</p><p>Reset your Voyage password by opening this link:</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Reset password</a></p><p style="font-size:13px;color:#666">If you didn't ask for this, you can ignore this email.</p></div>`,
     text: `Hello ${payload.displayName},\n\nReset your Voyage password at: ${payload.resetUrl}\n\nIf you didn't ask for this, you can ignore this email.`,
     logMessage: `Password reset email for ${payload.to}: ${payload.resetUrl}`
   });
@@ -126,15 +131,16 @@ export type TripReviewEmailPayload = {
 };
 
 export async function sendTripReviewEmail(payload: TripReviewEmailPayload) {
-  const greeting = payload.clientName ? `Hello ${payload.clientName},` : "Hello,";
+  const greetingText = payload.clientName ? `Hello ${payload.clientName},` : "Hello,";
+  const greetingHtml = payload.clientName ? `Hello ${escapeHtmlText(payload.clientName)},` : "Hello,";
   const baseUrl = `${env.APP_ORIGIN.replace(/\/+$/, "")}/reviews/${payload.tripToken}`;
   const star = (n: number) =>
-    `<a href="${baseUrl}?rating=${n}" style="display:inline-block;padding:8px 12px;margin:0 4px;background:#FAFAFA;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:#1d2024;font-size:20px;">${"⭐".repeat(n)}</a>`;
+    `<a href="${escapeHtmlText(`${baseUrl}?rating=${n}`)}" style="display:inline-block;padding:8px 12px;margin:0 4px;background:#FAFAFA;border:1px solid #ddd;border-radius:6px;text-decoration:none;color:#1d2024;font-size:20px;">${"⭐".repeat(n)}</a>`;
   await sendMail({
     to: payload.to,
     subject: `How was your trip to ${payload.tripTitle}?`,
-    html: `<div style="${baseStyles}"><p>${greeting}</p><p>We hope you enjoyed your trip to <strong>${payload.tripTitle}</strong>. How would you rate it overall?</p><p style="text-align:center;margin:24px 0;">${star(1)}${star(2)}${star(3)}${star(4)}${star(5)}</p><p style="font-size:13px;color:#666">Tap a rating above and we'll ask you for the rest. Should take 30 seconds.</p></div>`,
-    text: `${greeting}\n\nWe hope you enjoyed your trip to ${payload.tripTitle}. Rate it 1-5 stars:\n\n${[1, 2, 3, 4, 5]
+    html: `<div style="${baseStyles}"><p>${greetingHtml}</p><p>We hope you enjoyed your trip to <strong>${escapeHtmlText(payload.tripTitle)}</strong>. How would you rate it overall?</p><p style="text-align:center;margin:24px 0;">${star(1)}${star(2)}${star(3)}${star(4)}${star(5)}</p><p style="font-size:13px;color:#666">Tap a rating above and we'll ask you for the rest. Should take 30 seconds.</p></div>`,
+    text: `${greetingText}\n\nWe hope you enjoyed your trip to ${payload.tripTitle}. Rate it 1-5 stars:\n\n${[1, 2, 3, 4, 5]
       .map((n) => `${n} stars: ${baseUrl}?rating=${n}`)
       .join("\n")}\n`,
     logMessage: `Trip review email for ${payload.to}: ${baseUrl}`
@@ -142,10 +148,14 @@ export async function sendTripReviewEmail(payload: TripReviewEmailPayload) {
 }
 
 export async function sendAgencyInvitationEmail(payload: AgencyInvitationEmailPayload) {
+  const inviterName = escapeHtmlText(payload.inviterName);
+  const agencyName = escapeHtmlText(payload.agencyName);
+  const acceptUrl = escapeHtmlText(payload.acceptUrl);
+  const role = escapeHtmlText(payload.role);
   await sendMail({
     to: payload.to,
     subject: `${payload.inviterName} invited you to join ${payload.agencyName} on Voyage`,
-    html: `<div style="${baseStyles}"><p>Hello,</p><p><strong>${payload.inviterName}</strong> has invited you to join <strong>${payload.agencyName}</strong> on Voyage as <strong>${payload.role}</strong>.</p><p><a href="${payload.acceptUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Accept invitation</a></p><p style="font-size:13px;color:#666">Or paste this link:<br/>${payload.acceptUrl}</p><p style="font-size:13px;color:#666">This invitation expires in 7 days.</p></div>`,
+    html: `<div style="${baseStyles}"><p>Hello,</p><p><strong>${inviterName}</strong> has invited you to join <strong>${agencyName}</strong> on Voyage as <strong>${role}</strong>.</p><p><a href="${acceptUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Accept invitation</a></p><p style="font-size:13px;color:#666">Or paste this link:<br/>${acceptUrl}</p><p style="font-size:13px;color:#666">This invitation expires in 7 days.</p></div>`,
     text: `${payload.inviterName} invited you to join ${payload.agencyName} on Voyage as ${payload.role}.\n\nAccept at: ${payload.acceptUrl}\n\nThis invitation expires in 7 days.`,
     logMessage: `Agency invite email for ${payload.to}: ${payload.acceptUrl}`
   });
