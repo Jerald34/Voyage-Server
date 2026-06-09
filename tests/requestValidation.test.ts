@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, expectTypeOf, it } from "vitest";
 
 import {
   idParamsSchema,
@@ -45,6 +45,18 @@ describe("requestSchemas", () => {
     expect(longTextSchema.parse("  Long text  ")).toBe("Long text");
   });
 
+  it("enforces shortTextSchema boundaries after trimming", () => {
+    expect(shortTextSchema.safeParse("   ").success).toBe(false);
+    expect(shortTextSchema.parse(`  ${"x".repeat(200)}  `)).toBe("x".repeat(200));
+    expect(shortTextSchema.safeParse("x".repeat(201)).success).toBe(false);
+  });
+
+  it("enforces longTextSchema boundaries after trimming", () => {
+    expect(longTextSchema.safeParse("   ").success).toBe(false);
+    expect(longTextSchema.parse(`  ${"x".repeat(5000)}  `)).toBe("x".repeat(5000));
+    expect(longTextSchema.safeParse("x".repeat(5001)).success).toBe(false);
+  });
+
   it("applies pagination defaults, coercion, bounds, and strict keys", () => {
     expect(paginationQuerySchema.parse({})).toEqual({ limit: 50 });
     expect(paginationQuerySchema.parse({ cursor: "  abc  ", limit: "12" })).toEqual({
@@ -60,13 +72,17 @@ describe("requestSchemas", () => {
 
   it("validates each UUID in a multi-name params schema", () => {
     const multiIdParamsSchema = idParamsSchema("tripId", "agencyId");
+    const parsed = multiIdParamsSchema.parse({
+      tripId: "550e8400-e29b-41d4-a716-446655440000",
+      agencyId: "123e4567-e89b-12d3-a456-426614174000"
+    });
 
-    expect(
-      multiIdParamsSchema.parse({
-        tripId: "550e8400-e29b-41d4-a716-446655440000",
-        agencyId: "123e4567-e89b-12d3-a456-426614174000"
-      })
-    ).toEqual({
+    expectTypeOf(parsed).toEqualTypeOf<{
+      tripId: string;
+      agencyId: string;
+    }>();
+
+    expect(parsed).toEqual({
       tripId: "550e8400-e29b-41d4-a716-446655440000",
       agencyId: "123e4567-e89b-12d3-a456-426614174000"
     });
