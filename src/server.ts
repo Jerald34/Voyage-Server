@@ -4,7 +4,11 @@ import { prepareGoogleApplicationCredentials } from "./config/googleCredentials"
 import { initializeRateLimiterStoreLifecycle } from "./http/rateLimiters";
 import { initReviewScheduler } from "./modules/reviews/reviewScheduler";
 
-prepareGoogleApplicationCredentials();
+const googleCredentials = prepareGoogleApplicationCredentials();
+
+process.once("exit", () => {
+  googleCredentials?.cleanup();
+});
 
 function closeServer(server: import("node:http").Server): Promise<void> {
   return new Promise((resolve, reject) => {
@@ -37,17 +41,20 @@ async function main() {
       if (!shutdownPromise) {
         shutdownPromise = (async () => {
           console.log(`[server] Shutting down after ${signal}`);
+          try {
+            const results = await Promise.allSettled([
+              closeServer(server),
+              rateLimiterStores.close()
+            ]);
+            const rejectedResult = results.find(
+              (result): result is PromiseRejectedResult => result.status === "rejected"
+            );
 
-          const results = await Promise.allSettled([
-            closeServer(server),
-            rateLimiterStores.close()
-          ]);
-          const rejectedResult = results.find(
-            (result): result is PromiseRejectedResult => result.status === "rejected"
-          );
-
-          if (rejectedResult) {
-            throw rejectedResult.reason;
+            if (rejectedResult) {
+              throw rejectedResult.reason;
+            }
+          } finally {
+            googleCredentials?.cleanup();
           }
         })();
       }
