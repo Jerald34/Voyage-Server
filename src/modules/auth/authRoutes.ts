@@ -6,13 +6,18 @@ import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
 import { env } from "../../config/env";
 import { verifyAppleIdToken, verifyGoogleAuthorizationCode } from "../../services/oauth";
-import { z } from "zod";
 import {
+  appleCallbackBodySchema,
+  confirmVerificationSchema,
   emailCheckSchema,
+  googleCallbackQuerySchema,
   loginSchema,
+  requestPasswordResetSchema,
   registerSchema,
   setAccountTypeSchema,
-  updateProfileSchema
+  updateProfileSchema,
+  verificationRequestSchema,
+  confirmPasswordResetSchema
 } from "./authSchemas";
 import { authService } from "./authService";
 
@@ -47,31 +52,25 @@ function generateOAuthCsrfTokens(response: import("express").Response) {
   return { state, nonce };
 }
 
-function verifyOAuthState(
+function clearOAuthStateCookies(response: import("express").Response) {
+  response.clearCookie(OAUTH_STATE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
+  response.clearCookie(OAUTH_NONCE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
+}
+
+function consumeExpectedOAuthState(
   request: import("express").Request,
   response: import("express").Response
 ) {
   const expected = request.cookies?.[OAUTH_STATE_COOKIE];
-  const received =
-    typeof request.query.state === "string"
-      ? request.query.state
-      : typeof request.body?.state === "string"
-        ? request.body.state
-        : undefined;
+  clearOAuthStateCookies(response);
+  return typeof expected === "string" ? expected : undefined;
+}
 
-  // Always clear the cookies regardless of success/failure (one-use).
-  response.clearCookie(OAUTH_STATE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
-  response.clearCookie(OAUTH_NONCE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
-
-  if (!expected || !received || expected !== received) {
+function verifyOAuthState(expected: string | undefined, received: string) {
+  if (!expected || expected !== received) {
     throw new ApiError(400, "OAUTH_STATE_MISMATCH", "OAuth state parameter is missing or invalid. Please try signing in again.");
   }
 }
-
-const verificationRequestSchema = z.object({ email: z.string().trim().toLowerCase().email() });
-const verificationConfirmSchema = z.object({ token: z.string().min(1) });
-const passwordResetRequestSchema = z.object({ email: z.string().trim().toLowerCase().email() });
-const passwordResetConfirmSchema = z.object({ token: z.string().min(1), password: z.string().min(8) });
 
 export const authRoutes = Router();
 
@@ -176,7 +175,7 @@ authRoutes.post("/email/verification/request", async (request, response, next) =
 
 authRoutes.post("/email/verification/confirm", async (request, response, next) => {
   try {
-    const input = verificationConfirmSchema.parse(request.body);
+    const input = confirmVerificationSchema.parse(request.body);
     await authService.confirmEmailVerification(input.token);
     response.json({ ok: true });
   } catch (error) {
@@ -186,7 +185,7 @@ authRoutes.post("/email/verification/confirm", async (request, response, next) =
 
 authRoutes.post("/password/reset/request", async (request, response, next) => {
   try {
-    const input = passwordResetRequestSchema.parse(request.body);
+    const input = requestPasswordResetSchema.parse(request.body);
     await authService.requestPasswordReset({ email: input.email });
     response.status(202).json({ ok: true });
   } catch (error) {
@@ -196,7 +195,7 @@ authRoutes.post("/password/reset/request", async (request, response, next) => {
 
 authRoutes.post("/password/reset/confirm", async (request, response, next) => {
   try {
-    const input = passwordResetConfirmSchema.parse(request.body);
+    const input = confirmPasswordResetSchema.parse(request.body);
     await authService.confirmPasswordReset(input);
     response.json({ ok: true });
   } catch (error) {
@@ -226,14 +225,16 @@ authRoutes.get("/google/start", (_request, response, next) => {
 
 authRoutes.get("/google/callback", async (request, response, next) => {
   try {
-    // F3: Verify state cookie before processing the authorization code.
-    verifyOAuthState(request, response);
+    const expectedState = consumeExpectedOAuthState(request, response);
+    const { code, state } = googleCallbackQuerySchema.parse(request.query);
 
-    const authCode = typeof request.query.code === "string" ? request.query.code : "";
-    if (!authCode) {
+    // F3: Verify state cookie before processing the authorization code.
+    verifyOAuthState(expectedState, state ?? "");
+
+    if (!code) {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Google authorization code is required.");
     }
-    const claims = await verifyGoogleAuthorizationCode(authCode);
+    const claims = await verifyGoogleAuthorizationCode(code);
     const result = await authService.signInWithVerifiedOAuth(claims);
     setSessionCookie(response, result.sessionToken);
     response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
@@ -264,10 +265,12 @@ authRoutes.get("/apple/start", (_request, response, next) => {
 
 authRoutes.post("/apple/callback", async (request, response, next) => {
   try {
-    // F3: Verify state (round-tripped via form_post body for Apple).
-    verifyOAuthState(request, response);
+    const expectedState = consumeExpectedOAuthState(request, response);
+    const { id_token: idToken, state } = appleCallbackBodySchema.parse(request.body);
 
-    const idToken = typeof request.body?.id_token === "string" ? request.body.id_token : "";
+    // F3: Verify state (round-tripped via form_post body for Apple).
+    verifyOAuthState(expectedState, state ?? "");
+
     if (!idToken) {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Apple id_token is required.");
     }

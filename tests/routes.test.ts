@@ -115,12 +115,61 @@ describe("app routes", () => {
     });
   });
 
+  it("rejects registration payloads with unknown keys", async () => {
+    const app = createApp();
+
+    const response = await request(app).post("/auth/register").send({
+      email: "new-user@example.com",
+      password: "correct horse battery staple",
+      displayName: "New User",
+      role: "SUPER_ADMIN"
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Request validation failed.",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            keys: ["role"]
+          })
+        ])
+      }
+    });
+  });
+
   it("validates email verification request input", async () => {
     const app = createApp();
 
     const response = await request(app).post("/auth/email/verification/request").send({});
 
     expect(response.status).toBe(400);
+  });
+
+  it("rejects unknown login keys", async () => {
+    const app = createApp();
+
+    const response = await request(app).post("/auth/login").send({
+      email: "user@example.com",
+      password: "password",
+      extra: true
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Request validation failed.",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            keys: ["extra"]
+          })
+        ])
+      }
+    });
   });
 
   it("requires auth for agency settings updates", async () => {

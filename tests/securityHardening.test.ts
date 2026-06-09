@@ -63,6 +63,30 @@ vi.mock("../src/modules/reviews/reviewService", () => ({
   }
 }));
 
+vi.mock("../src/modules/agencies/teamRoutes", async () => {
+  const actual = await vi.importActual<typeof import("../src/modules/agencies/teamRoutes")>(
+    "../src/modules/agencies/teamRoutes"
+  );
+
+  return {
+    ...actual,
+    invitationService: {
+      lookup: vi.fn(async () => ({
+        email: "invitee@example.com",
+        emailNormalized: "invitee@example.com",
+        role: "STAFF",
+        agencyName: "Voyage Test",
+        agencyId: "agency-1",
+        agencyStatus: "VERIFIED",
+        inviterName: "Inviter",
+        accountExists: false,
+        expiresAt: new Date("2026-06-30T00:00:00.000Z")
+      })),
+      accept: vi.fn(async () => ({ agencyId: "agency-1", alreadyMember: false }))
+    }
+  };
+});
+
 vi.mock("../src/db/prisma", () => ({
   prisma: {
     session: {
@@ -146,7 +170,12 @@ vi.mock("../src/db/prisma", () => ({
 
 import { createApp } from "../src/app";
 import { env } from "../src/config/env";
-import { verifyGoogleAuthorizationCode } from "../src/services/oauth";
+import { authService } from "../src/modules/auth/authService";
+import { invitationService } from "../src/modules/agencies/teamRoutes";
+import { reviewService } from "../src/modules/reviews/reviewService";
+import { shareService } from "../src/modules/shares/shareService";
+import { hashToken } from "../src/services/tokens";
+import { verifyAppleIdToken, verifyGoogleAuthorizationCode } from "../src/services/oauth";
 
 // ── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -169,6 +198,19 @@ function seedUser(overrides: AnyRow = {}) {
   return user;
 }
 
+function seedSession(userId = "user-existing", rawToken = "session-token-123456") {
+  store.sessions.push({
+    id: `session-${store.sessions.length + 1}`,
+    userId,
+    tokenHash: hashToken(rawToken),
+    expiresAt: new Date("2026-12-31T00:00:00.000Z"),
+    createdAt: new Date("2026-06-01T00:00:00.000Z"),
+    updatedAt: new Date("2026-06-01T00:00:00.000Z")
+  });
+
+  return `${env.SESSION_COOKIE_NAME}=${rawToken}`;
+}
+
 function extractStateCookie(setCookie: string | string[] | undefined): string | undefined {
   const header = Array.isArray(setCookie) ? setCookie : [setCookie].filter(Boolean) as string[];
   return header.map((c) => c.split(";")[0]).find((c) => c.startsWith("voyage_oauth_state="));
@@ -187,6 +229,11 @@ async function getOAuthStateForTest(app: ReturnType<typeof createApp>): Promise<
   return { stateCookie, stateValue };
 }
 
+function expectValidationError(response: request.Response) {
+  expect(response.status).toBe(400);
+  expect(response.body?.error?.code).toBe("VALIDATION_ERROR");
+}
+
 type RateLimitRouteCase = {
   name: string;
   method: "get" | "post";
@@ -197,6 +244,13 @@ type RateLimitRouteCase = {
 
 const TEST_IP = "203.0.113.77";
 const STORE_FAILURE_SECRET = "redis://secret-user:secret-password@cache.internal:6379";
+const VALID_AUTH_TOKEN = "A".repeat(16);
+const VALID_INVITATION_TOKEN = "B".repeat(16);
+const VALID_SHARE_TOKEN = "share-token-12";
+const VALID_REVIEW_TOKEN = "review-token-123456";
+const VALID_GOOGLE_CODE = "google-code-123456";
+const VALID_OAUTH_STATE = "oauth-state-123456";
+const VALID_APPLE_ID_TOKEN = `apple.${"x".repeat(64)}.token`;
 
 class ThrowingStore implements Store {
   localKeys = false;
@@ -267,6 +321,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   delete process.env["GOOGLE_CLIENT_ID"];
   delete process.env["GOOGLE_CLIENT_SECRET"];
   delete process.env["GOOGLE_REDIRECT_URI"];
@@ -392,6 +447,447 @@ describe("F3 — OAuth login-CSRF state enforcement", () => {
 });
 
 // ── F4 tests ─────────────────────────────────────────────────────────────────
+
+describe("strict public request validation", () => {
+  it("rejects registration payloads with an unknown role key before authService runs", async () => {
+    const registerSpy = vi.spyOn(authService, "registerWithEmail");
+    const app = createApp();
+
+    const response = await request(app).post("/auth/register").send({
+      email: "NewUser@example.com",
+      password: "correct horse battery staple",
+      displayName: "New User",
+      role: "SUPER_ADMIN"
+    });
+
+    expectValidationError(response);
+    expect(registerSpy).not.toHaveBeenCalled();
+    expect(store.users).toHaveLength(0);
+  });
+
+  it.each([
+    {
+      name: "login",
+      path: "/auth/login",
+      body: { email: "User@example.com", password: "secret-password", extra: true },
+      spy: () => vi.spyOn(authService, "loginWithEmail")
+    },
+    {
+      name: "email check",
+      path: "/auth/email/check",
+      body: { email: "User@example.com", extra: true },
+      spy: () => vi.spyOn(authService, "checkEmail")
+    },
+    {
+      name: "email verification request",
+      path: "/auth/email/verification/request",
+      body: { email: "User@example.com", extra: true },
+      spy: () => vi.spyOn(authService, "requestEmailVerificationByEmail")
+    },
+    {
+      name: "email verification confirm",
+      path: "/auth/email/verification/confirm",
+      body: { token: VALID_AUTH_TOKEN, extra: true },
+      spy: () => vi.spyOn(authService, "confirmEmailVerification")
+    },
+    {
+      name: "password reset request",
+      path: "/auth/password/reset/request",
+      body: { email: "User@example.com", extra: true },
+      spy: () => vi.spyOn(authService, "requestPasswordReset")
+    },
+    {
+      name: "password reset confirm",
+      path: "/auth/password/reset/confirm",
+      body: {
+        token: VALID_AUTH_TOKEN,
+        password: "replacement-password",
+        extra: true
+      },
+      spy: () => vi.spyOn(authService, "confirmPasswordReset")
+    }
+  ])("rejects unknown keys for $name before authService runs", async ({ path, body, spy }) => {
+    const serviceSpy = spy();
+    const app = createApp();
+
+    const response = await request(app).post(path).send(body);
+
+    expectValidationError(response);
+    expect(serviceSpy).not.toHaveBeenCalled();
+  });
+
+  it("normalizes public auth email inputs before authService sees them", async () => {
+    const checkEmailSpy = vi.spyOn(authService, "checkEmail").mockResolvedValue({ available: true });
+    const app = createApp();
+
+    const response = await request(app).post("/auth/email/check").send({
+      email: "  User.Name+tag@Example.COM  "
+    });
+
+    expect(response.status).toBe(200);
+    expect(checkEmailSpy).toHaveBeenCalledWith("user.name+tag@example.com");
+  });
+
+  it("rejects duplicate google callback query arrays before OAuth verification runs", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .get(`/auth/google/callback?code=${VALID_GOOGLE_CODE}&code=duplicate&state=${VALID_OAUTH_STATE}`)
+      .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`);
+
+    expectValidationError(response);
+    expect(vi.mocked(verifyGoogleAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "google auth code",
+      url: `/auth/google/callback?code=${"c".repeat(513)}&state=${VALID_OAUTH_STATE}`,
+      cookie: `voyage_oauth_state=${VALID_OAUTH_STATE}`
+    },
+    {
+      name: "google oauth state",
+      url: `/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${"s".repeat(513)}`,
+      cookie: `voyage_oauth_state=${VALID_OAUTH_STATE}`
+    }
+  ])("rejects oversized $name", async ({ url, cookie }) => {
+    const app = createApp();
+
+    const response = await request(app)
+      .get(url)
+      .set("Cookie", cookie);
+
+    expectValidationError(response);
+    expect(vi.mocked(verifyGoogleAuthorizationCode)).not.toHaveBeenCalled();
+  });
+
+  it("accepts a valid Apple callback submitted as urlencoded form data", async () => {
+    seedUser();
+    const signInSpy = vi.spyOn(authService, "signInWithVerifiedOAuth");
+    vi.mocked(verifyAppleIdToken).mockResolvedValue({
+      provider: "APPLE",
+      providerAccountId: "apple-user-1",
+      email: "alice@example.com",
+      emailVerified: true,
+      displayName: "Alice"
+    });
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/auth/apple/callback")
+      .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+      .type("form")
+      .send({
+        id_token: VALID_APPLE_ID_TOKEN,
+        state: VALID_OAUTH_STATE
+      });
+
+    expect(response.status).toBe(302);
+    expect(vi.mocked(verifyAppleIdToken)).toHaveBeenCalledWith(VALID_APPLE_ID_TOKEN);
+    expect(signInSpy).toHaveBeenCalled();
+  });
+
+  it("rejects oversized Apple callback id_token values before OAuth verification runs", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post("/auth/apple/callback")
+      .set("Cookie", `voyage_oauth_state=${VALID_OAUTH_STATE}`)
+      .type("form")
+      .send({
+        id_token: "x".repeat(4097),
+        state: VALID_OAUTH_STATE
+      });
+
+    expectValidationError(response);
+    expect(vi.mocked(verifyAppleIdToken)).not.toHaveBeenCalled();
+  });
+
+  it("rejects duplicate invitation lookup tokens before invitationService runs", async () => {
+    const app = createApp();
+
+    const response = await request(app).get(
+      `/invitations/lookup?token=${VALID_INVITATION_TOKEN}&token=duplicate-token`
+    );
+
+    expectValidationError(response);
+    expect(vi.mocked(invitationService.lookup)).not.toHaveBeenCalled();
+  });
+
+  it("rejects malformed invitation accept bodies before invitationService runs", async () => {
+    seedUser();
+    const sessionCookie = seedSession();
+    const app = createApp();
+
+    const shortTokenResponse = await request(app)
+      .post("/invitations/accept")
+      .set("Cookie", sessionCookie)
+      .send({ token: "short-token" });
+    const unknownKeyResponse = await request(app)
+      .post("/invitations/accept")
+      .set("Cookie", sessionCookie)
+      .send({ token: VALID_INVITATION_TOKEN, extra: true });
+
+    expectValidationError(shortTokenResponse);
+    expectValidationError(unknownKeyResponse);
+    expect(vi.mocked(invitationService.accept)).not.toHaveBeenCalled();
+  });
+
+  it("trims and normalizes public share comment input before shareService sees it", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post(`/shared/${VALID_SHARE_TOKEN}/comments`)
+      .send({
+        authorName: "  Alice Example  ",
+        authorEmail: "  ALICE@Example.com  ",
+        content: "  Great itinerary.  "
+      });
+
+    expect(response.status).toBe(201);
+    expect(vi.mocked(shareService.addComment)).toHaveBeenCalledWith(
+      VALID_SHARE_TOKEN,
+      expect.objectContaining({
+        authorName: "Alice Example",
+        authorEmail: "alice@example.com",
+        content: "Great itinerary."
+      })
+    );
+  });
+
+  it.each([
+    {
+      name: "too-short share token",
+      path: "/shared/short/comments",
+      body: {
+        authorName: "Alice Example",
+        content: "Great itinerary."
+      }
+    },
+    {
+      name: "too-long share token",
+      path: `/shared/${"x".repeat(513)}/comments`,
+      body: {
+        authorName: "Alice Example",
+        content: "Great itinerary."
+      }
+    },
+    {
+      name: "whitespace-only authorName",
+      path: `/shared/${VALID_SHARE_TOKEN}/comments`,
+      body: {
+        authorName: "   ",
+        content: "Great itinerary."
+      }
+    },
+    {
+      name: "whitespace-only content",
+      path: `/shared/${VALID_SHARE_TOKEN}/comments`,
+      body: {
+        authorName: "Alice Example",
+        content: "   "
+      }
+    },
+    {
+      name: "overlength authorName",
+      path: `/shared/${VALID_SHARE_TOKEN}/comments`,
+      body: {
+        authorName: "A".repeat(201),
+        content: "Great itinerary."
+      }
+    },
+    {
+      name: "overlength content",
+      path: `/shared/${VALID_SHARE_TOKEN}/comments`,
+      body: {
+        authorName: "Alice Example",
+        content: "x".repeat(5001)
+      }
+    },
+    {
+      name: "invalid authorEmail",
+      path: `/shared/${VALID_SHARE_TOKEN}/comments`,
+      body: {
+        authorName: "Alice Example",
+        authorEmail: "not-an-email",
+        content: "Great itinerary."
+      }
+    },
+    {
+      name: "unknown comment field",
+      path: `/shared/${VALID_SHARE_TOKEN}/comments`,
+      body: {
+        authorName: "Alice Example",
+        content: "Great itinerary.",
+        extra: true
+      }
+    }
+  ])("rejects $name on public share comments before shareService runs", async ({ path, body }) => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post(path)
+      .send(body);
+
+    expectValidationError(response);
+    expect(vi.mocked(shareService.addComment)).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    {
+      name: "unknown rating field",
+      path: `/shared/${VALID_SHARE_TOKEN}/rate`,
+      body: {
+        rating: 5,
+        extra: true
+      }
+    },
+    {
+      name: "whitespace-only rating comment",
+      path: `/shared/${VALID_SHARE_TOKEN}/rate`,
+      body: {
+        rating: 5,
+        comment: "   "
+      }
+    },
+    {
+      name: "overlength rating comment",
+      path: `/shared/${VALID_SHARE_TOKEN}/rate`,
+      body: {
+        rating: 5,
+        comment: "x".repeat(1001)
+      }
+    },
+    {
+      name: "too-short rating token",
+      path: "/shared/short/rate",
+      body: {
+        rating: 5
+      }
+    }
+  ])("rejects $name before proposal rating service runs", async ({ path, body }) => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post(path)
+      .send(body);
+
+    expectValidationError(response);
+    expect(vi.mocked(reviewService.rateProposal)).not.toHaveBeenCalled();
+  });
+
+  it("trims and normalizes public review submissions before reviewService sees them", async () => {
+    const app = createApp();
+
+    const response = await request(app)
+      .post(`/reviews/${VALID_REVIEW_TOKEN}/submit`)
+      .send({
+        rating: 5,
+        npsScore: 10,
+        reviewText: "  Amazing trip.  ",
+        respondentName: "  Alice Example  ",
+        respondentEmail: "  ALICE@Example.com  ",
+        consentToTestimonial: true
+      });
+
+    expect(response.status).toBe(201);
+    expect(vi.mocked(reviewService.submitTripReview)).toHaveBeenCalledWith(
+      VALID_REVIEW_TOKEN,
+      expect.objectContaining({
+        reviewText: "Amazing trip.",
+        respondentName: "Alice Example",
+        respondentEmail: "alice@example.com"
+      })
+    );
+  });
+
+  it.each([
+    {
+      name: "too-short review token on check",
+      path: "/reviews/short/check",
+      method: "get" as const
+    },
+    {
+      name: "too-long review token on submit",
+      path: `/reviews/${"x".repeat(513)}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        consentToTestimonial: true
+      }
+    },
+    {
+      name: "unknown review field",
+      path: `/reviews/${VALID_REVIEW_TOKEN}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        consentToTestimonial: true,
+        extra: true
+      }
+    },
+    {
+      name: "whitespace-only respondentName",
+      path: `/reviews/${VALID_REVIEW_TOKEN}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        respondentName: "   ",
+        consentToTestimonial: true
+      }
+    },
+    {
+      name: "whitespace-only reviewText",
+      path: `/reviews/${VALID_REVIEW_TOKEN}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        reviewText: "   ",
+        consentToTestimonial: true
+      }
+    },
+    {
+      name: "invalid respondentEmail",
+      path: `/reviews/${VALID_REVIEW_TOKEN}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        respondentEmail: "not-an-email",
+        consentToTestimonial: true
+      }
+    },
+    {
+      name: "overlength respondentName",
+      path: `/reviews/${VALID_REVIEW_TOKEN}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        respondentName: "A".repeat(201),
+        consentToTestimonial: true
+      }
+    },
+    {
+      name: "overlength reviewText",
+      path: `/reviews/${VALID_REVIEW_TOKEN}/submit`,
+      method: "post" as const,
+      body: {
+        rating: 5,
+        reviewText: "x".repeat(4001),
+        consentToTestimonial: true
+      }
+    }
+  ])("rejects $name before reviewService runs", async ({ path, method, body }) => {
+    const app = createApp();
+
+    const response = method === "get"
+      ? await request(app).get(path)
+      : await request(app).post(path).send(body);
+
+    expectValidationError(response);
+    expect(vi.mocked(reviewService.checkTripReviewToken)).not.toHaveBeenCalled();
+    expect(vi.mocked(reviewService.submitTripReview)).not.toHaveBeenCalled();
+  });
+});
 
 describe("F4 - Rate limiting on auth endpoints", () => {
   it("returns 429 after exceeding login rate limit", async () => {

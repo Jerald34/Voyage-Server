@@ -8,11 +8,20 @@ function getEmailLocalPart(email: string) {
   return normalizeComparable(email).split("@")[0] ?? "";
 }
 
+const normalizedEmailSchema = z.string().trim().toLowerCase().email().max(254);
+const verificationTokenSchema = z.string().min(16).max(512);
+const loginPasswordSchema = z.string().min(1).max(1024);
+const registerPasswordSchema = z.string().min(8).max(1024);
+const resetPasswordSchema = z.string().min(8).max(1024);
+const oauthStateSchema = z.string().min(1).max(512);
+const googleAuthorizationCodeSchema = z.string().min(1).max(512);
+const appleIdTokenSchema = z.string().min(1).max(4096);
+
 export const registerSchema = z.object({
-  email: z.string().trim().email(),
-  password: z.string().min(8),
+  email: normalizedEmailSchema,
+  password: registerPasswordSchema,
   displayName: z.string().trim().min(1).max(120)
-}).superRefine((input, context) => {
+}).strict().superRefine((input, context) => {
   const normalizedPassword = normalizeComparable(input.password);
   const normalizedEmail = normalizeComparable(input.email);
   const normalizedDisplayName = normalizeComparable(input.displayName);
@@ -33,30 +42,44 @@ export const registerSchema = z.object({
 
 export const updateProfileSchema = z.object({
   displayName: z.string().trim().min(1).max(120)
-});
+}).strict();
 
 export const loginSchema = z.object({
-  email: z.string().trim().email(),
-  password: z.string().min(1)
-});
+  email: normalizedEmailSchema,
+  password: loginPasswordSchema
+}).strict();
 
 export const emailCheckSchema = z.object({
-  email: z.string().trim().email()
-});
+  email: normalizedEmailSchema
+}).strict();
 
 export const confirmVerificationSchema = z.object({
-  token: z.string().min(16)
-});
+  token: verificationTokenSchema
+}).strict();
 
 export const requestPasswordResetSchema = z.object({
-  email: z.string().trim().email()
-});
+  email: normalizedEmailSchema
+}).strict();
 
 export const confirmPasswordResetSchema = z.object({
-  token: z.string().min(16),
-  password: z.string().min(8)
-});
+  token: verificationTokenSchema,
+  password: resetPasswordSchema
+}).strict();
 
 export const setAccountTypeSchema = z.object({
   accountType: z.enum(["PERSONAL", "AGENCY_USER"])
-});
+}).strict();
+
+export const verificationRequestSchema = z.object({
+  email: normalizedEmailSchema
+}).strict();
+
+export const googleCallbackQuerySchema = z.object({
+  code: googleAuthorizationCodeSchema.optional(),
+  state: oauthStateSchema.optional()
+}).strict();
+
+export const appleCallbackBodySchema = z.object({
+  id_token: appleIdTokenSchema.optional(),
+  state: oauthStateSchema.optional()
+}).strict();

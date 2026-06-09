@@ -6,12 +6,13 @@ import { invitationService } from "./teamRoutes";
 
 export const invitationRoutes = Router();
 
-const lookupSchema = z.object({ token: z.string().min(1) });
-const acceptSchema = z.object({ token: z.string().min(1) });
+const invitationTokenSchema = z.string().min(16).max(512);
+const lookupSchema = z.object({ token: invitationTokenSchema }).strict();
+const acceptSchema = z.object({ token: invitationTokenSchema }).strict();
 
 invitationRoutes.get("/lookup", async (request, response, next) => {
   try {
-    const { token } = lookupSchema.parse({ token: request.query.token });
+    const { token } = lookupSchema.parse(request.query);
     const result = await invitationService.lookup(token);
     response.json({ invitation: result });
   } catch (error) {
