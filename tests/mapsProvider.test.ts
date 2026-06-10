@@ -197,3 +197,140 @@ describe("Google Maps provider", () => {
     expect(signal).toBeInstanceOf(AbortSignal);
   });
 });
+
+// ---------------------------------------------------------------------------
+// fetchPlacePhoto tests (Task 10 – Maps key must never appear in URLs)
+// ---------------------------------------------------------------------------
+
+describe("fetchPlacePhoto", () => {
+  const VALID_PHOTO_NAME = "places/ChIJabc123/photos/AUc7tXkDEF456";
+
+  function makeFakeArrayBuffer(size = 100): ArrayBuffer {
+    return new Uint8Array(size).fill(0xff).buffer;
+  }
+
+  function makeFetchImpl(opts: {
+    status?: number;
+    contentType?: string;
+    contentLength?: string;
+    bodySize?: number;
+    captureCall?: (url: string, init: RequestInit) => void;
+  }): typeof fetch {
+    return async (url, init) => {
+      opts.captureCall?.(String(url), init ?? {});
+      const headers = new Headers();
+      headers.set("content-type", opts.contentType ?? "image/jpeg");
+      if (opts.contentLength !== undefined) {
+        headers.set("content-length", opts.contentLength);
+      }
+      const ab = makeFakeArrayBuffer(opts.bodySize ?? 100);
+      return new Response(new Uint8Array(ab), {
+        status: opts.status ?? 200,
+        headers
+      });
+    };
+  }
+
+  it("sends the API key in X-Goog-Api-Key header and NOT in the URL", async () => {
+    let capturedUrl = "";
+    let capturedHeaders: Record<string, string> = {};
+
+    const provider = createGoogleMapsProvider({
+      apiKey: "test-maps-api-key",
+      fetchImpl: makeFetchImpl({
+        captureCall: (url, init) => {
+          capturedUrl = url;
+          capturedHeaders = (init.headers ?? {}) as Record<string, string>;
+        }
+      })
+    });
+
+    await provider.fetchPlacePhoto(VALID_PHOTO_NAME, { width: 400, height: 400 });
+
+    expect(capturedUrl).not.toContain("key=");
+    expect(capturedUrl).not.toContain("test-maps-api-key");
+    expect(capturedHeaders["X-Goog-Api-Key"]).toBe("test-maps-api-key");
+  });
+
+  it("rejects a photoName that does not match the allowed pattern", async () => {
+    const provider = createGoogleMapsProvider({
+      apiKey: "test-maps-api-key",
+      fetchImpl: makeFetchImpl({})
+    });
+
+    await expect(
+      provider.fetchPlacePhoto("places/../../../etc/passwd", { width: 400, height: 400 })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE"
+    } satisfies Partial<ApiError>);
+
+    await expect(
+      provider.fetchPlacePhoto("invalid-format", { width: 400, height: 400 })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE"
+    } satisfies Partial<ApiError>);
+  });
+
+  it("validates that content-type starts with image/", async () => {
+    const provider = createGoogleMapsProvider({
+      apiKey: "test-maps-api-key",
+      fetchImpl: makeFetchImpl({ contentType: "application/json" })
+    });
+
+    await expect(
+      provider.fetchPlacePhoto(VALID_PHOTO_NAME, { width: 400, height: 400 })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE"
+    } satisfies Partial<ApiError>);
+  });
+
+  it("returns { bytes: Buffer, contentType: string } on success", async () => {
+    const provider = createGoogleMapsProvider({
+      apiKey: "test-maps-api-key",
+      fetchImpl: makeFetchImpl({ contentType: "image/jpeg", bodySize: 200 })
+    });
+
+    const result = await provider.fetchPlacePhoto(VALID_PHOTO_NAME, { width: 400, height: 400 });
+
+    expect(result).toHaveProperty("bytes");
+    expect(result).toHaveProperty("contentType", "image/jpeg");
+    expect(Buffer.isBuffer(result.bytes)).toBe(true);
+    expect(result.bytes.length).toBe(200);
+  });
+
+  it("rejects when content-length header exceeds the 10 MB cap", async () => {
+    const TEN_MB_PLUS_ONE = 10 * 1024 * 1024 + 1;
+    const provider = createGoogleMapsProvider({
+      apiKey: "test-maps-api-key",
+      fetchImpl: makeFetchImpl({
+        contentLength: String(TEN_MB_PLUS_ONE),
+        contentType: "image/jpeg",
+        bodySize: 100
+      })
+    });
+
+    await expect(
+      provider.fetchPlacePhoto(VALID_PHOTO_NAME, { width: 400, height: 400 })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE"
+    } satisfies Partial<ApiError>);
+  });
+
+  it("rejects non-OK responses from Google", async () => {
+    const provider = createGoogleMapsProvider({
+      apiKey: "test-maps-api-key",
+      fetchImpl: makeFetchImpl({ status: 403, contentType: "application/json" })
+    });
+
+    await expect(
+      provider.fetchPlacePhoto(VALID_PHOTO_NAME, { width: 400, height: 400 })
+    ).rejects.toMatchObject({
+      statusCode: 503,
+      code: "MAPS_PROVIDER_UNAVAILABLE"
+    } satisfies Partial<ApiError>);
+  });
+});

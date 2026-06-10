@@ -131,9 +131,13 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         // still references it, delete the trip too. Trips that have been
         // saved (clientName set) or approved must NEVER be deleted by this
         // path — those are real client trips.
-        if (thread.tripId) {
+        // ClientTrip is always agency-owned (non-null agencyId), so the orphan
+        // cascade only applies to agency threads. Personal threads (null agencyId)
+        // have no agency-scoped trip to garbage-collect.
+        if (thread.tripId && agencyId) {
+          const tripId = thread.tripId;
           const trip = await tx.clientTrip.findFirst({
-            where: { id: thread.tripId, agencyId },
+            where: { id: tripId, agencyId },
             select: { id: true, status: true, clientName: true }
           });
           if (
@@ -142,11 +146,11 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
             (trip.clientName === null || trip.clientName === "")
           ) {
             const otherThreadCount = await tx.agentThread.count({
-              where: { tripId: thread.tripId, agencyId }
+              where: { tripId, agencyId }
             });
             if (otherThreadCount === 0) {
               await tx.clientTrip.deleteMany({
-                where: { id: thread.tripId, agencyId }
+                where: { id: tripId, agencyId }
               });
             }
           }

@@ -131,6 +131,7 @@ export function createNominatimMapsProvider(options: NominatimMapsProviderOption
 
     getPlaceDetails: createUnsupportedMapsProviderMethod("place details"),
     getPlacePhotos: createUnsupportedMapsProviderMethod("place photos"),
+    fetchPlacePhoto: createUnsupportedMapsProviderMethod("place photo bytes"),
     searchNearby: createUnsupportedMapsProviderMethod("nearby search"),
     estimateRoute: createUnsupportedMapsProviderMethod("route estimates")
   };

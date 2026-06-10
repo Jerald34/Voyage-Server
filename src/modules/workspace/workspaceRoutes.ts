@@ -1,17 +1,19 @@
 import { Router } from "express";
 import { requireAuth } from "../../http/authMiddleware";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { getBootstrap } from "./workspaceService";
 
 const router = Router({ mergeParams: true });
+const agencyIdParamsSchema = idParamsSchema("agencyId");
 
 router.use(requireAuth);
 router.use(async (request, _response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const access = await agencyAccessService.requireVerifiedAgencyMember(
       request.authUser!,
-      String(params.agencyId)
+      agencyId
     );
     request.resolvedAgencyId = access.agency.id;
     next();
@@ -22,10 +24,10 @@ router.use(async (request, _response, next) => {
 
 router.get("/bootstrap", async (request, response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const access = await agencyAccessService.requireVerifiedAgencyMember(
       request.authUser!,
-      String(params.agencyId)
+      agencyId
     );
     const result = await getBootstrap(access.agency.id, {
       role: access.membership!.role,

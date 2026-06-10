@@ -1,5 +1,5 @@
-import { mkdirSync, writeFileSync, existsSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 const CREDENTIAL_ENV_NAMES = [
@@ -14,7 +14,12 @@ const CREDENTIAL_B64_ENV_NAMES = [
 
 type PrepareGoogleCredentialsOptions = {
   env?: NodeJS.ProcessEnv;
-  credentialPath?: string;
+};
+
+export type PreparedGoogleCredentials = {
+  path: string;
+  generated: boolean;
+  cleanup(): void;
 };
 
 function resolveCredentialJson(env: NodeJS.ProcessEnv) {
@@ -64,13 +69,42 @@ function parseCredentialBase64(value: string) {
   return parseCredentialJson(decoded);
 }
 
-export function prepareGoogleApplicationCredentials(options: PrepareGoogleCredentialsOptions = {}) {
-  const env = options.env ?? process.env;
-  const credentialPath = options.credentialPath ?? join(tmpdir(), "voyage-google-application-credentials.json");
+function createGeneratedCredentialLifecycle(parsedCredential: Record<string, unknown>): PreparedGoogleCredentials {
+  const credentialDirectory = mkdtempSync(join(tmpdir(), "voyage-google-creds-"));
+  const credentialPath = join(credentialDirectory, "application-credentials.json");
 
+  writeFileSync(credentialPath, `${JSON.stringify(parsedCredential, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600
+  });
+
+  const cleanup = () => {
+    rmSync(credentialPath, { force: true });
+    rmSync(credentialDirectory, { recursive: true, force: true });
+  };
+
+  return {
+    path: credentialPath,
+    generated: true,
+    cleanup
+  };
+}
+
+function createOperatorCredentialLifecycle(path: string): PreparedGoogleCredentials {
+  return {
+    path,
+    generated: false,
+    cleanup() {}
+  };
+}
+
+export function prepareGoogleApplicationCredentials(
+  options: PrepareGoogleCredentialsOptions = {}
+): PreparedGoogleCredentials | null {
+  const env = options.env ?? process.env;
   const existingCredentialPath = env.GOOGLE_APPLICATION_CREDENTIALS?.trim();
   if (existingCredentialPath && existsSync(existingCredentialPath)) {
-    return existingCredentialPath;
+    return createOperatorCredentialLifecycle(existingCredentialPath);
   }
 
   const credentialJson = resolveCredentialJson(env);
@@ -80,7 +114,7 @@ export function prepareGoogleApplicationCredentials(options: PrepareGoogleCreden
     return null;
   }
 
-  let parsedCredential: unknown;
+  let parsedCredential: Record<string, unknown>;
   if (credentialJson) {
     try {
       parsedCredential = parseCredentialJson(credentialJson.value);
@@ -101,12 +135,7 @@ export function prepareGoogleApplicationCredentials(options: PrepareGoogleCreden
     return null;
   }
 
-  mkdirSync(dirname(credentialPath), { recursive: true });
-  writeFileSync(credentialPath, `${JSON.stringify(parsedCredential, null, 2)}\n`, {
-    encoding: "utf8",
-    mode: 0o600
-  });
-
-  env.GOOGLE_APPLICATION_CREDENTIALS = credentialPath;
-  return credentialPath;
+  const lifecycle = createGeneratedCredentialLifecycle(parsedCredential);
+  env.GOOGLE_APPLICATION_CREDENTIALS = lifecycle.path;
+  return lifecycle;
 }

@@ -2,6 +2,7 @@ import { env, publicApiOrigin } from "../../config/env";
 import { ApiError } from "../../http/errors";
 import type { GeoPoint, MapsProvider, PlaceDetailsResult, PlaceSearchResult, RouteEstimateResult, ResolvedPlace } from "./types";
 import { parseNumber, parseDurationSeconds, parseRoute, parsePlace, parseResponseArray, isRecord, parseString, readJsonResponse } from "./parsing";
+import { redactSecrets } from "../../utils/redaction";
 
 type GoogleMapsProviderOptions = {
   apiKey?: string;
@@ -209,10 +210,58 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
       };
     },
 
-    getPhotoMediaUrl(photoName: string): string {
-      // Direct Google media URL with API key as query param so external services
-      // (Cloudinary) can fetch the image without needing custom headers.
-      return `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${DEFAULT_PHOTO_WIDTH_PX}&maxHeightPx=${DEFAULT_PHOTO_HEIGHT_PX}&key=${apiKey}`;
+    async fetchPlacePhoto(photoName, dimensions) {
+      const PHOTO_NAME_PATTERN = /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/;
+      if (!PHOTO_NAME_PATTERN.test(photoName)) {
+        throw mapsUnavailable("Invalid photo resource name.");
+      }
+
+      const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+      const url = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${dimensions.width}&maxHeightPx=${dimensions.height}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetchImpl(url, {
+          headers: { "X-Goog-Api-Key": apiKey },
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          console.error(redactSecrets(`[Google Maps API] Photo fetch failed: ${response.status} ${response.statusText}\nBody: ${body}`));
+          throw mapsUnavailable(`Photo fetch failed (${response.status}).`);
+        }
+
+        const contentLengthHeader = response.headers.get("content-length");
+        if (contentLengthHeader !== null) {
+          const contentLength = Number(contentLengthHeader);
+          if (Number.isFinite(contentLength) && contentLength > MAX_BYTES) {
+            throw mapsUnavailable("Photo response exceeds maximum allowed size.");
+          }
+        }
+
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.startsWith("image/")) {
+          throw mapsUnavailable("Photo response has an unexpected content type.");
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const bytes = Buffer.from(arrayBuffer);
+        if (bytes.length > MAX_BYTES) {
+          throw mapsUnavailable("Photo response exceeds maximum allowed size.");
+        }
+
+        return { bytes, contentType };
+      } catch (error) {
+        if (error instanceof ApiError) {
+          throw error;
+        }
+        throw mapsUnavailable();
+      } finally {
+        clearTimeout(timeout);
+      }
     },
 
     async getPlacePhotos(placeId, maxResults = 1) {

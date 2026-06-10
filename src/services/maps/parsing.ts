@@ -1,5 +1,6 @@
 import { ApiError } from "../../http/errors";
 import type { GeoPoint, PlaceSearchResult, RouteEstimateResult, ResolvedPlace, MapsProvider } from "./types";
+import { redactSecrets } from "../../utils/redaction";
 
 type GooglePlace = {
   id?: unknown;
@@ -166,7 +167,7 @@ export async function readJsonResponse<T>(
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "Unknown error body");
-      console.error(`[${providerName}] Request failed: ${response.status} ${response.statusText}\nURL: ${url}\nBody: ${errorBody}`);
+      console.error(redactSecrets(`[${providerName}] Request failed: ${response.status} ${response.statusText}\nURL: ${url}\nBody: ${errorBody}`));
       throw mapsUnavailable(`${providerName} returned ${response.status}: ${response.statusText}`);
     }
 

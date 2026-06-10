@@ -4,6 +4,19 @@ import { z } from "zod";
 /** Default DATABASE_URL used in local development only — never valid in production. */
 const DEV_DATABASE_URL = "postgresql://postgres:postgres@localhost:5432/voyage";
 
+const trimmedString = () =>
+  z.preprocess(
+    (value) => (typeof value === "string" ? value.trim() : value),
+    z.string()
+  );
+
+const trimmedStringWithDefault = (defaultValue: string) =>
+  z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    return trimmed === "" ? undefined : trimmed;
+  }, z.string().default(defaultValue));
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
   PORT: z.coerce.number().int().positive().default(4000),
@@ -18,6 +31,9 @@ const envSchema = z.object({
   PASSWORD_PEPPER: z.string().default(""),
   ADMIN_EMAILS: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
+  RATE_LIMIT_REDIS_URL: trimmedString().default(""),
+  RATE_LIMIT_PREFIX: trimmedStringWithDefault("voyage:rate-limit:"),
+  RATE_LIMIT_BASELINE_MAX: z.coerce.number().int().positive().default(300),
   EMAIL_FROM: z.string().default("Voyage <no-reply@example.com>"),
   SMTP_HOST: z.string().default(""),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
@@ -93,7 +109,9 @@ const envSchema = z.object({
 // to work without a full production secret configuration.
 // ---------------------------------------------------------------------------
 
-function assertProductionSecrets(parsed: z.infer<typeof envSchema>): void {
+type Env = z.infer<typeof envSchema>;
+
+function assertProductionSecrets(parsed: Env): void {
   if (parsed.NODE_ENV !== "production") return;
 
   const errors: string[] = [];
@@ -113,6 +131,10 @@ function assertProductionSecrets(parsed: z.infer<typeof envSchema>): void {
     );
   }
 
+  if (!parsed.RATE_LIMIT_REDIS_URL) {
+    errors.push("RATE_LIMIT_REDIS_URL must be set in production.");
+  }
+
   if (errors.length > 0) {
     throw new Error(
       `[env] Production deployment is missing required secrets:\n` +
@@ -122,9 +144,13 @@ function assertProductionSecrets(parsed: z.infer<typeof envSchema>): void {
   }
 }
 
-const _parsed = envSchema.parse(process.env);
-assertProductionSecrets(_parsed);
-export const env = _parsed;
+export function parseEnv(source: Record<string, string | undefined>): Env {
+  const parsed = envSchema.parse(source);
+  assertProductionSecrets(parsed);
+  return parsed;
+}
+
+export const env = parseEnv(process.env);
 
 export function isProduction() {
   return env.NODE_ENV === "production";

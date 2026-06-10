@@ -1,22 +1,61 @@
 import { z } from "zod";
+import {
+  futureIsoDateTimeSchema,
+  idParamsSchema,
+  longTextSchema,
+  normalizedNameSchema,
+  nullableTextSchema,
+  optionalTextSchema,
+  uuidSchema
+} from "../../http/requestSchemas";
+
+const normalizedEmailSchema = z.string().trim().toLowerCase().email().max(254);
+const optionalNormalizedEmailSchema = z.preprocess((value) => {
+  if (typeof value !== "string") {
+    return value;
+  }
+
+  const trimmed = value.trim().toLowerCase();
+  return trimmed === "" ? undefined : trimmed;
+}, normalizedEmailSchema.optional());
+const publicShareTokenSchema = z.string().min(12).max(512);
 
 export const createShareInputSchema = z.object({
-  clientName: z.string().max(200).optional(),
-  clientEmail: z.string().email().max(320).optional(),
-  expiresAt: z.string().optional()
-});
+  clientName: optionalTextSchema(200),
+  clientEmail: optionalNormalizedEmailSchema,
+  expiresAt: z.preprocess((value) => {
+    if (typeof value !== "string") {
+      return value;
+    }
+
+    const trimmed = value.trim();
+    return trimmed === "" ? undefined : trimmed;
+  }, futureIsoDateTimeSchema.optional())
+}).strict();
 
 export const addCommentInputSchema = z.object({
-  authorName: z.string().min(1).max(200),
-  authorEmail: z.string().email().max(320).optional(),
-  content: z.string().min(1).max(5000),
+  authorName: normalizedNameSchema.max(200),
+  authorEmail: normalizedEmailSchema.optional(),
+  content: longTextSchema.max(5000),
   dayNumber: z.number().int().positive().optional(),
-  itemId: z.string().uuid().optional()
-});
+  itemId: uuidSchema.optional()
+}).strict();
 
 export const replyCommentInputSchema = z.object({
-  content: z.string().min(1).max(5000)
-});
+  content: longTextSchema
+}).strict();
+
+// Live public-share links are generated with nanoid(12), so the param lower bound
+// must stay compatible with existing links while still rejecting obviously malformed input.
+export const publicShareTokenParamsSchema = z.object({
+  token: publicShareTokenSchema
+}).strict();
+export const shareIdParamsSchema = idParamsSchema("shareId");
+export const commentIdParamsSchema = idParamsSchema("commentId");
+export const itineraryIdParamsSchema = idParamsSchema("itineraryId");
+export const listSharesQuerySchema = z.object({
+  tripId: uuidSchema.optional()
+}).strict();
 
 export type CreateShareInput = z.infer<typeof createShareInputSchema>;
 export type AddCommentInput = z.infer<typeof addCommentInputSchema>;

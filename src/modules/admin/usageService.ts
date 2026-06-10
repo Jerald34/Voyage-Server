@@ -7,7 +7,7 @@ export const usageQuerySchema = z.object({
   groupBy: z.enum(["user", "agency"]).optional(),
   from: z.string().datetime({ offset: true }).optional(),
   to: z.string().datetime({ offset: true }).optional()
-});
+}).strict();
 
 export interface UsageServiceRepository {
   listRunUsage(range: { from: Date; to: Date }): Promise<UsageRow[]>;
