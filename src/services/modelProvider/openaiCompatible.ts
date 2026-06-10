@@ -1,5 +1,6 @@
 import { ApiError } from "../../http/errors";
 import { env } from "../../config/env";
+import { redactSecrets } from "../../utils/redaction";
 import type { ModelProvider, ModelMessage, ModelCompletionInput, ModelStreamInput, ModelUsage } from "./types";
 
 type OpenAiCompatibleProviderOptions = {
@@ -146,7 +147,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
 
           if (!response.ok) {
             const errorBody = await response.text().catch(() => "Could not read error body");
-            console.error(`Model provider error (${response.status}):`, errorBody);
+            console.error(`Model provider error (${response.status}):`, redactSecrets(errorBody));
             if (attempt < attemptCount) {
               continue;
             }
@@ -208,7 +209,7 @@ export function createOpenAiCompatibleProvider(options: OpenAiCompatibleProvider
 
           if (!response.ok || !response.body) {
             const errorBody = await response.text().catch(() => "Could not read error body");
-            console.error(`Model provider error (${response.status}):`, errorBody);
+            console.error(`Model provider error (${response.status}):`, redactSecrets(errorBody));
             if (attempt < attemptCount) {
               clearTimeout(timeout);
               timeout = undefined;

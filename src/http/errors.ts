@@ -1,5 +1,6 @@
 import type { NextFunction, Request, Response } from "express";
 import { ZodError } from "zod";
+import { redactSecrets } from "../utils/redaction";
 
 export class ApiError extends Error {
   constructor(
@@ -35,7 +36,8 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
     });
   }
 
-  console.error(error);
+  const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
+  console.error(redactSecrets(detail));
 
   return response.status(500).json({
     error: {

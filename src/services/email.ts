@@ -67,11 +67,11 @@ async function sendViaSmtp(mail: Mail): Promise<boolean> {
 }
 
 async function sendViaResend(mail: Mail): Promise<boolean> {
-  if (!process.env.RESEND_API_KEY) return false;
+  if (!env.RESEND_API_KEY) return false;
   const response = await fetch("https://api.resend.com/emails", {
     method: "POST",
     headers: {
-      Authorization: `Bearer ${process.env.RESEND_API_KEY}`,
+      Authorization: `Bearer ${env.RESEND_API_KEY}`,
       "Content-Type": "application/json",
       "User-Agent": "Voyage-Server/1.0"
     },
@@ -107,7 +107,7 @@ export async function sendVerificationEmail(payload: VerificationEmailPayload) {
     subject: "Verify your Voyage email",
     html: `<div style="${baseStyles}"><p>Hello ${displayName},</p><p>Confirm your email to finish setting up your Voyage account.</p><p><a href="${verificationUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Verify email</a></p><p style="font-size:13px;color:#666">Or paste this link in your browser:<br/>${verificationUrl}</p><p style="font-size:13px;color:#666">This link expires in 24 hours.</p></div>`,
     text: `Hello ${payload.displayName},\n\nConfirm your email at: ${payload.verificationUrl}\n\nThis link expires in 24 hours.`,
-    logMessage: `Verification email for ${payload.to}: ${payload.verificationUrl}`
+    logMessage: "Verification email delivery skipped because no provider is configured."
   });
 }
 
@@ -119,7 +119,7 @@ export async function sendPasswordResetEmail(payload: PasswordResetEmailPayload)
     subject: "Reset your Voyage password",
     html: `<div style="${baseStyles}"><p>Hello ${displayName},</p><p>Reset your Voyage password by opening this link:</p><p><a href="${resetUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Reset password</a></p><p style="font-size:13px;color:#666">If you didn't ask for this, you can ignore this email.</p></div>`,
     text: `Hello ${payload.displayName},\n\nReset your Voyage password at: ${payload.resetUrl}\n\nIf you didn't ask for this, you can ignore this email.`,
-    logMessage: `Password reset email for ${payload.to}: ${payload.resetUrl}`
+    logMessage: "Password reset email delivery skipped because no provider is configured."
   });
 }
 
@@ -143,7 +143,7 @@ export async function sendTripReviewEmail(payload: TripReviewEmailPayload) {
     text: `${greetingText}\n\nWe hope you enjoyed your trip to ${payload.tripTitle}. Rate it 1-5 stars:\n\n${[1, 2, 3, 4, 5]
       .map((n) => `${n} stars: ${baseUrl}?rating=${n}`)
       .join("\n")}\n`,
-    logMessage: `Trip review email for ${payload.to}: ${baseUrl}`
+    logMessage: "Trip review email delivery skipped because no provider is configured."
   });
 }
 
@@ -157,6 +157,6 @@ export async function sendAgencyInvitationEmail(payload: AgencyInvitationEmailPa
     subject: `${payload.inviterName} invited you to join ${payload.agencyName} on Voyage`,
     html: `<div style="${baseStyles}"><p>Hello,</p><p><strong>${inviterName}</strong> has invited you to join <strong>${agencyName}</strong> on Voyage as <strong>${role}</strong>.</p><p><a href="${acceptUrl}" style="display:inline-block;padding:10px 18px;background:#223843;color:#fff;border-radius:6px;text-decoration:none">Accept invitation</a></p><p style="font-size:13px;color:#666">Or paste this link:<br/>${acceptUrl}</p><p style="font-size:13px;color:#666">This invitation expires in 7 days.</p></div>`,
     text: `${payload.inviterName} invited you to join ${payload.agencyName} on Voyage as ${payload.role}.\n\nAccept at: ${payload.acceptUrl}\n\nThis invitation expires in 7 days.`,
-    logMessage: `Agency invite email for ${payload.to}: ${payload.acceptUrl}`
+    logMessage: "Agency invitation email delivery skipped because no provider is configured."
   });
 }
