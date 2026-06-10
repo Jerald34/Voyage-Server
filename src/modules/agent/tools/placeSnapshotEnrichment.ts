@@ -1,6 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import type { MapsProvider, ResolvedPlace } from "../../../services/maps";
-import { isCloudinaryConfigured, uploadPlacePhoto } from "../../../services/cloudinary";
+import { isCloudinaryConfigured, uploadPlacePhotoBuffer } from "../../../services/cloudinary";
 import { upsertPlaceSnapshot } from "./toolUtils";
 
 function nonEmptyString(value: unknown): value is string {
@@ -60,16 +60,14 @@ export async function enrichResolvedPlaceForSnapshot(
         // Cache the photo on Cloudinary so subsequent views don't bill Google.
         if (isCloudinaryConfigured()) {
           try {
-            // Use a direct Google media URL (with API key) so Cloudinary can
-            // fetch the image directly. The proxy URL (photoUri) points back
-            // to our server which Cloudinary may not be able to reach
-            // (especially in local dev or if the server is behind a firewall).
+            // Fetch photo bytes server-side with header-based authentication so
+            // the API key never appears in any URL or persisted data.
             const photoName = details.photos[0].name;
-            const fetchableUrl = (photoName && maps?.getPhotoMediaUrl)
-              ? maps.getPhotoMediaUrl(photoName)
-              : primaryPhotoUrl;
-            const uploaded = await uploadPlacePhoto(fetchableUrl, place.providerPlaceId);
-            primaryPhotoUrl = uploaded.url;
+            if (photoName && maps?.fetchPlacePhoto) {
+              const { bytes } = await maps.fetchPlacePhoto(photoName, { width: 400, height: 400 });
+              const uploaded = await uploadPlacePhotoBuffer(bytes, place.providerPlaceId);
+              primaryPhotoUrl = uploaded.url;
+            }
           } catch (err) {
             // Cloudinary upload is best-effort; fall back to the proxy URL.
             console.error("[Enrichment] Cloudinary upload failed for", place.providerPlaceId, err);

@@ -58,11 +58,14 @@ export type MapsProvider = {
   getPlaceDetails(placeId: string): Promise<PlaceDetailsResult>;
   getPlacePhotos(placeId: string, maxResults?: number): Promise<{ name: string; photoUri: string }[]>;
   /**
-   * Build a direct, publicly-fetchable URL for a photo resource name.
-   * Used by Cloudinary uploads so they can fetch from Google directly
-   * instead of going through our proxy (which Cloudinary may not be able to reach).
+   * Fetch a place photo by resource name, authenticating server-side with the
+   * API key in a request header. The key never appears in any URL or persisted data.
+   * Returns the raw image bytes and content-type for buffer-based Cloudinary upload.
    */
-  getPhotoMediaUrl?(photoName: string): string;
+  fetchPlacePhoto(
+    photoName: string,
+    dimensions: { width: number; height: number }
+  ): Promise<{ bytes: Buffer; contentType: string }>;
   estimateRoute(input: {
     origin: GeoPoint;
     destination: GeoPoint;

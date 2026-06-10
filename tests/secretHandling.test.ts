@@ -271,3 +271,65 @@ describe("email fallback log – no PII or secrets in log output", () => {
     consoleSpy.mockRestore();
   });
 });
+
+// ---------------------------------------------------------------------------
+// 3. fetchPlacePhoto – Maps key must not appear in errors or console.error
+// ---------------------------------------------------------------------------
+
+describe("fetchPlacePhoto – Maps key never leaks into error messages or logs", () => {
+  it("does not put the configured Maps key into thrown error messages on fetch failure", async () => {
+    const FAKE_MAPS_KEY = "super-secret-maps-key-do-not-log";
+
+    // Use a fetchImpl that throws a network error.
+    const { createGoogleMapsProvider } = await import("../src/services/maps");
+
+    const provider = createGoogleMapsProvider({
+      apiKey: FAKE_MAPS_KEY,
+      fetchImpl: async () => {
+        throw new Error("Network failure");
+      }
+    });
+
+    let thrownMessage = "";
+    try {
+      await provider.fetchPlacePhoto("places/ChIJabc123/photos/AUc7tXkDEF456", {
+        width: 400,
+        height: 400
+      });
+    } catch (err: unknown) {
+      thrownMessage = err instanceof Error ? err.message : String(err);
+    }
+
+    expect(thrownMessage).not.toContain(FAKE_MAPS_KEY);
+  });
+
+  it("does not put the configured Maps key into console.error output on non-OK response", async () => {
+    const FAKE_MAPS_KEY = "another-secret-key-must-not-appear";
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const { createGoogleMapsProvider } = await import("../src/services/maps");
+
+    const provider = createGoogleMapsProvider({
+      apiKey: FAKE_MAPS_KEY,
+      fetchImpl: async () =>
+        new Response("Forbidden", {
+          status: 403,
+          headers: { "content-type": "text/plain" }
+        })
+    });
+
+    try {
+      await provider.fetchPlacePhoto("places/ChIJabc123/photos/AUc7tXkDEF456", {
+        width: 400,
+        height: 400
+      });
+    } catch {
+      // expected
+    }
+
+    const loggedOutput = errorSpy.mock.calls.flat().join(" ");
+    expect(loggedOutput).not.toContain(FAKE_MAPS_KEY);
+
+    errorSpy.mockRestore();
+  });
+});
