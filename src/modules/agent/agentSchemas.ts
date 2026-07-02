@@ -46,8 +46,11 @@ export const updateThreadTitleSchema = z.object({
   title: requiredTextSchema(200)
 }).strict();
 
-export const agentThreadParamsSchema = idParamsSchema("id");
-export const agentRunParamsSchema = idParamsSchema("id");
+// These routes are mounted under `/agencies/:agencyId/agent` with a
+// mergeParams router, so `req.params` also carries `agencyId`. Include it here
+// or the strict schema rejects it as an unrecognized key.
+export const agentThreadParamsSchema = idParamsSchema("agencyId", "id");
+export const agentRunParamsSchema = idParamsSchema("agencyId", "id");
 export const listThreadMessagesQuerySchema = paginationQuerySchema;
 
 export const agentEventSchema = z.object({

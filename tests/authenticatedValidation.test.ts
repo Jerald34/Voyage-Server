@@ -698,6 +698,26 @@ describe("authenticated route validation", () => {
     expect(mockListThreadMessages).not.toHaveBeenCalled();
   });
 
+  // Regression: the agent router uses mergeParams, so `req.params` carries the
+  // mounted `agencyId` alongside `:id`. A strict params schema that omitted
+  // `agencyId` rejected every valid request as an unrecognized key.
+  it("accepts a valid agent messages request even though req.params carries the merged agencyId", async () => {
+    const app = createRouteApp({
+      mountPath: "/agencies/:agencyId/agent",
+      router: agentRoutes,
+      authUser: agencyUser
+    });
+
+    const response = await request(app).get(
+      `/agencies/${VALID_AGENCY_ID}/agent/threads/${VALID_THREAD_ID}/messages?limit=50`
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockListThreadMessages).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: VALID_THREAD_ID, limit: 50 })
+    );
+  });
+
   it("rejects invalid itinerary trip IDs before authorization-dependent trip checks", async () => {
     const app = createRouteApp({
       mountPath: "/agencies/:agencyId/itineraries",
@@ -750,6 +770,23 @@ describe("authenticated route validation", () => {
     expect(mockCreateShare).not.toHaveBeenCalled();
     expect(mockRevokeShare).not.toHaveBeenCalled();
     expect(mockReplyToComment).not.toHaveBeenCalled();
+  });
+
+  // Regression: same mergeParams pitfall as the agent routes — a valid share
+  // sub-resource request must not be rejected for carrying the merged agencyId.
+  it("accepts a valid share revoke request despite the merged agencyId param", async () => {
+    const app = createRouteApp({
+      mountPath: "/agencies/:agencyId/shares",
+      router: shareRoutes,
+      authUser: agencyUser
+    });
+
+    const response = await request(app).delete(
+      `/agencies/${VALID_AGENCY_ID}/shares/${VALID_SHARE_ID}`
+    );
+
+    expect(response.status).toBe(200);
+    expect(mockRevokeShare).toHaveBeenCalledWith(VALID_AGENCY_ID, VALID_SHARE_ID);
   });
 
   it("rejects invalid support report bodies with unknown keys", async () => {

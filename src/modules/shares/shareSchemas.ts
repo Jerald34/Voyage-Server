@@ -50,9 +50,11 @@ export const replyCommentInputSchema = z.object({
 export const publicShareTokenParamsSchema = z.object({
   token: publicShareTokenSchema
 }).strict();
-export const shareIdParamsSchema = idParamsSchema("shareId");
-export const commentIdParamsSchema = idParamsSchema("commentId");
-export const itineraryIdParamsSchema = idParamsSchema("itineraryId");
+// Mounted under `/agencies/:agencyId/shares` with a mergeParams router, so
+// `req.params` also carries `agencyId`; include it or strict parsing rejects it.
+export const shareIdParamsSchema = idParamsSchema("agencyId", "shareId");
+export const commentIdParamsSchema = idParamsSchema("agencyId", "commentId");
+export const itineraryIdParamsSchema = idParamsSchema("agencyId", "itineraryId");
 export const listSharesQuerySchema = z.object({
   tripId: uuidSchema.optional()
 }).strict();

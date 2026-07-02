@@ -4,6 +4,7 @@
     "build": "tsc",
     "start": "node dist/src/server.js",
     "test": "vitest run",
+    "check:google": "tsx scripts/check-google-apis.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts"
