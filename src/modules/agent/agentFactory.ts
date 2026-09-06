@@ -37,6 +37,7 @@ import { createWebSearchProvider } from "../../services/webSearch";
 import { getModelProvider, getModelProviderInfo } from "../../services/modelProvider";
 import { backfillUnenrichedSnapshots, enrichResolvedPlaceForSnapshot } from "./tools/placeSnapshotEnrichment";
 import { createPlaceSession } from "../../services/places/placeServices";
+import { createPrismaPersonalRepository } from "../personal/personalRepository";
 
 const GOOGLE_MAPS_TOOL_NAMES = [
   "search_google_places",
@@ -171,6 +172,23 @@ function createAgencyAgentOrchestrator() {
       : undefined,
     // A fresh session per run, with its own refresh budget. Enrichment is passed
     // in from this layer so the places services never import agent tool modules.
+    // Authorized re-read of the current itinerary. Agency runs go through the
+    // agency-scoped service; a null-agency (personal) run goes through the
+    // owner-scoped personal repository. An event's ID is never trusted on its own.
+    loadCurrentItinerary: async ({ agencyId, userId, itineraryId }) => {
+      try {
+        if (agencyId) {
+          return (await itineraryService.getItinerary(agencyId, itineraryId)) as never;
+        }
+        return (await createPrismaPersonalRepository().findItineraryForUser(
+          userId,
+          itineraryId
+        )) as never;
+      } catch {
+        // Not authorized, or gone: no warnings rather than a failed run.
+        return null;
+      }
+    },
     createPlaceSession: (agencyId) =>
       createPlaceSession(agencyId, {
         enrich: mapsForBackfill

@@ -11,7 +11,12 @@ import {
 import { createPersonalService } from "./personalService";
 import { createPrismaPersonalRepository } from "./personalRepository";
 
-const service = createPersonalService({ repository: createPrismaPersonalRepository() });
+import { getPlaceRefreshScheduler } from "../../services/places/placeServices";
+
+const service = createPersonalService({
+  repository: createPrismaPersonalRepository(),
+  scheduler: getPlaceRefreshScheduler()
+});
 const itineraryIdParamsSchema = idParamsSchema("itineraryId");
 
 const createItinerarySchema = z

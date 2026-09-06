@@ -1,7 +1,13 @@
 import { ApiError } from "../../http/errors";
+import { scheduleSavedRead } from "../itineraries/savedPlaceAdvisories";
+import type { PlaceRefreshScheduler } from "../../services/places/placeRefreshScheduler";
 import type { PersonalRepository } from "./personalRepository";
 
-export function createPersonalService(options: { repository: PersonalRepository }) {
+export function createPersonalService(options: {
+  repository: PersonalRepository;
+  /** Optional so isolated unit tests can omit it; production supplies it. */
+  scheduler?: Pick<PlaceRefreshScheduler, "scheduleRead">;
+}) {
   return {
     async listItineraries(userId: string) {
       return options.repository.listItinerariesForUser(userId);
@@ -12,6 +18,10 @@ export function createPersonalService(options: { repository: PersonalRepository 
       if (!itinerary) {
         throw new ApiError(404, "PERSONAL_ITINERARY_NOT_FOUND", "Itinerary not found.");
       }
+      // Ownership is established, so a bounded status refresh may start. No
+      // agency notes are loaded here: a personal itinerary belongs to no agency,
+      // and provider closures are global anyway.
+      if (options.scheduler) scheduleSavedRead(options.scheduler, itinerary as any);
       return itinerary;
     },
 

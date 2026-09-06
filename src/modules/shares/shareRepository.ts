@@ -176,7 +176,12 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
                     rating: item.placeSnapshot.rating,
                     websiteUrl: item.placeSnapshot.websiteUrl,
                     phoneNumber: item.placeSnapshot.phoneNumber,
-                    metadata: item.placeSnapshot.metadata
+                    metadata: item.placeSnapshot.metadata,
+                    // Provider status only. This projection is explicit so that
+                    // internal note text, item placeAdvisory and itinerary-level
+                    // placeAdvisories can never reach a public share.
+                    businessStatus: item.placeSnapshot.businessStatus ?? null,
+                    businessStatusCheckedAt: item.placeSnapshot.businessStatusCheckedAt ?? null
                   }
                 : null
             }))

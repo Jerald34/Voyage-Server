@@ -23,6 +23,8 @@ import {
   prepareUpdatedItem,
   storedPointsBySnapshotId
 } from "./itineraryPlaceGuard";
+import { overlayPlaceAdvisories, scheduleSavedRead } from "./savedPlaceAdvisories";
+import type { PlaceRefreshScheduler } from "../../services/places/placeRefreshScheduler";
 
 // Re-export all types from itineraryTypes
 export * from "./itineraryTypes";
@@ -75,6 +77,8 @@ export type ItineraryPlaceExecution = {
     days: any[],
     points: Map<string, { latitude: number; longitude: number }>
   ) => Promise<any[]>;
+  /** Supplied on read paths so an authorized read can schedule a bounded refresh. */
+  scheduler?: Pick<PlaceRefreshScheduler, "scheduleRead">;
 };
 
 export function createItineraryService(options: { repository: ItineraryRepository }) {
@@ -156,12 +160,22 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       });
     },
 
-    async getItinerary(agencyId: string, itineraryId: string) {
+    /**
+     * Authorized single-itinerary read. After the agency check succeeds it
+     * overlays the current agency's warnings and kicks off a bounded background
+     * status refresh, then returns immediately with what is already stored.
+     * Deliberately NOT hooked into addDay/updateDay or list endpoints.
+     */
+    async getItinerary(agencyId: string, itineraryId: string, execution?: ItineraryPlaceExecution) {
       const itinerary = await options.repository.findItineraryByAgency(itineraryId, agencyId);
       if (!itinerary) {
         throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
       }
-      return itinerary;
+      if (!execution) return itinerary;
+
+      const overlaid = overlayPlaceAdvisories(itinerary as any, execution.session.gate);
+      if (execution.scheduler) scheduleSavedRead(execution.scheduler, itinerary as any);
+      return overlaid;
     },
 
     async replaceDraft(
