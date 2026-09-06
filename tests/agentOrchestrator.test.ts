@@ -2290,7 +2290,7 @@ describe("agent orchestrator", () => {
     });
   });
 
-  it("persists NOMINATIM snapshots with a DB-safe provider enum", async () => {
+  it("persists NOMINATIM snapshots under their real provider enum", async () => {
     const captured: Array<{
       provider: string;
       providerPlaceId: string;
@@ -2377,11 +2377,18 @@ describe("agent orchestrator", () => {
       formattedAddress: "Olongapo City, Zambales",
       lat: 14.8363313,
       lng: 120.2828655,
-      provider: "NOMINATIM"
+      provider: "NOMINATIM",
+      // Nominatim reports no business status, and a missing value must never be
+      // serialized as anything the client could read as "open".
+      businessStatus: null,
+      businessStatusCheckedAt: null
     });
+    // NOMINATIM is a real value in the PlaceProvider enum, so it is stored as
+    // itself. Mislabelling these rows as GOOGLE_MAPS made their OSM identifiers
+    // look like Google place IDs to the status refresher.
     expect(captured).toEqual([
       {
-        provider: "GOOGLE_MAPS",
+        provider: "NOMINATIM",
         providerPlaceId: "nominatim:olongapo-city",
         name: "Olongapo City",
         formattedAddress: "Olongapo City, Zambales"
