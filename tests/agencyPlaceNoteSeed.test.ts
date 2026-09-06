@@ -52,13 +52,16 @@ type FakeClient = SeedPrismaClient & {
 function createFakeClient(
   options: {
     agencies?: string[];
-    memberships?: Array<{ agencyId: string; userId: string }>;
+    memberships?: Array<{ agencyId: string; userId: string; status?: string }>;
     notes?: AgencyPlaceNoteRecord[];
   } = {}
 ): FakeClient {
   const agencies = new Set(options.agencies ?? [AGENCY_ID]);
-  const membershipKeys = new Set(
-    (options.memberships ?? [{ agencyId: AGENCY_ID, userId: USER_ID }]).map((m) => `${m.agencyId}:${m.userId}`)
+  const membershipRows = new Map(
+    (options.memberships ?? [{ agencyId: AGENCY_ID, userId: USER_ID }]).map((m) => [
+      `${m.agencyId}:${m.userId}`,
+      { id: "membership-1", agencyId: m.agencyId, userId: m.userId, status: m.status ?? "ACTIVE" }
+    ])
   );
   const notes = new Map<string, AgencyPlaceNoteRecord>();
   for (const note of options.notes ?? []) {
@@ -76,8 +79,8 @@ function createFakeClient(
       findUnique: vi.fn(
         async ({ where }: { where: { agencyId_userId: { agencyId: string; userId: string } } }) => {
           const { agencyId, userId } = where.agencyId_userId;
-          return membershipKeys.has(`${agencyId}:${userId}`)
-            ? { id: "membership-1", agencyId, userId }
+          return membershipRows.has(`${agencyId}:${userId}`)
+            ? membershipRows.get(`${agencyId}:${userId}`)!
             : null;
         }
       )
@@ -400,5 +403,30 @@ describe("seedAgencyPlaceNotes", () => {
     expect(client.tx.agencyPlaceNote.update).not.toHaveBeenCalled();
     expect(client.notes.get("dup-1")?.status).toBe("NEUTRAL");
     expect(client.notes.get("dup-2")?.status).toBe("NEUTRAL");
+  });
+});
+
+describe("membership status", () => {
+  it("rejects an author whose membership has been disabled", async () => {
+    const client = createFakeClient({
+      memberships: [{ agencyId: AGENCY_ID, userId: USER_ID, status: "DISABLED" }]
+    });
+
+    await expect(
+      seedAgencyPlaceNotes(client as never, {
+        agencyId: AGENCY_ID,
+        createdByUserId: USER_ID,
+        notes: [
+          {
+            provider: null,
+            providerPlaceId: null,
+            placeName: "Bayview",
+            cityContext: null,
+            status: "CLOSED",
+            note: null
+          }
+        ]
+      })
+    ).rejects.toMatchObject({ code: "AGENCY_MEMBERSHIP_REQUIRED" });
   });
 });

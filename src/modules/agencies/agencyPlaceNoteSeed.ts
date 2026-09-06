@@ -96,7 +96,7 @@ export type SeedTransactionClient = {
   agencyMembership: {
     findUnique(args: {
       where: { agencyId_userId: { agencyId: string; userId: string } };
-    }): Promise<{ id: string; agencyId: string; userId: string } | null>;
+    }): Promise<{ id: string; agencyId: string; userId: string; status?: string } | null>;
   };
   agencyPlaceNote: {
     findUnique(args: { where: { id: string } | ResolvedNoteWhere }): Promise<AgencyPlaceNoteRecord | null>;
@@ -273,11 +273,13 @@ export async function seedAgencyPlaceNotes(
     const membership = await tx.agencyMembership.findUnique({
       where: { agencyId_userId: { agencyId: parsed.agencyId, userId: parsed.createdByUserId } }
     });
-    if (!membership) {
+    // A DISABLED membership is not authorization: a removed staff member must not
+    // be able to author notes that then gate every place that agency selects.
+    if (!membership || (membership.status !== undefined && membership.status !== "ACTIVE")) {
       throw new ApiError(
         403,
         "AGENCY_MEMBERSHIP_REQUIRED",
-        `User ${parsed.createdByUserId} must hold a membership in agency ${parsed.agencyId} to author its place notes.`
+        `User ${parsed.createdByUserId} must hold an active membership in agency ${parsed.agencyId} to author its place notes.`
       );
     }
 
