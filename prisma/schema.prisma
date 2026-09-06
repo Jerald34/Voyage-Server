@@ -96,6 +96,19 @@ enum PlaceProvider {
   NOMINATIM
 }
 
+enum PlaceBusinessStatus {
+  OPERATIONAL
+  CLOSED_TEMPORARILY
+  CLOSED_PERMANENTLY
+}
+
+enum AgencyPlaceNoteStatus {
+  AVOID
+  CLOSED
+  PREFERRED
+  NEUTRAL
+}
+
 enum AgentThreadStatus {
   ACTIVE
   ARCHIVED
@@ -167,6 +180,7 @@ model User {
   agentMessages       AgentMessage[]           @relation("AgentMessageAuthor")
   problemReports      ProblemReport[]          @relation("ProblemReporter")
   resolvedReports     ProblemReport[]          @relation("ProblemResolver")
+  createdPlaceNotes   AgencyPlaceNote[]        @relation("AgencyPlaceNoteAuthor")
   createdAt           DateTime                 @default(now())
   updatedAt           DateTime                 @updatedAt
 
@@ -262,6 +276,7 @@ model Agency {
   agentRuns              AgentRun[]
   tripReviews            TripReview[]
   problemReports         ProblemReport[]
+  placeNotes             AgencyPlaceNote[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -463,12 +478,40 @@ model PlaceSnapshot {
   phoneNumber      String?
   metadata         Json?
   fetchedAt        DateTime
+  // Provider business status, tracked on its own clock: `businessStatusCheckedAt`
+  // only advances on a successful response carrying a recognized status. Both are
+  // null for rows written before the place freshness gate migration.
+  businessStatus          PlaceBusinessStatus?
+  businessStatusCheckedAt DateTime?
   itineraryItems   ItineraryItem[]
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
 
   @@unique([provider, providerPlaceId])
   @@index([providerPlaceId])
+}
+
+/// Agency-scoped staff notes about a place. `provider` and `providerPlaceId` are
+/// both set (a resolved place) or both null (an unresolved name). A null
+/// `cityContext` makes an unresolved note agency-global.
+model AgencyPlaceNote {
+  id              String                @id @default(uuid()) @db.Uuid
+  agencyId        String                @db.Uuid
+  agency          Agency                @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  provider        PlaceProvider?
+  providerPlaceId String?
+  placeName       String
+  cityContext     String?
+  status          AgencyPlaceNoteStatus @default(NEUTRAL)
+  note            String?
+  createdByUserId String                @db.Uuid
+  createdByUser   User                  @relation("AgencyPlaceNoteAuthor", fields: [createdByUserId], references: [id])
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([agencyId, provider, providerPlaceId])
+  @@index([agencyId, cityContext])
+  @@index([agencyId, placeName])
 }
 
 model AgentThread {

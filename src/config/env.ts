@@ -83,6 +83,21 @@ const envSchema = z.object({
   GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-3-flash-preview"),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
   GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
+  // --- Place freshness gate -------------------------------------------------
+  // General name/city snapshot cache freshness (days). Independent from the
+  // provider business-status clock, which uses businessStatusCheckedAt.
+  PLACE_SNAPSHOT_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  // Extra status-only Place Details requests one authorized saved read may start.
+  PLACE_STATUS_MAX_REFRESHES_PER_READ: z.coerce.number().int().min(0).max(100).default(10),
+  // Simultaneous in-flight status-only requests, shared process-wide.
+  PLACE_STATUS_REFRESH_CONCURRENCY: z.coerce.number().int().min(1).max(10).default(3),
+  // Extra status-only requests one agent run may start.
+  PLACE_STATUS_MAX_REFRESHES_PER_RUN: z.coerce.number().int().min(0).default(20),
+  // Rolling per-process hourly cap on extra status-only requests. Not a
+  // cluster-wide or monetary cap: a restart resets it.
+  PLACE_STATUS_MAX_REFRESHES_PER_HOUR: z.coerce.number().int().min(0).default(120),
+  // Retry cooldown after a failed or status-less refresh, in milliseconds.
+  PLACE_STATUS_RETRY_COOLDOWN_MS: z.coerce.number().int().positive().default(300_000),
   NOMINATIM_BASE_URL: z.string().default("https://nominatim.openstreetmap.org"),
   NOMINATIM_USER_AGENT: z.string().default("Voyage-Travel-Agent/1.0"),
   SERPER_API_KEY: z.string().default(""),

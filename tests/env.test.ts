@@ -91,3 +91,68 @@ describe("parseEnv", () => {
     }
   });
 });
+
+describe("place freshness gate configuration", () => {
+  it("applies documented defaults", async () => {
+    const { parseEnv } = await loadEnvModule();
+    const parsed = parseEnv({});
+
+    expect(parsed.PLACE_SNAPSHOT_TTL_DAYS).toBe(30);
+    expect(parsed.PLACE_STATUS_MAX_REFRESHES_PER_READ).toBe(10);
+    expect(parsed.PLACE_STATUS_REFRESH_CONCURRENCY).toBe(3);
+    expect(parsed.PLACE_STATUS_MAX_REFRESHES_PER_RUN).toBe(20);
+    expect(parsed.PLACE_STATUS_MAX_REFRESHES_PER_HOUR).toBe(120);
+    expect(parsed.PLACE_STATUS_RETRY_COOLDOWN_MS).toBe(300_000);
+  });
+
+  it("accepts a zero budget that disables extra refreshes", async () => {
+    const { parseEnv } = await loadEnvModule();
+    const parsed = parseEnv({
+      PLACE_STATUS_MAX_REFRESHES_PER_READ: "0",
+      PLACE_STATUS_MAX_REFRESHES_PER_RUN: "0",
+      PLACE_STATUS_MAX_REFRESHES_PER_HOUR: "0"
+    });
+
+    expect(parsed.PLACE_STATUS_MAX_REFRESHES_PER_READ).toBe(0);
+    expect(parsed.PLACE_STATUS_MAX_REFRESHES_PER_RUN).toBe(0);
+    expect(parsed.PLACE_STATUS_MAX_REFRESHES_PER_HOUR).toBe(0);
+  });
+
+  it("rejects a zero or negative snapshot TTL", async () => {
+    const { parseEnv } = await loadEnvModule();
+
+    expect(() => parseEnv({ PLACE_SNAPSHOT_TTL_DAYS: "0" })).toThrowError(/PLACE_SNAPSHOT_TTL_DAYS/);
+    expect(() => parseEnv({ PLACE_SNAPSHOT_TTL_DAYS: "-1" })).toThrowError(/PLACE_SNAPSHOT_TTL_DAYS/);
+  });
+
+  it("rejects a zero or negative refresh concurrency", async () => {
+    const { parseEnv } = await loadEnvModule();
+
+    expect(() => parseEnv({ PLACE_STATUS_REFRESH_CONCURRENCY: "0" })).toThrowError(
+      /PLACE_STATUS_REFRESH_CONCURRENCY/
+    );
+    expect(() => parseEnv({ PLACE_STATUS_REFRESH_CONCURRENCY: "-2" })).toThrowError(
+      /PLACE_STATUS_REFRESH_CONCURRENCY/
+    );
+  });
+
+  it("rejects invalid budgets and cooldowns", async () => {
+    const { parseEnv } = await loadEnvModule();
+
+    expect(() => parseEnv({ PLACE_STATUS_MAX_REFRESHES_PER_READ: "-1" })).toThrowError(
+      /PLACE_STATUS_MAX_REFRESHES_PER_READ/
+    );
+    expect(() => parseEnv({ PLACE_STATUS_MAX_REFRESHES_PER_READ: "101" })).toThrowError(
+      /PLACE_STATUS_MAX_REFRESHES_PER_READ/
+    );
+    expect(() => parseEnv({ PLACE_STATUS_REFRESH_CONCURRENCY: "11" })).toThrowError(
+      /PLACE_STATUS_REFRESH_CONCURRENCY/
+    );
+    expect(() => parseEnv({ PLACE_STATUS_MAX_REFRESHES_PER_RUN: "-1" })).toThrowError(
+      /PLACE_STATUS_MAX_REFRESHES_PER_RUN/
+    );
+    expect(() => parseEnv({ PLACE_STATUS_RETRY_COOLDOWN_MS: "0" })).toThrowError(
+      /PLACE_STATUS_RETRY_COOLDOWN_MS/
+    );
+  });
+});
