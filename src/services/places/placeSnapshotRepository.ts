@@ -22,6 +22,8 @@ export type PlaceSnapshotRow = {
   longitude: number | null;
   businessStatus: PlaceBusinessStatus | null;
   businessStatusCheckedAt: Date | null;
+  /** General data freshness, independent of the status clock. */
+  fetchedAt: Date;
   metadata?: unknown;
 };
 

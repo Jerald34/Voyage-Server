@@ -54,3 +54,42 @@ export type StatusObservation = {
   // Time immediately before the successful provider request was issued.
   businessStatusCheckedAt: Date;
 };
+
+/** The place-bearing fields of an itinerary item, as supplied by a caller. */
+export type PlaceItemInput = {
+  placeSnapshotId?: string | null;
+  placeName?: string;
+  cityContext?: string | null;
+};
+
+export type PreparedPlace = {
+  placeSnapshotId?: string;
+  point: { latitude: number; longitude: number } | null;
+  candidate: GateInput | null;
+};
+
+export type BlockExplanation = {
+  name: string;
+  reason: string;
+  detail: string;
+};
+
+/**
+ * One agency-scoped selection session. Created per request or per agent run and
+ * passed explicitly; never stored on a singleton, so two agencies can never see
+ * each other's notes.
+ */
+export type PlaceSelectionSession = {
+  agencyId: string | null;
+  gate: PlaceGate;
+  /** Resolve an item's place, checking eligibility. Throws PLACE_BLOCKED. */
+  prepare(item: PlaceItemInput, cityContextFallback?: string): Promise<PreparedPlace>;
+  /** Pure check against the loaded gate; no I/O. */
+  evaluate(candidate: GateInput): PlaceVerdict;
+  /** Async counterpart for raw provider output: persists, merges, then checks. */
+  consider<T extends GateInput & { businessStatusCheckedAt?: Date }>(
+    candidate: T
+  ): Promise<{ candidate: T; verdict: PlaceVerdict }>;
+  explanations(): BlockExplanation[];
+  notesUnavailable: boolean;
+};
