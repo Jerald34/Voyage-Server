@@ -31,6 +31,12 @@ export type PlaceSelectionServiceOptions = {
   ttlMs: number;
   now(): Date;
   runBudget: RefreshBudget;
+  /**
+   * Optional enrichment of a freshly resolved place (rating, photos, website)
+   * before it is stored. Injected rather than imported so this layer never
+   * depends on the agent tool modules that own enrichment.
+   */
+  enrich?(place: ResolvedPlace): Promise<ResolvedPlace>;
 };
 
 function pointOf(row: { latitude: number | null; longitude: number | null } | null | undefined) {
@@ -44,7 +50,7 @@ function blockedError(name: string, verdict: Extract<PlaceVerdict, { allowed: fa
 }
 
 export function createPlaceSelectionService(options: PlaceSelectionServiceOptions) {
-  const { repository, maps, scheduler, createGate, ttlMs, now, runBudget } = options;
+  const { repository, maps, scheduler, createGate, ttlMs, now, runBudget, enrich } = options;
 
   async function createSession(agencyId: string | null): Promise<PlaceSelectionSession> {
     const gate = await createGate(agencyId);
@@ -65,6 +71,8 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
       if (statusIsFresh(row.businessStatusCheckedAt, now(), ttlMs)) {
         return row;
       }
+      // A refresh problem — the provider, the budget, or the read-back — is never
+      // allowed to fail the caller's operation. The stored value simply stands.
       try {
         await scheduler.refresh(
           {
@@ -76,11 +84,10 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
           },
           runBudget
         );
+        return (await repository.findByProviderId(row.provider, row.providerPlaceId)) ?? row;
       } catch {
-        // A refresh failure is never allowed to fail the caller's operation.
         return row;
       }
-      return (await repository.findByProviderId(row.provider, row.providerPlaceId)) ?? row;
     }
 
     function candidateFrom(row: PlaceSnapshotRow, cityContext?: string | null): GateInput {
@@ -122,14 +129,28 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
       return { placeSnapshotId: current.id, point: pointOf(current), candidate };
     }
 
+    /**
+     * `cityContext` is the city the caller explicitly established, and is the only
+     * thing city-specific agency notes may match against. `searchContext` may
+     * additionally carry a loose fallback such as an itinerary title: good enough
+     * to disambiguate a provider search, not evidence of the city a note names.
+     */
     async function prepareByName(
       placeName: string,
-      cityContext: string | null
+      cityContext: string | null,
+      searchContext: string | null
     ): Promise<PreparedPlace> {
       // Agency name/city notes apply before any paid provider call.
       enforce({ name: placeName, cityContext });
 
-      const cached = await repository.findCachedByName(placeName, cityContext).catch(() => null);
+      // The cache pre-lookup is best-effort: a synchronous throw counts too, so
+      // this is a real try/catch rather than a promise `.catch`.
+      let cached: PlaceSnapshotRow | null = null;
+      try {
+        cached = await repository.findCachedByName(placeName, searchContext);
+      } catch {
+        cached = null;
+      }
       // `fetchedAt` governs general data freshness; the status clock is separate
       // and handled by `refreshed` below.
       if (cached && statusIsFresh(cached.fetchedAt, now(), ttlMs)) {
@@ -146,7 +167,7 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
         return { placeSnapshotId: undefined, point: null, candidate: null };
       }
 
-      const key = `${placeName.trim().toLowerCase()}|${(cityContext ?? "").trim().toLowerCase()}`;
+      const key = `${placeName.trim().toLowerCase()}|${(searchContext ?? "").trim().toLowerCase()}`;
       if (!resolveMemo.has(key)) {
         resolveMemo.set(
           key,
@@ -154,7 +175,7 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
             try {
               return await maps.resolvePlace({
                 placeName,
-                cityContext: cityContext ?? undefined
+                cityContext: searchContext ?? undefined
               });
             } catch (error) {
               console.error(`[Places] Failed to resolve place: "${placeName}"`);
@@ -171,24 +192,40 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
         return { placeSnapshotId: undefined, point: null, candidate: null };
       }
 
+      // Enrichment can itself observe a newer status (its details call carries one).
+      const enriched = enrich ? await enrich(resolved) : resolved;
+
       const observation =
-        resolved.businessStatus && resolved.businessStatusCheckedAt
+        enriched.businessStatus && enriched.businessStatusCheckedAt
           ? {
-              businessStatus: resolved.businessStatus,
-              businessStatusCheckedAt: resolved.businessStatusCheckedAt
+              businessStatus: enriched.businessStatus,
+              businessStatusCheckedAt: enriched.businessStatusCheckedAt
             }
           : null;
 
       let stored: PlaceSnapshotRow | null = null;
       try {
-        stored = await repository.saveProviderCandidate({
-          provider: resolved.provider,
-          providerPlaceId: resolved.providerPlaceId,
-          name: resolved.name,
-          location: resolved.location ?? null,
-          formattedAddress: resolved.formattedAddress ?? null,
-          observation
-        });
+        if (enriched.location) {
+          // Full record: keep the existing rich upsert (rating, photos, metadata).
+          const row = (await repository.upsertPlaceSnapshot(enriched)) as PlaceSnapshotRow;
+          stored = observation
+            ? (await repository.observeStatus(
+                enriched.provider,
+                enriched.providerPlaceId,
+                observation
+              )) ?? row
+            : row;
+        } else {
+          // A candidate without coordinates still deserves its observation.
+          stored = await repository.saveProviderCandidate({
+            provider: enriched.provider,
+            providerPlaceId: enriched.providerPlaceId,
+            name: enriched.name,
+            location: null,
+            formattedAddress: enriched.formattedAddress ?? null,
+            observation
+          });
+        }
       } catch {
         // Persistence failed. The raw provider response is still evidence, so the
         // check below runs against it rather than silently allowing the place.
@@ -200,17 +237,17 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
       // Merge the stored observation over this response: a row may already carry a
       // newer closure that this particular response omitted.
       const candidate: GateInput = {
-        provider: resolved.provider,
-        providerPlaceId: resolved.providerPlaceId,
-        name: resolved.name,
+        provider: enriched.provider,
+        providerPlaceId: enriched.providerPlaceId,
+        name: enriched.name,
         cityContext,
-        businessStatus: current?.businessStatus ?? resolved.businessStatus ?? null
+        businessStatus: current?.businessStatus ?? enriched.businessStatus ?? null
       };
       enforce(candidate);
 
       return {
         placeSnapshotId: current?.id,
-        point: pointOf(current) ?? resolved.location ?? null,
+        point: pointOf(current) ?? enriched.location ?? null,
         candidate
       };
     }
@@ -221,7 +258,10 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
       notesUnavailable: !gate.notesAvailable,
 
       async prepare(item: PlaceItemInput, cityContextFallback?: string) {
-        const cityContext = item.cityContext ?? cityContextFallback ?? null;
+        // Only an explicitly established city counts as city context for agency
+        // note matching. A fallback (an itinerary title, say) is a search hint.
+        const cityContext = item.cityContext ?? null;
+        const searchContext = item.cityContext ?? cityContextFallback ?? null;
 
         if (item.placeSnapshotId) {
           return prepareBySnapshotId(item.placeSnapshotId, cityContext);
@@ -231,7 +271,7 @@ export function createPlaceSelectionService(options: PlaceSelectionServiceOption
           // never advertised as a verified place.
           return { placeSnapshotId: undefined, point: null, candidate: null };
         }
-        return prepareByName(item.placeName, cityContext);
+        return prepareByName(item.placeName, cityContext, searchContext);
       },
 
       evaluate(candidate: GateInput) {

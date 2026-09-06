@@ -4,6 +4,7 @@ import type { AgentRunRecord, AgentMessageRecord, AgentRunEventRecord } from "./
 import { agentLogger } from "./agentLogger";
 import type { AgentEvent } from "./agentSchemas";
 import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
+import type { PlaceSelectionSession } from "../../services/places/placeTypes";
 import type {
   AgentOrchestrator,
   AgentOrchestratorRunInput,
@@ -97,6 +98,12 @@ export function createAgentOrchestrator(options: {
   /** Awaited before completeRun so enriched PlaceSnapshots (photos, ratings)
    *  are in the DB when the client re-fetches. */
   onBeforeRunComplete?: (itinerary: Record<string, unknown>) => Promise<void>;
+  /**
+   * Builds the per-run place selection session. Production always supplies it;
+   * the session is created inside `run` and lives only for that run, so agency
+   * notes are never held on this singleton orchestrator.
+   */
+  createPlaceSession?: (agencyId: string | null) => Promise<PlaceSelectionSession>;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
   // Packed Approach B with research + clustering + per-stop estimate_route fans out to ~3 tool calls per stop on a multi-day plan.
@@ -146,6 +153,17 @@ export function createAgentOrchestrator(options: {
 
         let conversationHistory: ModelMessage[] = [];
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
+        // One session per run, created after the run's agency is established. A
+        // failure here must not fail the run: without a session, tools simply
+        // perform no place checks, which is the pre-feature behavior.
+        let placeSession: PlaceSelectionSession | null = null;
+        if (options.createPlaceSession) {
+          try {
+            placeSession = await options.createPlaceSession(input.agencyId);
+          } catch (error) {
+            console.error("[Places] Failed to create the run place session.", error);
+          }
+        }
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
           activeItineraryContext = buildActiveItineraryContext(thread);
@@ -350,7 +368,8 @@ export function createAgentOrchestrator(options: {
           agencyId: input.agencyId,
           threadId: input.threadId,
           runId: input.runId,
-          userId: input.userId
+          userId: input.userId,
+          places: placeSession ?? undefined
         };
 
         let toolCallsExecuted = 0;

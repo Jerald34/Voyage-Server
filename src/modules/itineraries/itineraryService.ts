@@ -16,6 +16,13 @@ import {
 } from "./itinerarySchemas";
 import type { z } from "zod";
 import type { ItineraryRepository } from "./itineraryTypes";
+import type { PlaceSelectionSession } from "../../services/places/placeTypes";
+import {
+  prepareItineraryItems,
+  prepareReplacementItems,
+  prepareUpdatedItem,
+  storedPointsBySnapshotId
+} from "./itineraryPlaceGuard";
 
 // Re-export all types from itineraryTypes
 export * from "./itineraryTypes";
@@ -51,7 +58,76 @@ export function assertUuid(value: unknown, field: string): asserts value is stri
   }
 }
 
+/**
+ * Internal execution context for a mutation. It is never part of any request-body
+ * schema: production composition supplies it, and isolated unit tests may inject a
+ * deterministic fake. Without a session the service performs no place checks, so
+ * every production call path must provide one.
+ */
+export type ItineraryPlaceExecution = {
+  session: PlaceSelectionSession;
+  /**
+   * Optional routing pass, supplied by the agent tool layer which owns the maps
+   * provider. It receives the already-prepared days plus trusted stored points so
+   * preserved stops keep their routes without being re-resolved.
+   */
+  addRoutes?: (
+    days: any[],
+    points: Map<string, { latitude: number; longitude: number }>
+  ) => Promise<any[]>;
+};
+
 export function createItineraryService(options: { repository: ItineraryRepository }) {
+  /**
+   * Points the routing pass may trust: freshly prepared coordinates plus the
+   * stored coordinates of preserved stops, so a preserved place is never
+   * re-resolved just to draw a route to it.
+   */
+  function mergePoints(
+    prepared: Array<{ placeSnapshotId: string | null; point: { latitude: number; longitude: number } | null }>,
+    existing?: unknown
+  ) {
+    const points = existing
+      ? storedPointsBySnapshotId(existing as any)
+      : new Map<string, { latitude: number; longitude: number }>();
+    for (const entry of prepared) {
+      if (entry.placeSnapshotId && entry.point) points.set(entry.placeSnapshotId, entry.point);
+    }
+    return points;
+  }
+
+  async function prepareCreatedItinerary(
+    itinerary: StructuredItineraryInput["itinerary"],
+    agencyId: string,
+    execution?: ItineraryPlaceExecution
+  ) {
+    if (!execution) return itinerary;
+
+    const days: unknown[] = [];
+    const allPrepared: Array<{
+      placeSnapshotId: string | null;
+      point: { latitude: number; longitude: number } | null;
+    }> = [];
+
+    for (const day of itinerary.days) {
+      const prepared = await prepareItineraryItems({
+        session: execution.session,
+        items: (day.items ?? []) as any[],
+        cityContextFallback: itinerary.title,
+        expectedAgencyId: agencyId
+      });
+      allPrepared.push(...prepared);
+      days.push({ ...day, items: prepared.map((entry) => entry.item) });
+    }
+
+    const withDays = { ...itinerary, days } as StructuredItineraryInput["itinerary"];
+    if (!execution.addRoutes) return withDays;
+    return {
+      ...withDays,
+      days: await execution.addRoutes(days as any[], mergePoints(allPrepared))
+    } as StructuredItineraryInput["itinerary"];
+  }
+
   return {
     async listTripsWithItineraries(agencyId: string) {
       return options.repository.listTripsWithItineraries(agencyId);
@@ -64,14 +140,19 @@ export function createItineraryService(options: { repository: ItineraryRepositor
     async createDraftFromStructuredInput(
       agencyId: string,
       createdByUserId: string,
-      input: StructuredItineraryInput
+      input: StructuredItineraryInput,
+      execution?: ItineraryPlaceExecution
     ) {
       const parsed = structuredItineraryInputSchema.parse(input);
+      // Every place in a new itinerary is a new selection. The whole payload is
+      // prepared and validated before a single row is written, so a blocked item
+      // rejects the create atomically.
+      const itinerary = await prepareCreatedItinerary(parsed.itinerary, agencyId, execution);
       return options.repository.createTripWithItinerary({
         agencyId,
         createdByUserId,
         trip: parsed.trip,
-        itinerary: parsed.itinerary
+        itinerary
       });
     },
 
@@ -83,8 +164,14 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       return itinerary;
     },
 
-    async replaceDraft(agencyId: string, itineraryId: string, input: ReplaceItineraryInput) {
+    async replaceDraft(
+      agencyId: string,
+      itineraryId: string,
+      input: ReplaceItineraryInput,
+      execution?: ItineraryPlaceExecution
+    ) {
       const parsed = replaceItinerarySchema.parse(input);
+      // Draft/ownership checks run before any provider work.
       const existing = await options.repository.findItineraryByAgency(itineraryId, agencyId);
       if (!existing) {
         throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
@@ -93,7 +180,31 @@ export function createItineraryService(options: { repository: ItineraryRepositor
         throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
       }
 
-      const itinerary = await options.repository.replaceItineraryDraft(itineraryId, agencyId, parsed);
+      // Preservation is computed from the authorized stored itinerary, never from
+      // anything a request body supplied.
+      let prepared = parsed;
+      if (execution) {
+        // Freshly prepared coordinates land in the sink; preserved stops keep
+        // their stored coordinates, so routing works for both without a re-resolve.
+        const points = mergePoints([], existing);
+        const days = await prepareReplacementItems({
+          session: execution.session,
+          existingItinerary: existing,
+          days: parsed.days as any[],
+          expectedAgencyId: agencyId,
+          pointSink: points
+        });
+        prepared = {
+          ...parsed,
+          days: execution.addRoutes ? await execution.addRoutes(days, points) : days
+        } as ReplaceItineraryInput;
+      }
+
+      const itinerary = await options.repository.replaceItineraryDraft(
+        itineraryId,
+        agencyId,
+        prepared as ReplaceItineraryInput
+      );
       if (!itinerary) {
         throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
       }
@@ -156,22 +267,56 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       return options.repository.removeDay(parsed.itineraryId, agencyId, parsed.dayId);
     },
 
-    async addItem(agencyId: string, input: AddItineraryItemInput) {
+    async addItem(agencyId: string, input: AddItineraryItemInput, execution?: ItineraryPlaceExecution) {
       const parsed = addItineraryItemInputSchema.parse(input);
       assertUuid(parsed.itineraryId, "itineraryId");
       assertUuid(parsed.dayId, "dayId");
+
+      // An added stop is always a new selection, even if the place is cached.
+      let item = parsed.item;
+      if (execution) {
+        const [prepared] = await prepareItineraryItems({
+          session: execution.session,
+          items: [item as any],
+          expectedAgencyId: agencyId
+        });
+        item = prepared.item as typeof item;
+      }
+
       return options.repository.addItem(parsed.itineraryId, agencyId, {
         dayId: parsed.dayId,
         sortOrder: parsed.sortOrder,
-        item: parsed.item
+        item
       });
     },
 
-    async updateItem(agencyId: string, input: UpdateItineraryItemInput) {
+    async updateItem(
+      agencyId: string,
+      input: UpdateItineraryItemInput,
+      execution?: ItineraryPlaceExecution
+    ) {
       const parsed = updateItineraryItemInputSchema.parse(input);
       assertUuid(parsed.itineraryId, "itineraryId");
       assertUuid(parsed.itemId, "itemId");
-      return options.repository.updateItem(parsed.itineraryId, agencyId, parsed.itemId, parsed.item);
+
+      // Only an identity change is a new selection. Retitling or retiming a saved
+      // stop keeps it, closed or not, along with its route data.
+      let patch = parsed.item;
+      if (execution) {
+        const existing = await options.repository.findItineraryByAgency(parsed.itineraryId, agencyId);
+        if (!existing) {
+          throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
+        }
+        patch = await prepareUpdatedItem({
+          session: execution.session,
+          existingItinerary: existing,
+          itemId: parsed.itemId,
+          patch: patch as any,
+          expectedAgencyId: agencyId
+        });
+      }
+
+      return options.repository.updateItem(parsed.itineraryId, agencyId, parsed.itemId, patch);
     },
 
     async removeItem(agencyId: string, input: RemoveItineraryItemInput) {

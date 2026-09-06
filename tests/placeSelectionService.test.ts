@@ -568,3 +568,41 @@ describe("session scoping and memoization", () => {
     expect(session.evaluate({ name: "Anything" }).allowed).toBe(true);
   });
 });
+
+describe("city context versus search fallback", () => {
+  it("uses a fallback for the provider search but not for city-specific notes", async () => {
+    const maps = {
+      resolvePlace: vi.fn(async () => ({
+        provider: "GOOGLE_MAPS" as const,
+        providerPlaceId: "g-fallback",
+        name: "Bayview",
+        location: { latitude: 1, longitude: 2 }
+      }))
+    };
+    const { service } = build({
+      maps,
+      // A note that only applies in Cebu.
+      notes: [note({ status: "CLOSED", placeName: "Bayview", cityContext: "Cebu" })]
+    });
+    const session = await service.createSession("agency-1");
+
+    // The itinerary title is a search hint, not an established city, so the
+    // Cebu-specific note must not match.
+    const prepared = await session.prepare({ placeName: "Bayview" }, "Cebu Highlights Tour");
+
+    expect(prepared.placeSnapshotId).toBeTruthy();
+    expect(maps.resolvePlace).toHaveBeenCalledWith({
+      placeName: "Bayview",
+      cityContext: "Cebu Highlights Tour"
+    });
+  });
+
+  it("still blocks when the caller explicitly established the city", async () => {
+    const { service } = build({
+      notes: [note({ status: "CLOSED", placeName: "Bayview", cityContext: "Cebu" })]
+    });
+    const session = await service.createSession("agency-1");
+
+    await expectBlocked(session.prepare({ placeName: "Bayview", cityContext: "Cebu" }, "Somewhere Else"));
+  });
+});

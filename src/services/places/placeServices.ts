@@ -1,7 +1,7 @@
 import { env } from "../../config/env";
 import { prisma } from "../../db/prisma";
 import { createGoogleMapsProvider } from "../maps";
-import type { MapsProvider } from "../maps";
+import type { MapsProvider, ResolvedPlace } from "../maps";
 import { createPlaceGate } from "./placeGate";
 import { createPlaceRefreshScheduler, type PlaceRefreshScheduler, type RefreshBudget } from "./placeRefreshScheduler";
 import { createPlaceSelectionService, type PlaceSelectionService } from "./placeSelectionService";
@@ -80,7 +80,11 @@ export function createRunRefreshBudget(): RefreshBudget {
  * an agent run cannot spend another run's allowance.
  */
 export function createPlaceSelectionServiceForRun(
-  runBudget: RefreshBudget = createRunRefreshBudget()
+  options: {
+    runBudget?: RefreshBudget;
+    /** Supplied by the agent layer, which owns snapshot enrichment. */
+    enrich?: (place: ResolvedPlace) => Promise<ResolvedPlace>;
+  } = {}
 ): PlaceSelectionService {
   return createPlaceSelectionService({
     repository: getPlaceSnapshotRepository(),
@@ -89,7 +93,8 @@ export function createPlaceSelectionServiceForRun(
     createGate: (agencyId) => createPlaceGate(prisma as any, agencyId),
     ttlMs: env.PLACE_SNAPSHOT_TTL_DAYS * DAY_MS,
     now: () => new Date(),
-    runBudget
+    runBudget: options.runBudget ?? createRunRefreshBudget(),
+    enrich: options.enrich
   });
 }
 
@@ -97,8 +102,14 @@ export function createPlaceSelectionServiceForRun(
  * The production `createPlaceSession` dependency. Each call gets its own budget,
  * so nothing agency-scoped is ever shared through a singleton.
  */
-export function createPlaceSession(agencyId: string | null): Promise<PlaceSelectionSession> {
-  return createPlaceSelectionServiceForRun().createSession(agencyId);
+export function createPlaceSession(
+  agencyId: string | null,
+  options: {
+    runBudget?: RefreshBudget;
+    enrich?: (place: ResolvedPlace) => Promise<ResolvedPlace>;
+  } = {}
+): Promise<PlaceSelectionSession> {
+  return createPlaceSelectionServiceForRun(options).createSession(agencyId);
 }
 
 /** Test-only: drops cached instances so env changes take effect. */

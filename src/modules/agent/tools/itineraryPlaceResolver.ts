@@ -1,11 +1,9 @@
 import { z } from "zod";
-import type { PrismaClient } from "@prisma/client";
-import type { MapsProvider, ResolvedPlace } from "../../../services/maps";
+import type { MapsProvider } from "../../../services/maps";
+import type { PlaceSelectionSession } from "../../../services/places/placeTypes";
 import { structuredItineraryItemSchema } from "../../itineraries/itinerarySchemas";
-import type { StructuredItineraryInput } from "../../itineraries/itineraryService";
 import type { ItineraryAgentService } from "../agentTools";
-import { isRecordLike, upsertPlaceSnapshot } from "./toolUtils";
-import { enrichResolvedPlaceForSnapshot } from "./placeSnapshotEnrichment";
+import { isRecordLike } from "./toolUtils";
 
 function toFiniteNumber(value: unknown) {
   const number = Number(value);
@@ -53,37 +51,50 @@ function findPreviousMappedItem(items: Array<Record<string, unknown>>, currentIt
   return null;
 }
 
-export async function resolveItineraryItemPlaces<T extends StructuredItineraryInput["itinerary"]>(options: {
-  input: T;
+/**
+ * Routing pass over days whose places the itinerary service has ALREADY prepared.
+ *
+ * Resolution and eligibility no longer live here: the guarded service owns which
+ * items are new selections and which are preserved, so a tool can never pre-check
+ * (or bypass) an exemption. This function only draws routes, using the trusted
+ * coordinates the service supplies.
+ */
+export async function addRoutesToPreparedDays(options: {
+  days: Array<Record<string, unknown>>;
+  points: Map<string, { latitude: number; longitude: number }>;
   maps: MapsProvider;
-  client: PrismaClient;
-}): Promise<T> {
-  type StructuredItem = z.infer<typeof structuredItineraryItemSchema>;
-  type ResolvedItem = {
-    item: StructuredItem;
-    point: { latitude: number; longitude: number } | null;
-    placeSnapshotId: string | null;
-  };
+}): Promise<Array<Record<string, unknown>>> {
+  const { days, points, maps } = options;
 
-  async function addRoutesWithinDay(items: ResolvedItem[]) {
-    const routedItems: StructuredItem[] = [];
-    let previousMappedItem: ResolvedItem | null = null;
+  function pointFor(item: Record<string, unknown>) {
+    const id = typeof item.placeSnapshotId === "string" ? item.placeSnapshotId : null;
+    return id ? points.get(id) ?? null : null;
+  }
+
+  const routed: Array<Record<string, unknown>> = [];
+
+  for (const day of days) {
+    const items = Array.isArray(day.items) ? (day.items as Array<Record<string, unknown>>) : [];
+    const routedItems: Array<Record<string, unknown>> = [];
+    let previous: { item: Record<string, unknown>; point: { latitude: number; longitude: number } } | null =
+      null;
 
     for (const current of items) {
-      let item = current.item;
+      let item = current;
+      const point = pointFor(current);
 
-      if (previousMappedItem?.point && current.point && item.routeFromPrevious === undefined) {
+      if (previous && point && item.routeFromPrevious === undefined) {
         try {
-          const route = await options.maps.estimateRoute({
-            origin: previousMappedItem.point,
-            destination: current.point,
+          const route = await maps.estimateRoute({
+            origin: previous.point,
+            destination: point,
             travelMode: "DRIVE"
           });
           item = {
             ...item,
             routeFromPrevious: {
-              originPlaceSnapshotId: previousMappedItem.placeSnapshotId,
-              destinationPlaceSnapshotId: current.placeSnapshotId,
+              originPlaceSnapshotId: previous.item.placeSnapshotId ?? null,
+              destinationPlaceSnapshotId: item.placeSnapshotId ?? null,
               travelMode: "DRIVE",
               distanceMeters: route.distanceMeters ?? null,
               durationSeconds: route.durationSeconds ?? null,
@@ -97,156 +108,47 @@ export async function resolveItineraryItemPlaces<T extends StructuredItineraryIn
       }
 
       routedItems.push(item);
-
-      if (current.point) {
-        previousMappedItem = {
-          ...current,
-          item
-        };
-      }
+      if (point) previous = { item, point };
     }
 
-    return routedItems;
+    routed.push({ ...day, items: routedItems });
   }
 
-  // In-run dedup: if the same place appears multiple times in one itinerary
-  // (e.g., a hotel used on day 1 and day 3), resolve it once and reuse the snapshot.
-  const resolveDedup = new Map<string, Promise<{ snapshot: { id: string }; enriched: ResolvedPlace } | null>>();
-
-  const days = await Promise.all(
-    options.input.days.map(async (day) => {
-      const resolvedItems = await Promise.all(
-        day.items.map(async (item): Promise<ResolvedItem> => {
-          if (item.placeSnapshotId || !item.placeName) {
-            return { item, point: null, placeSnapshotId: item.placeSnapshotId ?? null };
-          }
-
-          const cityContext = item.cityContext ?? options.input.title;
-
-          // Pre-lookup: check if we already have a PlaceSnapshot for this name+city.
-          try {
-            const cached = await options.client.placeSnapshot.findFirst({
-              where: {
-                name: { equals: item.placeName, mode: "insensitive" },
-                ...(cityContext ? { formattedAddress: { contains: cityContext, mode: "insensitive" } } : {})
-              }
-            });
-            if (cached) {
-              const point = (typeof cached.latitude === "number" && typeof cached.longitude === "number")
-                ? { latitude: cached.latitude, longitude: cached.longitude }
-                : null;
-              return {
-                item: { ...item, placeSnapshotId: cached.id },
-                point,
-                placeSnapshotId: cached.id
-              };
-            }
-          } catch {
-            // Pre-lookup is best-effort.
-          }
-
-          // In-run dedup: coalesce identical resolve calls within this itinerary build.
-          const placeName = item.placeName;
-          const dedupKey = `${placeName.toLowerCase()}|${cityContext.toLowerCase()}`;
-          if (!resolveDedup.has(dedupKey)) {
-            resolveDedup.set(dedupKey, (async () => {
-              try {
-                console.log(`[Maps] Resolving place: "${placeName}" in context: "${cityContext}"`);
-                const resolved = await options.maps.resolvePlace({
-                  placeName,
-                  cityContext
-                });
-                console.log(`[Maps] Successfully resolved "${placeName}" to ${resolved.location.latitude}, ${resolved.location.longitude}`);
-                const enriched = await enrichResolvedPlaceForSnapshot(options.maps, resolved);
-                const snapshot = await upsertPlaceSnapshot(options.client, enriched);
-                return { snapshot, enriched };
-              } catch (error) {
-                console.error(`[Maps] Failed to resolve place: "${placeName}"`, error);
-                return null;
-              }
-            })());
-          }
-
-          const result = await resolveDedup.get(dedupKey)!;
-          if (!result) {
-            return { item, point: null, placeSnapshotId: item.placeSnapshotId ?? null };
-          }
-
-          return {
-            item: { ...item, placeSnapshotId: result.snapshot.id },
-            point: result.enriched.location,
-            placeSnapshotId: result.snapshot.id
-          };
-        })
-      );
-
-      return {
-        ...day,
-        items: await addRoutesWithinDay(resolvedItems)
-      };
-    })
-  );
-
-  return {
-    ...options.input,
-    days
-  } as T;
+  return routed;
 }
 
+/**
+ * Resolve one item's place through the run's selection session, so the cached and
+ * supplied-ID early returns are checked as well as freshly resolved names. A
+ * PLACE_BLOCKED or PLACE_SNAPSHOT_NOT_FOUND error propagates: it is a decision,
+ * not a maps outage, and the registry turns it into recoverable tool output.
+ */
 export async function resolveSingleItemPlace(options: {
   item: z.infer<typeof structuredItineraryItemSchema>;
   cityContextFallback?: string;
-  maps: MapsProvider;
-  client: PrismaClient;
-  /** Skip enrichment (getPlaceDetails) to reduce latency during streaming.
-   *  The post-run backfill job will enrich unenriched snapshots afterwards. */
-  skipEnrichment?: boolean;
-}): Promise<{ item: z.infer<typeof structuredItineraryItemSchema>; resolved: ResolvedPlace | null }> {
+  session: PlaceSelectionSession;
+}): Promise<{
+  item: z.infer<typeof structuredItineraryItemSchema>;
+  point: { latitude: number; longitude: number } | null;
+}> {
   const { item } = options;
-  if (item.placeSnapshotId || !item.placeName) {
-    return { item, resolved: null };
+  if (!item.placeSnapshotId && !item.placeName) {
+    return { item, point: null };
   }
 
-  // Pre-lookup: check if we already have a PlaceSnapshot for this name+city
-  // before making any Google API calls. Saves ~$0.04 per cache hit.
-  try {
-    const cityContext = item.cityContext ?? options.cityContextFallback ?? "";
-    const cached = await options.client.placeSnapshot.findFirst({
-      where: {
-        name: { equals: item.placeName, mode: "insensitive" },
-        ...(cityContext ? { formattedAddress: { contains: cityContext, mode: "insensitive" } } : {})
-      }
-    });
-    if (cached) {
-      return {
-        item: { ...item, placeSnapshotId: cached.id },
-        resolved: null
-      };
-    }
-  } catch {
-    // Pre-lookup is best-effort; fall through to Google resolution.
-  }
-
-  try {
-    const resolved = await options.maps.resolvePlace({
+  const prepared = await options.session.prepare(
+    {
+      placeSnapshotId: item.placeSnapshotId,
       placeName: item.placeName,
-      cityContext: item.cityContext ?? options.cityContextFallback
-    });
-    // When skipEnrichment is true, persist the basic resolved data immediately
-    // (coordinates are enough for map pins). Full enrichment (rating, photos,
-    // etc.) runs in the post-run backfill job.
-    const finalPlace = options.skipEnrichment
-      ? resolved
-      : await enrichResolvedPlaceForSnapshot(options.maps, resolved);
-    const snapshot = await upsertPlaceSnapshot(options.client, finalPlace);
-    return {
-      item: { ...item, placeSnapshotId: snapshot.id },
-      resolved: finalPlace
-    };
-  } catch (error) {
-    console.error(`[Maps] Failed to resolve item place: "${item.placeName}"`, error);
-    return { item, resolved: null };
-  }
+      cityContext: item.cityContext
+    },
+    options.cityContextFallback
+  );
+
+  return {
+    item: prepared.placeSnapshotId ? { ...item, placeSnapshotId: prepared.placeSnapshotId } : item,
+    point: prepared.point
+  };
 }
 
 export async function attachRouteFromPrevious(options: {

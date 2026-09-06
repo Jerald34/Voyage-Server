@@ -16,6 +16,11 @@ import {
   createUpdateItineraryTool,
   createWebSearchTool
 } from "../src/modules/agent/agentTools";
+import { createPlaceSelectionService } from "../src/services/places/placeSelectionService";
+import { createPlaceSnapshotRepository } from "../src/services/places/placeSnapshotRepository";
+import { buildPlaceGate } from "../src/services/places/placeGate";
+import { enrichResolvedPlaceForSnapshot } from "../src/modules/agent/tools/placeSnapshotEnrichment";
+import { createItineraryService } from "../src/modules/itineraries/itineraryService";
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
 import type { ModelProvider } from "../src/services/modelProvider";
@@ -331,6 +336,43 @@ function createRunInput() {
     userId: "user-1",
     userContent: "Build a Cebu itinerary."
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Place-gate test helpers
+//
+// Resolution and eligibility now live in the guarded itinerary service, not in
+// the tool. Tests that exercise resolution therefore build a real service over a
+// fake repository plus a real selection session over fake maps, so the assertions
+// cover the actual production path instead of a bypass.
+// ---------------------------------------------------------------------------
+function createTestPlaceSession(maps: any, placeSnapshotClient: any, agencyId: string | null = "agency-1") {
+  return createPlaceSelectionService({
+    repository: createPlaceSnapshotRepository(placeSnapshotClient),
+    maps,
+    scheduler: {
+      refresh: async () => ({ kind: "fresh" as const }),
+      scheduleRead: () => {},
+      drain: async () => {},
+      stats: () => ({}) as any
+    } as any,
+    createGate: async () => buildPlaceGate([]),
+    ttlMs: 30 * 24 * 60 * 60 * 1000,
+    now: () => new Date(),
+    runBudget: { remaining: 20 },
+    enrich: maps ? (place: any) => enrichResolvedPlaceForSnapshot(maps, place) : undefined
+  }).createSession(agencyId);
+}
+
+function createGuardedItineraryService(onCreate: (input: any) => any) {
+  return createItineraryService({
+    repository: {
+      async createTripWithItinerary(args: any) {
+        return onCreate({ trip: args.trip, itinerary: args.itinerary });
+      }
+    } as any
+  }) as any;
 }
 
 describe("agent orchestrator", () => {
@@ -700,14 +742,16 @@ describe("agent orchestrator", () => {
       phoneNumber?: string;
       metadata?: Record<string, unknown>;
     }> = [];
+    let capturedMaps: any;
+    let capturedClient: any;
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
         agentService: service,
-        maps: {
+        maps: (capturedMaps = {
           async searchPlaces() {
             return [];
           },
-          async getPlaceDetails(placeId) {
+          async getPlaceDetails(placeId: string) {
             detailsCalls.push(placeId);
             return {
               id: placeId,
@@ -725,7 +769,7 @@ describe("agent orchestrator", () => {
               ]
             };
           },
-          async getPlacePhotos(placeId, maxResults) {
+          async getPlacePhotos(placeId: string, maxResults?: number) {
             photoCalls.push({ placeId, maxResults });
             return [
               { name: `${placeId}/photos/1`, photoUri: "https://example.com/photo-1.jpg" },
@@ -736,7 +780,7 @@ describe("agent orchestrator", () => {
           async estimateRoute() {
             return {};
           },
-          async resolvePlace(input) {
+          async resolvePlace(input: any) {
             resolvedPlaces.push(input);
             return {
               provider: "GOOGLE_MAPS",
@@ -747,8 +791,8 @@ describe("agent orchestrator", () => {
               metadata: { source: "resolved" }
             };
           }
-        },
-        placeSnapshotClient: {
+        }),
+        placeSnapshotClient: (capturedClient = {
           placeSnapshot: {
             async upsert(args: { create: { name: string; metadata?: Record<string, unknown> } }) {
               upsertedPlaces.push(args.create.name);
@@ -756,21 +800,23 @@ describe("agent orchestrator", () => {
               return { id: "11111111-1111-4111-8111-111111111111" };
             }
           }
-        } as never,
-        itineraryService: {
-          async createDraftFromStructuredInput(_agencyId, _userId, input) {
-            createdInputs.push(input);
-            return { trip: { id: "trip-baguio" }, itinerary: { id: "itinerary-baguio" } };
-          }
-        }
+        }) as never,
+        itineraryService: createGuardedItineraryService((input: any) => {
+          createdInputs.push(input);
+          return { trip: { id: "trip-baguio" }, itinerary: { id: "itinerary-baguio" } };
+        })
       })
     ]);
 
-    await registry.execute("create_itinerary", createRunInput(), {
-      location: "Baguio City, Philippines",
-      duration_days: 2,
-      highlights: ["Burnham Park boating", "Mines View Park views"]
-    });
+    await registry.execute(
+      "create_itinerary",
+      { ...createRunInput(), places: await createTestPlaceSession(capturedMaps, capturedClient) },
+      {
+        location: "Baguio City, Philippines",
+        duration_days: 2,
+        highlights: ["Burnham Park boating", "Mines View Park views"]
+      }
+    );
 
     expect(resolvedPlaces).toEqual([
       { placeName: "Burnham Park boating", cityContext: "Baguio City, Philippines" },
@@ -1888,10 +1934,12 @@ describe("agent orchestrator", () => {
     }> = [];
     let snapshotIndex = 0;
 
+    let routeMaps: any;
+    let routeClient: any;
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
         agentService: service,
-        maps: {
+        maps: (routeMaps = {
           async searchPlaces() {
             return [];
           },
@@ -1904,7 +1952,7 @@ describe("agent orchestrator", () => {
           async searchNearby() {
             return [];
           },
-          async resolvePlace(input) {
+          async resolvePlace(input: any) {
             const isBurnham = input.placeName === "Burnham Park";
             return {
               provider: "GOOGLE_MAPS",
@@ -1917,7 +1965,7 @@ describe("agent orchestrator", () => {
               metadata: {}
             };
           },
-          async estimateRoute(input) {
+          async estimateRoute(input: any) {
             routeCalls.push({
               origin: input.origin,
               destination: input.destination
@@ -1929,8 +1977,8 @@ describe("agent orchestrator", () => {
               polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
             };
           }
-        },
-        placeSnapshotClient: {
+        }),
+        placeSnapshotClient: (routeClient = {
           placeSnapshot: {
             async upsert() {
               snapshotIndex += 1;
@@ -1942,17 +1990,18 @@ describe("agent orchestrator", () => {
               };
             }
           }
-        } as never,
-        itineraryService: {
-          async createDraftFromStructuredInput(_agencyId, _userId, input) {
-            createdInputs.push(input);
-            return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
-          }
-        }
+        }) as never,
+        itineraryService: createGuardedItineraryService((input: any) => {
+          createdInputs.push(input);
+          return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
+        })
       })
     ]);
 
-    await registry.execute("create_itinerary", createRunInput(), {
+    await registry.execute("create_itinerary", {
+      ...createRunInput(),
+      places: await createTestPlaceSession(routeMaps, routeClient)
+    }, {
       trip: {
         title: "Baguio route test",
         destinationSummary: "Baguio"

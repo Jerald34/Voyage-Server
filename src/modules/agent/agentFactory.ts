@@ -35,7 +35,8 @@ import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../ser
 import type { MapsProvider } from "../../services/maps";
 import { createWebSearchProvider } from "../../services/webSearch";
 import { getModelProvider, getModelProviderInfo } from "../../services/modelProvider";
-import { backfillUnenrichedSnapshots } from "./tools/placeSnapshotEnrichment";
+import { backfillUnenrichedSnapshots, enrichResolvedPlaceForSnapshot } from "./tools/placeSnapshotEnrichment";
+import { createPlaceSession } from "../../services/places/placeServices";
 
 const GOOGLE_MAPS_TOOL_NAMES = [
   "search_google_places",
@@ -167,7 +168,15 @@ function createAgencyAgentOrchestrator() {
       ? async (itinerary) => {
           await backfillUnenrichedSnapshots({ itinerary, maps: mapsForBackfill!, client: prisma });
         }
-      : undefined
+      : undefined,
+    // A fresh session per run, with its own refresh budget. Enrichment is passed
+    // in from this layer so the places services never import agent tool modules.
+    createPlaceSession: (agencyId) =>
+      createPlaceSession(agencyId, {
+        enrich: mapsForBackfill
+          ? (place) => enrichResolvedPlaceForSnapshot(mapsForBackfill, place)
+          : undefined
+      })
   });
 }
 
