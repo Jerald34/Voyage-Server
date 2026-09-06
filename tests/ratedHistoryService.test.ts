@@ -17,6 +17,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
 
+import { ApiError } from "../src/http/errors";
 import {
   createRatedHistoryService,
   type RatedHistoryDeps
@@ -131,6 +132,7 @@ type FakeDepsOpts = {
   } | null;
   review?: { rating: number; submittedAt: Date } | null;
   lastItem?: { sortOrder: number } | null;
+  prepareCopiedPlaces?: RatedHistoryDeps["prepareCopiedPlaces"];
 };
 
 function makeDeps(opts: FakeDepsOpts = {}): RatedHistoryDeps {
@@ -173,6 +175,7 @@ function makeDeps(opts: FakeDepsOpts = {}): RatedHistoryDeps {
       return source;
     }),
     insertItemsTransactional: opts.insertImpl ?? defaultInsert,
+    prepareCopiedPlaces: opts.prepareCopiedPlaces,
     db: {
       clientTrip: {
         findUnique: vi.fn(async ({ where }) => {
@@ -701,5 +704,121 @@ describe("optimistic concurrency", () => {
     });
 
     expect(captured.v).toBe(5);
+  });
+});
+
+// ── Place eligibility on copies ───────────────────────────────────────────────
+//
+// A rated-history copy is a NEW selection for the target agency, even when the
+// same snapshot already appears there, so every copied place must be checked.
+describe("insertFromRated place eligibility", () => {
+  const blocked = () =>
+    vi.fn(async () => {
+      throw new ApiError(409, "PLACE_BLOCKED", "Senso-ji cannot be used: is marked closed by this agency.");
+    });
+
+  it("checks every distinct copied snapshot against the target agency", async () => {
+    const prepareCopiedPlaces = vi.fn(async () => {});
+    const source = makeSource();
+    const deps = makeDeps({ source, prepareCopiedPlaces });
+    const svc = createRatedHistoryService(deps);
+
+    await svc.insertFromRated({
+      callerAgencyId: AGENCY_A,
+      callerUserId: USER_OWNER,
+      callerRole: "OWNER",
+      targetTripId: TARGET_TRIP_ID,
+      sourceTripId: SOURCE_TRIP_ID,
+      selection: { kind: "day", dayIds: [source.days[0].dayId] },
+      target: { itineraryId: TARGET_ITIN_ID, dayIndex: 0 },
+      ifMatchVersion: 5
+    });
+
+    expect(prepareCopiedPlaces).toHaveBeenCalledTimes(1);
+    const [agencyId, ids] = prepareCopiedPlaces.mock.calls[0] as unknown as [string, string[]];
+    expect(agencyId).toBe(AGENCY_A);
+    // Deduplicated: the fixture reuses one snapshot across both items.
+    expect(ids).toEqual(["snap-1"]);
+  });
+
+  it("rejects an item insertion without mutating anything", async () => {
+    const insertItemsTransactional = vi.fn(async () => ({ itineraryId: TARGET_ITIN_ID, newVersion: 6 }));
+    const source = makeSource();
+    const deps = makeDeps({
+      source,
+      insertImpl: insertItemsTransactional,
+      prepareCopiedPlaces: blocked()
+    });
+    const svc = createRatedHistoryService(deps);
+
+    const error = await svc
+      .insertFromRated({
+        callerAgencyId: AGENCY_A,
+        callerUserId: USER_OWNER,
+        callerRole: "OWNER",
+        targetTripId: TARGET_TRIP_ID,
+        sourceTripId: SOURCE_TRIP_ID,
+        selection: { kind: "item", itemIds: [source.days[0].items[0].itemId] },
+        target: { itineraryId: TARGET_ITIN_ID, dayIndex: 0 },
+        ifMatchVersion: 5
+      })
+      .catch((caught) => caught);
+
+    expect(error).toBeInstanceOf(ApiError);
+    expect((error as ApiError).code).toBe("PLACE_BLOCKED");
+    expect(insertItemsTransactional).not.toHaveBeenCalled();
+  });
+
+  it("rejects a day/segment insertion without mutating anything", async () => {
+    const insertItemsTransactional = vi.fn(async () => ({ itineraryId: TARGET_ITIN_ID, newVersion: 6 }));
+    const source = makeSource();
+    const deps = makeDeps({
+      source,
+      insertImpl: insertItemsTransactional,
+      prepareCopiedPlaces: blocked()
+    });
+    const svc = createRatedHistoryService(deps);
+
+    const error = await svc
+      .insertFromRated({
+        callerAgencyId: AGENCY_A,
+        callerUserId: USER_OWNER,
+        callerRole: "OWNER",
+        targetTripId: TARGET_TRIP_ID,
+        sourceTripId: SOURCE_TRIP_ID,
+        selection: { kind: "segment", dayIds: [source.days[0].dayId, source.days[1].dayId] },
+        target: { itineraryId: TARGET_ITIN_ID, dayIndex: 0 },
+        ifMatchVersion: 5
+      })
+      .catch((caught) => caught);
+
+    expect((error as ApiError).code).toBe("PLACE_BLOCKED");
+    expect(insertItemsTransactional).not.toHaveBeenCalled();
+  });
+
+  it("does not run place checks before version or agency validation fails", async () => {
+    const prepareCopiedPlaces = vi.fn(async () => {});
+    const source = makeSource();
+    const deps = makeDeps({
+      source,
+      prepareCopiedPlaces,
+      sourceTrip: tripRow(SOURCE_TRIP_ID, { agencyId: AGENCY_B })
+    });
+    const svc = createRatedHistoryService(deps);
+
+    await svc
+      .insertFromRated({
+        callerAgencyId: AGENCY_A,
+        callerUserId: USER_OWNER,
+        callerRole: "OWNER",
+        targetTripId: TARGET_TRIP_ID,
+        sourceTripId: SOURCE_TRIP_ID,
+        selection: { kind: "day", dayIds: [source.days[0].dayId] },
+        target: { itineraryId: TARGET_ITIN_ID, dayIndex: 0 },
+        ifMatchVersion: 5
+      })
+      .catch(() => undefined);
+
+    expect(prepareCopiedPlaces).not.toHaveBeenCalled();
   });
 });
