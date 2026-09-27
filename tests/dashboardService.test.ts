@@ -20,6 +20,7 @@ import {
   selectViewForRole
 } from "../src/modules/dashboard/dashboardService";
 import { TtlCache } from "../src/modules/dashboard/cache";
+import { ownerDashboardPayloadSchema } from "../src/modules/dashboard/dashboardSchemas";
 import type {
   DashboardRepository,
   RawDashboardData
@@ -222,7 +223,8 @@ describe("getDashboard – owner payload completeness", () => {
     // KPI tiles present
     expect(typeof payload.kpis.winRate.value).toBe("number");
     expect(typeof payload.kpis.timeToFirstShareDays.value).toBe("number");
-    expect(typeof payload.kpis.medianCommentResponseHours.value).toBe("number");
+    // comment1 has no agency reply yet — no signal, so no fake 0h median.
+    expect(payload.kpis.medianCommentResponseHours.value).toBeNull();
     expect(typeof payload.kpis.avgProposalRating.value).toBe("number");
 
     // Worklist buckets are arrays
@@ -532,5 +534,88 @@ describe("getDashboard – now injection", () => {
     if (payload.view !== "owner") throw new Error("wrong view");
     // Only the trip exactly at the window boundary should appear
     expect(payload.funnel.stages[0].count).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// 7. KPI units and no-signal values
+// ---------------------------------------------------------------------------
+
+describe("getDashboard – KPI units and no-signal values", () => {
+  // Inside the prior 30d window ([now-60d, now-30d)).
+  const PRIOR = new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000);
+
+  async function ownerPayload(data: RawDashboardData) {
+    const { svc } = makeService(data);
+    const payload = await svc.getDashboard({
+      agencyId: AGENCY,
+      userId: USER_A,
+      role: "OWNER",
+      view: "owner",
+      period: "30d",
+      now: NOW
+    });
+    if (payload.view !== "owner") throw new Error("wrong view discriminant");
+    return payload;
+  }
+
+  it("reports win rate as a percentage of closed trips", async () => {
+    const payload = await ownerPayload({
+      ...emptyData(),
+      trips: [
+        makeTrip("t1", { status: "APPROVED_INTERNAL" }),
+        makeTrip("t2", { status: "APPROVED_INTERNAL" }),
+        makeTrip("t3", { status: "ARCHIVED" })
+      ]
+    });
+
+    expect(payload.kpis.winRate.value).toBeCloseTo(66.667, 2);
+  });
+
+  it("reports the win-rate delta in percentage points", async () => {
+    const payload = await ownerPayload({
+      ...emptyData(),
+      trips: [
+        makeTrip("now-approved", { status: "APPROVED_INTERNAL" }),
+        makeTrip("prior-approved", { status: "APPROVED_INTERNAL", createdAt: PRIOR }),
+        makeTrip("prior-archived", { status: "ARCHIVED", createdAt: PRIOR })
+      ]
+    });
+
+    expect(payload.kpis.winRate.value).toBe(100);
+    expect(payload.kpis.winRate.deltaVsPrior).toBe(50);
+  });
+
+  it("returns null KPI values and deltas when the period has no signal", async () => {
+    // Every KPI has signal in the prior window only.
+    const payload = await ownerPayload({
+      trips: [makeTrip("old", { status: "APPROVED_INTERNAL", createdAt: PRIOR, updatedAt: PRIOR })],
+      itineraries: [],
+      shares: [makeShare("s-old", "old", { createdAt: PRIOR, proposalRating: 5, proposalRatedAt: PRIOR })],
+      comments: [
+        makeComment("c-old", "s-old", {
+          createdAt: PRIOR,
+          status: "ADDRESSED",
+          agencyRepliedAt: new Date(PRIOR.getTime() + 60 * 60 * 1000)
+        })
+      ],
+      reviews: []
+    });
+
+    for (const kpi of Object.values(payload.kpis)) {
+      expect(kpi.value).toBeNull();
+      expect(kpi.deltaVsPrior).toBeNull();
+    }
+    expect(() => ownerDashboardPayloadSchema.parse(payload)).not.toThrow();
+  });
+
+  it("returns a null delta when only the prior period has no signal", async () => {
+    const payload = await ownerPayload({
+      ...emptyData(),
+      trips: [makeTrip("t1", { status: "APPROVED_INTERNAL" })]
+    });
+
+    expect(payload.kpis.winRate.value).toBe(100);
+    expect(payload.kpis.winRate.deltaVsPrior).toBeNull();
   });
 });

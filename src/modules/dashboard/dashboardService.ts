@@ -3,7 +3,7 @@ import { TtlCache } from "./cache";
 import {
   computeFunnelStages,
   computeMedianResponseTime,
-  computeWinRate,
+  computeWinRatePct,
   periodWindow,
   priorPeriodWindow,
   selectOwnerWorklistRows,
@@ -121,9 +121,12 @@ function composeOwnerPayload(args: {
   const tripsInWindow = raw.trips.filter((t) => t.createdAt >= window.start && t.createdAt <= window.end);
   const tripsInPrior = raw.trips.filter((t) => t.createdAt >= prior.start && t.createdAt < prior.end);
 
-  // ---- KPI: win rate ----
-  const winRate = computeWinRate(tripsInWindow);
-  const winRatePrior = computeWinRate(tripsInPrior);
+  // KPI values are null when the window has no signal, so the client can show
+  // "no data" instead of a real-looking 0 (and a bogus delta against it).
+
+  // ---- KPI: win rate (percent) ----
+  const winRate = computeWinRatePct(tripsInWindow);
+  const winRatePrior = computeWinRatePct(tripsInPrior);
 
   // ---- KPI: time-to-first-share (avg days) ----
   const timeToFirstShareDays = computeAvgTimeToFirstShareDays(raw, tripsInWindow);
@@ -132,8 +135,8 @@ function composeOwnerPayload(args: {
   // ---- KPI: median comment response time (hours) ----
   const commentsInWindow = raw.comments.filter((c) => c.createdAt >= window.start && c.createdAt <= window.end);
   const commentsInPrior = raw.comments.filter((c) => c.createdAt >= prior.start && c.createdAt < prior.end);
-  const medianResponse = computeMedianResponseTime(commentsInWindow) ?? 0;
-  const medianResponsePrior = computeMedianResponseTime(commentsInPrior) ?? 0;
+  const medianResponse = computeMedianResponseTime(commentsInWindow);
+  const medianResponsePrior = computeMedianResponseTime(commentsInPrior);
 
   // ---- KPI: avg proposal rating + response rate ----
   const sharesInWindow = raw.shares.filter((s) => s.createdAt >= window.start && s.createdAt <= window.end);
@@ -141,7 +144,7 @@ function composeOwnerPayload(args: {
   const avgRating =
     ratedSharesInWindow.length > 0
       ? ratedSharesInWindow.reduce((sum, s) => sum + (s.proposalRating ?? 0), 0) / ratedSharesInWindow.length
-      : 0;
+      : null;
   const ratedSharesPrior = raw.shares.filter(
     (s) =>
       s.createdAt >= prior.start &&
@@ -151,7 +154,7 @@ function composeOwnerPayload(args: {
   const avgRatingPrior =
     ratedSharesPrior.length > 0
       ? ratedSharesPrior.reduce((sum, s) => sum + (s.proposalRating ?? 0), 0) / ratedSharesPrior.length
-      : 0;
+      : null;
 
   // ---- Funnel ----
   const funnelStages = computeFunnelStages({
@@ -196,20 +199,20 @@ function composeOwnerPayload(args: {
     generatedAt: now.toISOString(),
     worklist,
     kpis: {
-      winRate: { value: winRate, deltaVsPrior: winRate - winRatePrior, sparkline: buildSparkline(tripsInWindow.map((t) => t.createdAt), window) },
+      winRate: { value: winRate, deltaVsPrior: deltaOrNull(winRate, winRatePrior), sparkline: buildSparkline(tripsInWindow.map((t) => t.createdAt), window) },
       timeToFirstShareDays: {
         value: timeToFirstShareDays,
-        deltaVsPrior: timeToFirstShareDays - timeToFirstShareDaysPrior,
+        deltaVsPrior: deltaOrNull(timeToFirstShareDays, timeToFirstShareDaysPrior),
         sparkline: []
       },
       medianCommentResponseHours: {
         value: medianResponse,
-        deltaVsPrior: medianResponse - medianResponsePrior,
+        deltaVsPrior: deltaOrNull(medianResponse, medianResponsePrior),
         sparkline: []
       },
       avgProposalRating: {
         value: avgRating,
-        deltaVsPrior: avgRating - avgRatingPrior,
+        deltaVsPrior: deltaOrNull(avgRating, avgRatingPrior),
         sparkline: [],
         responseRate: {
           rated: ratedSharesInWindow.length,
@@ -313,7 +316,12 @@ function composeStaffPayload(args: {
 
 // ---------- Small helpers ----------
 
-function computeAvgTimeToFirstShareDays(raw: RawDashboardData, trips: RawDashboardData["trips"]): number {
+/** A KPI delta only means something when both periods have signal. */
+function deltaOrNull(current: number | null, prior: number | null): number | null {
+  return current === null || prior === null ? null : current - prior;
+}
+
+function computeAvgTimeToFirstShareDays(raw: RawDashboardData, trips: RawDashboardData["trips"]): number | null {
   const firstShareByTrip = new Map<string, Date>();
   for (const s of raw.shares) {
     if (s.tripId === null) continue;
@@ -328,7 +336,7 @@ function computeAvgTimeToFirstShareDays(raw: RawDashboardData, trips: RawDashboa
     if (ms < 0) continue;
     deltas.push(ms / (24 * 60 * 60 * 1000));
   }
-  if (deltas.length === 0) return 0;
+  if (deltas.length === 0) return null;
   return deltas.reduce((s, x) => s + x, 0) / deltas.length;
 }
 

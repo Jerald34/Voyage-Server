@@ -57,9 +57,14 @@ export type OwnerWorklist = {
   lowRated: OwnerWorklistLowRated[];
 };
 
+/**
+ * `value` is null when the period has no signal (e.g. no closed trips, no
+ * replied comments); `deltaVsPrior` is null unless both periods have signal.
+ * Win rate is a percentage (0–100) and its delta is in percentage points.
+ */
 export type KpiTile = {
-  value: number;
-  deltaVsPrior: number;
+  value: number | null;
+  deltaVsPrior: number | null;
   sparkline: number[];
 };
 
