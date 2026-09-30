@@ -12,6 +12,7 @@
 
 import { randomUUID } from "node:crypto";
 import { prisma } from "../../db/prisma.js";
+import { createPlaceSession } from "../../services/places/placeServices";
 import {
   listRatedTrips as defaultListRatedTrips,
   getSourceItinerary as defaultGetSourceItinerary,
@@ -46,6 +47,16 @@ export type RatedHistoryDeps = {
   insertItemsTransactional: (
     params: InsertItemsTransactionalParams
   ) => Promise<{ itineraryId: string; newVersion: number }>;
+  /**
+   * Checks every snapshot ID a copy is about to attach, against the TARGET
+   * agency. A copy is a new selection even when the ID already exists in the
+   * target, so this runs before any insertion. Throws on a blocked place.
+   * Injected so unit tests can supply a deterministic fake.
+   */
+  prepareCopiedPlaces?: (
+    agencyId: string,
+    placeSnapshotIds: string[]
+  ) => Promise<void>;
   /** Subset of Prisma calls the service needs directly (trip + review lookups) */
   db: {
     clientTrip: {
@@ -411,6 +422,28 @@ export function createRatedHistoryService(deps: RatedHistoryDeps) {
       };
     }
 
+    // Every copied place is a new selection for the TARGET agency, even if the
+    // same snapshot already appears there. This runs after all authorization and
+    // selection validation but before any mutation, so a blocked item rejects the
+    // whole insertion atomically: no day shifts, no version bump, no partial write.
+    // Provider work stays outside the database transaction.
+    if (deps.prepareCopiedPlaces) {
+      const copiedSnapshotIds =
+        insertions.mode === "items"
+          ? insertions.items.map((item) => item.placeSnapshotId)
+          : insertions.days.flatMap((day) => day.items.map((item) => item.placeSnapshotId));
+
+      const distinct = [
+        ...new Set(
+          copiedSnapshotIds.filter((id): id is string => typeof id === "string" && id.length > 0)
+        )
+      ];
+
+      if (distinct.length > 0) {
+        await deps.prepareCopiedPlaces(callerAgencyId, distinct);
+      }
+    }
+
     await deps.insertItemsTransactional({
       targetItineraryId: target.itineraryId,
       ifMatchVersion,
@@ -561,6 +594,14 @@ export const ratedHistoryService = createRatedHistoryService({
   listRatedTrips: defaultListRatedTrips,
   getSourceItinerary: defaultGetSourceItinerary,
   insertItemsTransactional: defaultInsertItemsTransactional,
+  prepareCopiedPlaces: async (agencyId, placeSnapshotIds) => {
+    // A session scoped to the TARGET agency: the source agency's notes are
+    // irrelevant to whether this agency may use these places.
+    const session = await createPlaceSession(agencyId);
+    for (const placeSnapshotId of placeSnapshotIds) {
+      await session.prepare({ placeSnapshotId });
+    }
+  },
   db: {
     clientTrip: {
       findUnique: (args) => prisma.clientTrip.findUnique(args as never) as never

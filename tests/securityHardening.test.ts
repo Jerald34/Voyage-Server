@@ -1170,9 +1170,8 @@ describe("F4 - Rate limiting on auth endpoints", () => {
       .set("X-Forwarded-For", TEST_IP);
 
     expect(response.status).toBe(200);
-    expect(response.headers["ratelimit-limit"]).toBe("120");
-    expect(response.headers["ratelimit-remaining"]).toBeDefined();
-    expect(response.headers["ratelimit-reset"]).toBeDefined();
+    expect(response.headers["ratelimit"]).toMatch(/^"health"; r=\d+; t=\d+$/);
+    expect(response.headers["ratelimit-policy"]).toMatch(/^"health"; q=120; w=60;/);
     expect(response.headers["x-ratelimit-limit"]).toBeUndefined();
     expect(response.headers["x-ratelimit-remaining"]).toBeUndefined();
     expect(response.headers["x-ratelimit-reset"]).toBeUndefined();

@@ -4,6 +4,7 @@ import { requireAuth } from "../../http/authMiddleware";
 import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { replaceItinerarySchema } from "./itinerarySchemas";
+import { createPlaceSession, getPlaceRefreshScheduler } from "../../services/places/placeServices";
 import { itineraryService } from "./itineraryService";
 
 function getAgencyId(request: Request): string {
@@ -53,10 +54,12 @@ itineraryRoutes.get("/:itineraryId", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
     const { itineraryId } = itineraryIdParamsSchema.parse(request.params);
-    const itinerary = await itineraryService.getItinerary(
-      agencyId,
-      itineraryId
-    );
+    // An authorized single-itinerary read gets a request-scoped session so the
+    // response carries this agency's warnings and a bounded refresh is started.
+    const itinerary = await itineraryService.getItinerary(agencyId, itineraryId, {
+      session: await createPlaceSession(agencyId),
+      scheduler: getPlaceRefreshScheduler()
+    });
     response.json({ itinerary });
   } catch (error) {
     next(error);

@@ -3,6 +3,7 @@ import {
   computeFunnelStages,
   computeMedianResponseTime,
   computeWinRate,
+  computeWinRatePct,
   periodToDays,
   periodWindow,
   priorPeriodWindow,
@@ -32,6 +33,26 @@ describe("computeWinRate", () => {
 
   it("returns 1.0 when every closed trip approved", () => {
     expect(computeWinRate([{ status: "APPROVED_INTERNAL" }])).toBe(1);
+  });
+});
+
+describe("computeWinRatePct", () => {
+  it("returns null when no trips are closed (no signal, not 0%)", () => {
+    expect(computeWinRatePct([{ status: "DRAFT" }, { status: "IN_REVIEW" }])).toBeNull();
+  });
+
+  it("returns approved / closed as a percentage", () => {
+    expect(
+      computeWinRatePct([
+        { status: "APPROVED_INTERNAL" },
+        { status: "APPROVED_INTERNAL" },
+        { status: "ARCHIVED" }
+      ])
+    ).toBeCloseTo(66.667, 2);
+  });
+
+  it("returns 100 when every closed trip was approved", () => {
+    expect(computeWinRatePct([{ status: "APPROVED_INTERNAL" }])).toBe(100);
   });
 });
 

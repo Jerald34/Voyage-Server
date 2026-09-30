@@ -10,6 +10,87 @@ import {
   toProviderName, 
   toCompactMetadata 
 } from "./toolUtils";
+import { ApiError } from "../../../http/errors";
+import type { PlaceSearchResult, ResolvedPlace } from "../../../services/maps";
+import type { AgentToolContext } from "../agentTools";
+import type { PlaceSelectionSession, PlaceVerdict } from "../../../services/places/placeTypes";
+
+/**
+ * Eligibility helpers shared by every place-producing map tool.
+ *
+ * `context.places` is the per-run selection session. It is optional only so an
+ * isolated unit test can construct a bare tool; production always supplies it,
+ * and without it these helpers fall back to today's ungated behavior.
+ */
+
+function blocked(name: string, verdict: Extract<PlaceVerdict, { allowed: false }>) {
+  return new ApiError(409, "PLACE_BLOCKED", `${name} cannot be used: ${verdict.detail}`);
+}
+
+/** Normalize a raw search/details result into the gate's candidate shape. */
+function toCandidate<T extends { id?: string; name?: string }>(result: T) {
+  return {
+    ...result,
+    provider: "GOOGLE_MAPS" as const,
+    providerPlaceId: result.id ?? "",
+    name: result.name ?? ""
+  };
+}
+
+/**
+ * Persist observations for a batch of raw provider results, then split them into
+ * usable results and minimal explanations. Blocked entries expose only a name,
+ * reason and detail — never coordinates, IDs or URLs that could be reused.
+ */
+async function partitionResults<T extends PlaceSearchResult>(
+  session: PlaceSelectionSession | undefined,
+  results: T[]
+): Promise<{ results: T[]; blocked: Array<{ name: string; reason: string; detail: string }> }> {
+  if (!session) return { results, blocked: [] };
+
+  const allowed: T[] = [];
+  const rejected: Array<{ name: string; reason: string; detail: string }> = [];
+
+  // Sequential so input order is preserved in both output lists.
+  for (const result of results) {
+    const { candidate, verdict } = await session.consider(toCandidate(result) as never);
+    if (verdict.allowed) {
+      // Keep every field the provider returned, including a temporary-closure
+      // advisory, minus the normalization fields the gate added.
+      const { provider: _p, providerPlaceId: _i, ...rest } = candidate as Record<string, unknown>;
+      allowed.push(rest as T);
+    } else {
+      rejected.push({ name: result.name ?? "", reason: verdict.reason, detail: verdict.detail });
+    }
+  }
+
+  return { results: allowed, blocked: rejected };
+}
+
+/**
+ * Check one already-resolved place. The snapshot has already been written, so
+ * `consider` records the observation and merges any newer stored closure before
+ * the verdict. Throws PLACE_BLOCKED, which the registry turns into recoverable
+ * tool output.
+ */
+async function assertPlaceAllowed(
+  session: PlaceSelectionSession | undefined,
+  place: ResolvedPlace
+): Promise<void> {
+  if (!session) return;
+  const { verdict } = await session.consider({
+    provider: place.provider,
+    providerPlaceId: place.providerPlaceId,
+    name: place.name,
+    businessStatus: place.businessStatus ?? null,
+    businessStatusCheckedAt: place.businessStatusCheckedAt
+  } as never);
+  if (!verdict.allowed) throw blocked(place.name, verdict);
+}
+
+function sessionOf(context: AgentToolContext) {
+  return context.places;
+}
 
 const geoPointSchema = z.object({
   latitude: z.number().min(-90).max(90),
@@ -80,6 +161,9 @@ export function createMapPinpointTool(options: {
       console.log(`[Maps] map_pinpoint resolving place: "${parsed.placeName}" in context: "${parsed.cityContext}"`);
       const resolved = await options.maps.resolvePlace(parsed);
       const snapshot = await upsertPlaceSnapshot(options.placeSnapshotClient ?? prisma, resolved);
+      // Eligibility is decided after the snapshot exists, so a closure observation
+      // is never lost, but before any map event or source is recorded.
+      await assertPlaceAllowed(sessionOf(context), resolved);
       const run = createRunRecord(context);
       const payload = mapPinpointPayload(snapshot.id, resolved);
 
@@ -134,6 +218,9 @@ export function createRouteLogisticsTool(options: {
         upsertPlaceSnapshot(client, originPlace),
         upsertPlaceSnapshot(client, destinationPlace)
       ]);
+      // Both endpoints must be eligible before we pay for a route or emit one.
+      await assertPlaceAllowed(sessionOf(context), originPlace);
+      await assertPlaceAllowed(sessionOf(context), destinationPlace);
       const route = await options.maps.estimateRoute({
         origin: originPlace.location,
         destination: destinationPlace.location,
@@ -192,6 +279,8 @@ export function createPlaceInsightsTool(options: {
       console.log(`[Maps] place_insights resolving place: "${parsed.placeName}" in context: "${parsed.cityContext}"`);
       const resolved = await options.maps.resolvePlace(parsed);
       const snapshot = await upsertPlaceSnapshot(options.placeSnapshotClient ?? prisma, resolved);
+      // Agency policy applies before these insights can become a candidate.
+      await assertPlaceAllowed(sessionOf(context), resolved);
       const run = createRunRecord(context);
       await options.agentService.recordSources(run, [
         {
@@ -226,11 +315,14 @@ export function createSearchGooglePlacesTool(options: { maps: MapsProvider; agen
     async execute(_context, input) {
       const parsed = searchPlacesInputSchema.parse(input);
       console.log(`[Maps] searchPlaces query: "${parsed.query}"`);
-      const results = await options.maps.searchPlaces({
+      const raw = await options.maps.searchPlaces({
         query: parsed.query,
         languageCode: parsed.languageCode,
         maxResultCount: Math.min(parsed.maxResults || 5, 5)
       });
+      // Observations are persisted for every candidate; only allowed ones are
+      // offered back, and only they are recorded as sources.
+      const { results, blocked: rejected } = await partitionResults(sessionOf(_context), raw);
       await options.agentService.recordSources(
         createRunRecord(_context),
         results.map((result, index) => ({
@@ -252,7 +344,7 @@ export function createSearchGooglePlacesTool(options: { maps: MapsProvider; agen
           })
         }))
       );
-      return results;
+      return { results, blocked: rejected };
     }
   };
 }
@@ -264,6 +356,15 @@ export function createGetGooglePlaceDetailsTool(options: { maps: MapsProvider; a
       const parsed = placeDetailsInputSchema.parse(input);
       console.log(`[Maps] getPlaceDetails for: "${parsed.placeId}"`);
       const result = await options.maps.getPlaceDetails(parsed.placeId);
+
+      // Persist the observation, then decide. A blocked place is never returned
+      // as usable detail and records no source.
+      const session = sessionOf(_context);
+      if (session) {
+        const { verdict } = await session.consider(toCandidate(result) as never);
+        if (!verdict.allowed) throw blocked(result.name ?? parsed.placeId, verdict);
+      }
+
       await options.agentService.recordSources(createRunRecord(_context), [
         {
           sourceType: "MAP_PLACE",
@@ -328,6 +429,10 @@ export function createEstimateRouteTool(options: {
           upsertPlaceSnapshot(client, originPlace),
           upsertPlaceSnapshot(client, destinationPlace)
         ]);
+        // Name mode is a selection, so both endpoints are checked. Coordinate-only
+        // routing above stays a pure geometric calculation and is not gated.
+        await assertPlaceAllowed(sessionOf(_context), originPlace);
+        await assertPlaceAllowed(sessionOf(_context), destinationPlace);
 
         origin = originPlace.location;
         destination = destinationPlace.location;
@@ -390,13 +495,14 @@ export function createSearchNearbyGooglePlacesTool(options: { maps: MapsProvider
     async execute(_context, input) {
       const parsed = searchNearbyInputSchema.parse(input);
       console.log(`[Maps] searchNearby radius ${parsed.radius}`);
-      const results = await options.maps.searchNearby({
+      const raw = await options.maps.searchNearby({
         location: parsed.location,
         radius: parsed.radius,
         includedTypes: parsed.includedTypes,
         maxResultCount: Math.min(parsed.maxResults || 5, 5),
         languageCode: parsed.languageCode
       });
+      const { results, blocked: rejected } = await partitionResults(sessionOf(_context), raw);
       await options.agentService.recordSources(
         createRunRecord(_context),
         results.map((result, index) => ({
@@ -419,7 +525,7 @@ export function createSearchNearbyGooglePlacesTool(options: { maps: MapsProvider
           })
         }))
       );
-      return results;
+      return { results, blocked: rejected };
     }
   };
 }

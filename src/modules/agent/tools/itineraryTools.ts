@@ -25,7 +25,10 @@ import type {
   UpdateItineraryService
 } from "../agentTools";
 import { createRunRecord, inputError, toTitleCase, isRecordLike } from "./toolUtils";
-import { resolveItineraryItemPlaces, resolveSingleItemPlace, attachRouteFromPrevious } from "./itineraryPlaceResolver";
+import { addRoutesToPreparedDays, resolveSingleItemPlace, attachRouteFromPrevious } from "./itineraryPlaceResolver";
+import type { ItineraryPlaceExecution } from "../../itineraries/itineraryService";
+import type { AgentToolContext } from "../agentTools";
+import { ApiError } from "../../../http/errors";
 
 const updateItineraryInputSchema = z.object({
   itineraryId: z.string().min(1),
@@ -157,6 +160,27 @@ function normalizeUpdateItineraryInput(input: any) {
   }
 }
 
+/**
+ * Build the internal execution context handed to the itinerary service. The
+ * session comes from the run, never from a singleton, and the routing pass stays
+ * in this layer because it owns the maps provider.
+ *
+ * Production always supplies a session; a tool constructed without one in an
+ * isolated unit test simply performs no place checks.
+ */
+function placeExecution(
+  context: AgentToolContext,
+  maps?: MapsProvider
+): ItineraryPlaceExecution | undefined {
+  if (!context.places) return undefined;
+  return {
+    session: context.places,
+    addRoutes: maps
+      ? (days, points) => addRoutesToPreparedDays({ days, points, maps })
+      : undefined
+  };
+}
+
 export function createCreateItineraryTool(options: {
   itineraryService: CreateItineraryService;
   agentService?: AgentToolService;
@@ -167,17 +191,14 @@ export function createCreateItineraryTool(options: {
     name: "create_itinerary",
     async execute(context, input) {
       const parsed = normalizeCreateItineraryInput(input);
-      const resolvedItinerary = options.maps
-        ? await resolveItineraryItemPlaces({
-          input: parsed.itinerary,
-          maps: options.maps,
-          client: options.placeSnapshotClient ?? prisma
-        })
-        : parsed.itinerary;
-      const result = await options.itineraryService.createDraftFromStructuredInput(context.agencyId, context.userId, {
-        ...parsed,
-        itinerary: resolvedItinerary
-      });
+      // The guarded service owns resolution and eligibility; this tool only
+      // supplies the routing pass, so no place can be attached unchecked.
+      const result = await options.itineraryService.createDraftFromStructuredInput(
+        context.agencyId,
+        context.userId,
+        parsed,
+        placeExecution(context, options.maps)
+      );
       const createdItinerary = (result as { itinerary?: Record<string, unknown> & { id?: string; version?: number; status?: string } } | null)?.itinerary;
       if (createdItinerary?.id && options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
@@ -206,14 +227,14 @@ export function createUpdateItineraryTool(options: {
     name: "update_itinerary",
     async execute(context, input) {
       const parsed = normalizeUpdateItineraryInput(input);
-      const itinerary = options.maps
-        ? await resolveItineraryItemPlaces({
-          input: parsed.itinerary,
-          maps: options.maps,
-          client: options.placeSnapshotClient ?? prisma
-        })
-        : parsed.itinerary;
-      const result = await options.itineraryService.replaceDraft(context.agencyId, parsed.itineraryId, itinerary);
+      // Preservation of existing stops is computed by the service from the stored
+      // itinerary, so this tool must not pre-resolve anything.
+      const result = await options.itineraryService.replaceDraft(
+        context.agencyId,
+        parsed.itineraryId,
+        parsed.itinerary,
+        placeExecution(context, options.maps)
+      );
       const updated = result as (Record<string, unknown> & { id?: string; version?: number; status?: string }) | null;
       if (options.agentService) {
         await options.agentService.recordRunEvent(createRunRecord(context), {
@@ -374,21 +395,12 @@ export function createAddItineraryItemTool(options: {
     name: "add_itinerary_item",
     async execute(context, input) {
       const parsed = addItineraryItemInputSchema.parse(input);
-      let item = parsed.item;
-      if (options.maps) {
-        const { item: resolvedItem } = await resolveSingleItemPlace({
-          item,
-          maps: options.maps,
-          client: options.placeSnapshotClient ?? prisma,
-          skipEnrichment: true
-        });
-        item = resolvedItem;
-      }
 
-      let result = (await options.itineraryService.addItem(context.agencyId, {
-        ...parsed,
-        item
-      })) as {
+      let result = (await options.itineraryService.addItem(
+        context.agencyId,
+        parsed,
+        placeExecution(context, options.maps)
+      )) as {
         itinerary: { id: string };
         dayId: string;
         item: Record<string, unknown>;
@@ -437,38 +449,18 @@ export function createUpdateItineraryItemTool(options: {
     name: "update_itinerary_item",
     async execute(context, input) {
       const parsed = updateItineraryItemInputSchema.parse(input);
-      // If the patch supplies a placeName but no placeSnapshotId, re-resolve via maps.
-      // If neither is in the patch, leave the existing snapshot untouched (the repo preserves it).
-      let patch = parsed.item;
-      if (
-        options.maps &&
-        typeof patch.placeName === "string" &&
-        patch.placeName.trim().length > 0 &&
-        !patch.placeSnapshotId
-      ) {
-        // Build a minimum item shape so resolveSingleItemPlace can consume it.
-        const itemForResolution = structuredItineraryItemSchema.parse({
-          type: patch.type ?? "ACTIVITY",
-          title: patch.title ?? patch.placeName,
-          placeName: patch.placeName,
-          cityContext: patch.cityContext
-        });
-        const { item: resolvedItem } = await resolveSingleItemPlace({
-          item: itemForResolution,
-          maps: options.maps,
-          client: options.placeSnapshotClient ?? prisma,
-          skipEnrichment: true
-        });
-        if (resolvedItem.placeSnapshotId) {
-          patch = { ...patch, placeSnapshotId: resolvedItem.placeSnapshotId };
-        }
-      }
-
-      const result = (await options.itineraryService.updateItem(context.agencyId, {
-        itineraryId: parsed.itineraryId,
-        itemId: parsed.itemId,
-        item: patch
-      })) as {
+      // The service decides whether this patch changes the stop's place identity.
+      // A title, time or note edit keeps the saved stop and its route data even
+      // when that stop is closed.
+      const result = (await options.itineraryService.updateItem(
+        context.agencyId,
+        {
+          itineraryId: parsed.itineraryId,
+          itemId: parsed.itemId,
+          item: parsed.item
+        },
+        placeExecution(context, options.maps)
+      )) as {
         itinerary: { id: string };
         dayId: string;
         item: Record<string, unknown>;

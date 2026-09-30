@@ -88,6 +88,9 @@ export type PublicShareData = {
           websiteUrl: string | null;
           phoneNumber: string | null;
           metadata: unknown;
+          /** Provider status only; null means unverified, never open. */
+          businessStatus: "OPERATIONAL" | "CLOSED_TEMPORARILY" | "CLOSED_PERMANENTLY" | null;
+          businessStatusCheckedAt: Date | null;
         } | null;
       }>;
     }>;

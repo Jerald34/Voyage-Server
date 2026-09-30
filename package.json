@@ -5,6 +5,7 @@
     "start": "node dist/src/server.js",
     "test": "vitest run",
     "check:google": "tsx scripts/check-google-apis.ts",
+    "seed:place-notes": "tsx scripts/seed-agency-place-notes.ts",
     "prisma:generate": "prisma generate",
     "prisma:migrate": "prisma migrate dev",
     "prisma:seed": "tsx prisma/seed.ts"

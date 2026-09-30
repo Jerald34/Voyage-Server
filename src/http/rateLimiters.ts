@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { isIP } from "node:net";
 import { env } from "../config/env";
+import { resolveClientIp } from "./clientIp";
 import { ApiError } from "./errors";
 
 const moduleRequire = createRequire(__filename);
@@ -12,6 +13,8 @@ export type RateLimiterSet = {
   baseline: RequestHandler;
   health: RequestHandler;
   login: RequestHandler;
+  loginIp: RequestHandler;
+  loginAccount: RequestHandler;
   registration: RequestHandler;
   emailRequest: RequestHandler;
   tokenConfirm: RequestHandler;
@@ -22,6 +25,14 @@ export type RateLimiterSet = {
   reviewCheck: RequestHandler;
   reviewSubmit: RequestHandler;
   photoProxy: RequestHandler;
+  agentMessageBurst: RequestHandler;
+  agentMessageDaily: RequestHandler;
+  agencyAgentMessageDaily: RequestHandler;
+  agentImageUpload: RequestHandler;
+  imageUpload: RequestHandler;
+  teamInvite: RequestHandler;
+  supportReport: RequestHandler;
+  agencyCreate: RequestHandler;
 };
 
 const RATE_LIMIT_EXCEEDED_RESPONSE = {
@@ -40,6 +51,14 @@ type RateLimiterConfig = {
   limit: number;
   passOnStoreError?: boolean;
   secondaryKey?: (request: Request) => string;
+  // false keys the bucket on `secondaryKey` alone (per account / user / agency),
+  // so it holds no matter how many IPs the requests come from.
+  includeIp?: boolean;
+  skip?: (request: Request) => boolean;
+  // Count only failed (>= 400) responses, e.g. failed logins.
+  skipSuccessfulRequests?: boolean;
+  // Count only successful responses, e.g. quota for work that actually started.
+  skipFailedRequests?: boolean;
 };
 export type RateLimiterStoreFactory = (prefix: string) => Store | undefined;
 
@@ -91,13 +110,36 @@ function readTokenFromParams(request: Request): string {
   return typeof token === "string" ? token : "";
 }
 
+function readAuthUserKey(request: Request): string {
+  return request.authUser ? `user:${request.authUser.id}` : "";
+}
+
+function readAgencyKey(request: Request): string {
+  const agencyId = request.params.agencyId;
+  return typeof agencyId === "string" ? `agency:${agencyId}` : "";
+}
+
+// Only count agency quota for members of that agency, so nobody can burn another
+// agency's quota by posting to its URL.
+function isNotAgencyMember(request: Request): boolean {
+  const agencyId = request.params.agencyId;
+  return !request.authUser?.memberships.some((membership) => membership.agencyId === agencyId);
+}
+
+function isAnonymous(request: Request): boolean {
+  return !request.authUser;
+}
+
 function resolveIpBucket(request: Request): string {
-  const requestIp = typeof request.ip === "string" ? request.ip : "";
+  const requestIp = resolveClientIp(request) ?? "";
   return isIP(requestIp) === 0 ? INVALID_IP_BUCKET : ipKeyGenerator(requestIp);
 }
 
-function buildRateLimitKey(policyId: string, request: Request, secondaryKey?: string): string {
-  const keyParts = [`policy=${policyId}`, `ip=${resolveIpBucket(request)}`];
+function buildRateLimitKey(policyId: string, request: Request, secondaryKey?: string, includeIp = true): string {
+  const keyParts = [`policy=${policyId}`];
+  if (includeIp) {
+    keyParts.push(`ip=${resolveIpBucket(request)}`);
+  }
   if (secondaryKey !== undefined) {
     keyParts.push(`subject=${hashRateLimitKey(secondaryKey)}`);
   }
@@ -153,7 +195,10 @@ function createLimiter(config: RateLimiterConfig, storeFactory?: RateLimiterStor
     windowMs: config.windowMs,
     limit: config.limit,
     store,
-    standardHeaders: true,
+    // IETF RateLimit / RateLimit-Policy structured fields. Each policy appends its
+    // own named entry, so stacked limiters (baseline + route) are all visible.
+    standardHeaders: "draft-8",
+    identifier: config.policyId,
     legacyHeaders: false,
     passOnStoreError: config.passOnStoreError ?? false,
     logger: {
@@ -164,13 +209,37 @@ function createLimiter(config: RateLimiterConfig, storeFactory?: RateLimiterStor
         console.warn(message ?? "express-rate-limit warning");
       }
     },
-    skipSuccessfulRequests: false,
-    skipFailedRequests: false,
-    keyGenerator: (request) => buildRateLimitKey(config.policyId, request, config.secondaryKey?.(request)),
+    skipSuccessfulRequests: config.skipSuccessfulRequests ?? false,
+    skipFailedRequests: config.skipFailedRequests ?? false,
+    skip: config.skip,
+    keyGenerator: (request) =>
+      buildRateLimitKey(config.policyId, request, config.secondaryKey?.(request), config.includeIp ?? true),
     handler: (_request, response) => {
       response.status(429).json(RATE_LIMIT_EXCEEDED_RESPONSE);
     }
   });
+}
+
+function createUserLimiter(
+  name: RateLimiterName,
+  policyId: string,
+  windowMs: number,
+  limit: number,
+  storeFactory?: RateLimiterStoreFactory
+): RequestHandler {
+  return createLimiter(
+    {
+      name,
+      policyId,
+      windowMs,
+      limit,
+      secondaryKey: readAuthUserKey,
+      includeIp: false,
+      skip: isAnonymous,
+      passOnStoreError: true
+    },
+    storeFactory
+  );
 }
 
 function loadRedisDependencies(): RedisDependencyBundle {
@@ -290,6 +359,27 @@ export function createRateLimiters(options?: { storeFactory?: RateLimiterStoreFa
       { name: "login", policyId: "login", windowMs: 15 * 60 * 1000, limit: 10, secondaryKey: normalizeLoginEmail },
       storeFactory
     ),
+    // Password spraying: one IP trying many different accounts. Failures only, so a
+    // shared office IP with many agents signing in successfully is unaffected.
+    loginIp: createLimiter(
+      { name: "loginIp", policyId: "login-ip", windowMs: 15 * 60 * 1000, limit: 30, skipSuccessfulRequests: true },
+      storeFactory
+    ),
+    // Distributed guessing: many IPs targeting one account. Failures only, and the
+    // window is short, so a victim is never locked out for long.
+    loginAccount: createLimiter(
+      {
+        name: "loginAccount",
+        policyId: "login-account",
+        windowMs: 60 * 60 * 1000,
+        limit: 30,
+        secondaryKey: normalizeLoginEmail,
+        includeIp: false,
+        skipSuccessfulRequests: true,
+        skip: (request) => normalizeLoginEmail(request) === ""
+      },
+      storeFactory
+    ),
     registration: createLimiter({ name: "registration", policyId: "registration", windowMs: 60 * 60 * 1000, limit: 5 }, storeFactory),
     emailRequest: createLimiter({ name: "emailRequest", policyId: "email-request", windowMs: 60 * 60 * 1000, limit: 5 }, storeFactory),
     tokenConfirm: createLimiter({ name: "tokenConfirm", policyId: "token-confirm", windowMs: 60 * 60 * 1000, limit: 20 }, storeFactory),
@@ -311,6 +401,58 @@ export function createRateLimiters(options?: { storeFactory?: RateLimiterStoreFa
       { name: "reviewSubmit", policyId: "review-submit", windowMs: 60 * 60 * 1000, limit: 10, secondaryKey: readTokenFromParams },
       storeFactory
     ),
-    photoProxy: createLimiter({ name: "photoProxy", policyId: "photo-proxy", windowMs: 60 * 1000, limit: 60 }, storeFactory)
+    photoProxy: createLimiter({ name: "photoProxy", policyId: "photo-proxy", windowMs: 60 * 1000, limit: 60 }, storeFactory),
+
+    // --- Authenticated, per-user / per-agency quotas -------------------------
+    // Keyed on the signed-in user (not IP) so they hold across devices and
+    // networks. Anonymous requests skip them: requireAuth rejects those anyway and
+    // the IP baseline still applies. These fail OPEN on a store outage — the caller
+    // is authenticated and attributable, and a Redis blip should not take chat down.
+    agentMessageBurst: createLimiter(
+      {
+        name: "agentMessageBurst",
+        policyId: "agent-message-burst",
+        windowMs: 60 * 1000,
+        limit: env.RATE_LIMIT_AGENT_MESSAGES_PER_MINUTE,
+        secondaryKey: readAuthUserKey,
+        includeIp: false,
+        skip: isAnonymous,
+        passOnStoreError: true
+      },
+      storeFactory
+    ),
+    agentMessageDaily: createLimiter(
+      {
+        name: "agentMessageDaily",
+        policyId: "agent-message-daily",
+        windowMs: 24 * 60 * 60 * 1000,
+        limit: env.RATE_LIMIT_AGENT_MESSAGES_PER_DAY,
+        secondaryKey: readAuthUserKey,
+        includeIp: false,
+        skip: isAnonymous,
+        skipFailedRequests: true,
+        passOnStoreError: true
+      },
+      storeFactory
+    ),
+    agencyAgentMessageDaily: createLimiter(
+      {
+        name: "agencyAgentMessageDaily",
+        policyId: "agency-agent-message-daily",
+        windowMs: 24 * 60 * 60 * 1000,
+        limit: env.RATE_LIMIT_AGENCY_AGENT_MESSAGES_PER_DAY,
+        secondaryKey: readAgencyKey,
+        includeIp: false,
+        skip: isNotAgencyMember,
+        skipFailedRequests: true,
+        passOnStoreError: true
+      },
+      storeFactory
+    ),
+    agentImageUpload: createUserLimiter("agentImageUpload", "agent-image-upload", 60 * 60 * 1000, 30, storeFactory),
+    imageUpload: createUserLimiter("imageUpload", "image-upload", 60 * 60 * 1000, 60, storeFactory),
+    teamInvite: createUserLimiter("teamInvite", "team-invite", 60 * 60 * 1000, 20, storeFactory),
+    supportReport: createUserLimiter("supportReport", "support-report", 60 * 60 * 1000, 10, storeFactory),
+    agencyCreate: createUserLimiter("agencyCreate", "agency-create", 24 * 60 * 60 * 1000, 5, storeFactory)
   };
 }

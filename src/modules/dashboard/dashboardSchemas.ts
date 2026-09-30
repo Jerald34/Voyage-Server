@@ -9,8 +9,8 @@ export const dashboardQuerySchema = z.object({
 });
 
 const kpiTileSchema = z.object({
-  value: z.number(),
-  deltaVsPrior: z.number(),
+  value: z.number().nullable(),
+  deltaVsPrior: z.number().nullable(),
   sparkline: z.array(z.number())
 });
 

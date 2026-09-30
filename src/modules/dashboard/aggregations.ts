@@ -31,6 +31,16 @@ export function computeWinRate(trips: TripStatusOnly[]): number {
   return approved / denom;
 }
 
+/**
+ * Win rate as a percentage (0–100) for the dashboard KPI tile, or null when no
+ * trips closed in the window — "no signal" must not render as a real 0%.
+ */
+export function computeWinRatePct(trips: TripStatusOnly[]): number | null {
+  const closed = trips.filter((t) => t.status === "APPROVED_INTERNAL" || t.status === "ARCHIVED").length;
+  if (closed === 0) return null;
+  return computeWinRate(trips) * 100;
+}
+
 // ---------- Median comment response time ----------
 
 export type CommentForResponseTime = { createdAt: Date; agencyRepliedAt: Date | null };

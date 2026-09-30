@@ -37,7 +37,15 @@ export type ItineraryItemRecord = {
     websiteUrl: string | null;
     phoneNumber: string | null;
     metadata: unknown;
+    /** Provider business status. Null means unverified, never open. */
+    businessStatus: "OPERATIONAL" | "CLOSED_TEMPORARILY" | "CLOSED_PERMANENTLY" | null;
+    businessStatusCheckedAt: Date | null;
   } | null;
+  /**
+   * Per-request, per-agency overlay. Never persisted, never sent to a public
+   * share: an agency verdict is that agency's own view of a shared snapshot.
+   */
+  placeAdvisory?: { reason: string; label: string };
   routeFromPrevious: unknown;
   staffNotes: string | null;
   clientNotes: string | null;
@@ -67,6 +75,8 @@ export type ItineraryRecord = {
   status: "DRAFT" | "NEEDS_REVIEW" | "APPROVED_INTERNAL";
   version: number;
   days: ItineraryDayRecord[];
+  /** Request-level verification warnings, e.g. agency notes could not be loaded. */
+  placeAdvisories?: Array<{ reason: string; label: string }>;
   createdAt: Date;
   updatedAt: Date;
 };

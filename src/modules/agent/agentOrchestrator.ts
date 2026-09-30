@@ -4,6 +4,9 @@ import type { AgentRunRecord, AgentMessageRecord, AgentRunEventRecord } from "./
 import { agentLogger } from "./agentLogger";
 import type { AgentEvent } from "./agentSchemas";
 import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
+import type { PlaceSelectionSession } from "../../services/places/placeTypes";
+import { buildPlaceAdvisoryBlock, savedItemAdvisories } from "./placeAdvisoryBlock";
+import { overlayPlaceAdvisories } from "../itineraries/savedPlaceAdvisories";
 import type {
   AgentOrchestrator,
   AgentOrchestratorRunInput,
@@ -97,6 +100,22 @@ export function createAgentOrchestrator(options: {
   /** Awaited before completeRun so enriched PlaceSnapshots (photos, ratings)
    *  are in the DB when the client re-fetches. */
   onBeforeRunComplete?: (itinerary: Record<string, unknown>) => Promise<void>;
+  /**
+   * Builds the per-run place selection session. Production always supplies it;
+   * the session is created inside `run` and lives only for that run, so agency
+   * notes are never held on this singleton orchestrator.
+   */
+  createPlaceSession?: (agencyId: string | null) => Promise<PlaceSelectionSession>;
+  /**
+   * Loads the CURRENT stored itinerary under the run's own authorization, so
+   * warnings reflect today's snapshot rather than a historical tool event. An
+   * event's itinerary ID is never trusted without this authorized re-read.
+   */
+  loadCurrentItinerary?: (input: {
+    agencyId: string | null;
+    userId: string;
+    itineraryId: string;
+  }) => Promise<{ days?: unknown } | null>;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
   // Packed Approach B with research + clustering + per-stop estimate_route fans out to ~3 tool calls per stop on a multi-day plan.
@@ -146,6 +165,54 @@ export function createAgentOrchestrator(options: {
 
         let conversationHistory: ModelMessage[] = [];
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
+        // One session per run, created after the run's agency is established. A
+        // failure here must not fail the run: without a session, tools simply
+        // perform no place checks, which is the pre-feature behavior.
+        let placeSession: PlaceSelectionSession | null = null;
+        if (options.createPlaceSession) {
+          try {
+            placeSession = await options.createPlaceSession(input.agencyId);
+          } catch (error) {
+            console.error("[Places] Failed to create the run place session.", error);
+          }
+        }
+        /**
+         * Assemble the place advisory block for the next model turn. It re-reads
+         * the active itinerary under the run's authorization so a closure learned
+         * since the stored event is reflected, and appends this session's block
+         * explanations so a later turn can explain a substitution.
+         */
+        async function currentPlaceAdvisoryBlock(): Promise<string> {
+          if (!placeSession) return "";
+          try {
+            const itineraryId = activeItineraryContext?.itinerary?.id;
+            let savedAdvisories: ReturnType<typeof savedItemAdvisories> = [];
+
+            if (typeof itineraryId === "string" && options.loadCurrentItinerary) {
+              const current = await options.loadCurrentItinerary({
+                agencyId: input.agencyId,
+                userId: input.userId,
+                itineraryId
+              });
+              if (current) {
+                savedAdvisories = savedItemAdvisories(
+                  overlayPlaceAdvisories(current as any, placeSession.gate)
+                );
+              }
+            }
+
+            return buildPlaceAdvisoryBlock({
+              notes: placeSession.gate.notesFor(),
+              notesAvailable: !placeSession.notesUnavailable,
+              blocked: placeSession.explanations(),
+              savedItemAdvisories: savedAdvisories
+            });
+          } catch (error) {
+            console.error("[Places] Failed to build the run place advisory block.", error);
+            return "";
+          }
+        }
+
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
           activeItineraryContext = buildActiveItineraryContext(thread);
@@ -225,7 +292,7 @@ export function createAgentOrchestrator(options: {
 
           const taskBlock = buildTaskListBlock(openTasks);
           const initialRuntimeContext = [
-            buildRuntimeContextBlock(activeItineraryContext),
+            buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
             taskBlock
           ].filter(Boolean).join("\n\n---\n\n");
           const historyWithContext = injectRuntimeContextIntoLastUser(
@@ -350,7 +417,8 @@ export function createAgentOrchestrator(options: {
           agencyId: input.agencyId,
           threadId: input.threadId,
           runId: input.runId,
-          userId: input.userId
+          userId: input.userId,
+          places: placeSession ?? undefined
         };
 
         let toolCallsExecuted = 0;
@@ -562,7 +630,7 @@ export function createAgentOrchestrator(options: {
 
           const continuationTaskBlock = buildTaskListBlock(openTasks);
           const continuationRuntimeContext = [
-            buildRuntimeContextBlock(activeItineraryContext),
+            buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
             continuationTaskBlock
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);

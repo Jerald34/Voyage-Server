@@ -76,7 +76,9 @@ export function createApp(options: CreateAppOptions = {}) {
   app.use(
     cors({
       origin: env.APP_ORIGIN,
-      credentials: true
+      credentials: true,
+      // Let cross-origin callers read how long to back off after a 429.
+      exposedHeaders: ["Retry-After", "RateLimit", "RateLimit-Policy"]
     })
   );
   app.use(baselineLimiter);
@@ -84,7 +86,7 @@ export function createApp(options: CreateAppOptions = {}) {
   app.use(express.urlencoded({ extended: false, limit: "32kb" }));
 
   app.post("/auth/register", rateLimiters.registration);
-  app.post("/auth/login", rateLimiters.login);
+  app.post("/auth/login", rateLimiters.login, rateLimiters.loginIp, rateLimiters.loginAccount);
   app.post("/auth/email/check", rateLimiters.emailRequest);
   app.post("/auth/email/verification/request", rateLimiters.emailRequest);
   app.post("/auth/password/reset/request", rateLimiters.emailRequest);
@@ -118,6 +120,20 @@ export function createApp(options: CreateAppOptions = {}) {
     response.setHeader("Cache-Control", "no-store");
     next();
   });
+
+  // Per-user / per-agency quotas. Mounted after attachAuthUser so they can key on
+  // the signed-in user instead of the IP.
+  app.post(
+    "/agencies/:agencyId/agent/threads/:id/messages",
+    rateLimiters.agentMessageBurst,
+    rateLimiters.agentMessageDaily,
+    rateLimiters.agencyAgentMessageDaily
+  );
+  app.post("/agencies/:agencyId/agent/threads/:id/images", rateLimiters.agentImageUpload);
+  app.post("/images/upload-url", rateLimiters.imageUpload);
+  app.post("/agencies/:agencyId/team", rateLimiters.teamInvite);
+  app.post("/support/reports", rateLimiters.supportReport);
+  app.post("/agencies", rateLimiters.agencyCreate);
 
   app.get("/health", rateLimiters.health, (_request, response) => {
     response.json({ ok: true });

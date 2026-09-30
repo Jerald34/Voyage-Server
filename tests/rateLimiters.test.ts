@@ -280,6 +280,8 @@ describe("rateLimiters", () => {
       "voyage:rate-limit:baseline:",
       "voyage:rate-limit:health:",
       "voyage:rate-limit:login:",
+      "voyage:rate-limit:login-ip:",
+      "voyage:rate-limit:login-account:",
       "voyage:rate-limit:registration:",
       "voyage:rate-limit:email-request:",
       "voyage:rate-limit:token-confirm:",
@@ -289,7 +291,15 @@ describe("rateLimiters", () => {
       "voyage:rate-limit:public-share-write:",
       "voyage:rate-limit:review-check:",
       "voyage:rate-limit:review-submit:",
-      "voyage:rate-limit:photo-proxy:"
+      "voyage:rate-limit:photo-proxy:",
+      "voyage:rate-limit:agent-message-burst:",
+      "voyage:rate-limit:agent-message-daily:",
+      "voyage:rate-limit:agency-agent-message-daily:",
+      "voyage:rate-limit:agent-image-upload:",
+      "voyage:rate-limit:image-upload:",
+      "voyage:rate-limit:team-invite:",
+      "voyage:rate-limit:support-report:",
+      "voyage:rate-limit:agency-create:"
     ]);
     expect(new Set(prefixes).size).toBe(prefixes.length);
     expect(stores.get("voyage:rate-limit:health:")?.incrementKeys).toHaveLength(1);
@@ -341,7 +351,7 @@ describe("rateLimiters", () => {
     expect(freshResponse.status).toBe(200);
   });
 
-  it("emits standard rate limit headers and omits legacy X-RateLimit headers", async () => {
+  it("emits IETF RateLimit/RateLimit-Policy headers and omits legacy X-RateLimit headers", async () => {
     const { health } = createRateLimiters();
     const app = createGetApp("/health", health);
 
@@ -350,9 +360,9 @@ describe("rateLimiters", () => {
       .set("X-Forwarded-For", "203.0.113.60");
 
     expect(response.status).toBe(200);
-    expect(response.headers["ratelimit-limit"]).toBe("120");
-    expect(response.headers["ratelimit-remaining"]).toBeDefined();
-    expect(response.headers["ratelimit-reset"]).toBeDefined();
+    expect(response.headers["ratelimit"]).toMatch(/^"health"; r=119; t=\d+$/);
+    expect(response.headers["ratelimit-policy"]).toMatch(/^"health"; q=120; w=60; pk=:[A-Za-z0-9+/=]+:$/);
+    expect(response.headers["ratelimit-limit"]).toBeUndefined();
     expect(response.headers["x-ratelimit-limit"]).toBeUndefined();
     expect(response.headers["x-ratelimit-remaining"]).toBeUndefined();
     expect(response.headers["x-ratelimit-reset"]).toBeUndefined();
@@ -420,6 +430,8 @@ describe("rateLimiters", () => {
       "voyage:rate-limit:baseline:",
       "voyage:rate-limit:health:",
       "voyage:rate-limit:login:",
+      "voyage:rate-limit:login-ip:",
+      "voyage:rate-limit:login-account:",
       "voyage:rate-limit:registration:",
       "voyage:rate-limit:email-request:",
       "voyage:rate-limit:token-confirm:",
@@ -429,7 +441,15 @@ describe("rateLimiters", () => {
       "voyage:rate-limit:public-share-write:",
       "voyage:rate-limit:review-check:",
       "voyage:rate-limit:review-submit:",
-      "voyage:rate-limit:photo-proxy:"
+      "voyage:rate-limit:photo-proxy:",
+      "voyage:rate-limit:agent-message-burst:",
+      "voyage:rate-limit:agent-message-daily:",
+      "voyage:rate-limit:agency-agent-message-daily:",
+      "voyage:rate-limit:agent-image-upload:",
+      "voyage:rate-limit:image-upload:",
+      "voyage:rate-limit:team-invite:",
+      "voyage:rate-limit:support-report:",
+      "voyage:rate-limit:agency-create:"
     ]);
     expect(new Set(createdStores.map((store) => store.prefix)).size).toBe(createdStores.length);
 

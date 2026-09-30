@@ -52,8 +52,19 @@ export function createPrismaPersonalRepository(client: PrismaClient = prisma): P
     },
 
     async findItineraryForUser(userId, itineraryId) {
+      // Detail read only: hydrate days/items/placeSnapshot so status can be shown
+      // and refreshed. The ownership constraint is unchanged, and list payloads
+      // are deliberately left narrow.
       return client.itinerary.findFirst({
-        where: { id: itineraryId, agencyId: null, createdByUserId: userId }
+        where: { id: itineraryId, agencyId: null, createdByUserId: userId },
+        include: {
+          days: {
+            orderBy: { dayNumber: "asc" },
+            include: {
+              items: { orderBy: { sortOrder: "asc" }, include: { placeSnapshot: true } }
+            }
+          }
+        }
       }) as Promise<PersonalItineraryRecord | null>;
     },
 

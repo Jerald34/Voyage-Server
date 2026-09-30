@@ -310,16 +310,26 @@ export function availableToolSet(toolNames: string[]) {
 // Gemini is byte-identical across turns. Stable systemInstruction is a prerequisite for
 // implicit / explicit cachedContent reuse.
 export function buildRuntimeContextBlock(
-  activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null
+  activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null,
+  placeAdvisoryBlock = ""
 ): string {
-  if (!activeItineraryContext) {
-    return "";
+  const parts: string[] = [];
+
+  if (activeItineraryContext) {
+    parts.push(activeItineraryContext.prompt);
+    const idBlock = buildItineraryIdentifierBlock(activeItineraryContext.itinerary);
+    if (idBlock) {
+      parts.push(idBlock);
+    }
   }
-  const parts: string[] = [activeItineraryContext.prompt];
-  const idBlock = buildItineraryIdentifierBlock(activeItineraryContext.itinerary);
-  if (idBlock) {
-    parts.push(idBlock);
+
+  // Advisories belong here even with no active itinerary: a run can be blocked
+  // from choosing a place before any itinerary exists. This is user-message
+  // content, so the cached system instruction is untouched.
+  if (placeAdvisoryBlock) {
+    parts.push(placeAdvisoryBlock);
   }
+
   return parts.join("\n\n");
 }
 

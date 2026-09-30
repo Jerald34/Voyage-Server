@@ -10,9 +10,11 @@ import type {
   RemoveItineraryItemInput,
   StructuredItineraryInput,
   UpdateItineraryDayInput,
-  UpdateItineraryItemInput
+  UpdateItineraryItemInput,
+  ItineraryPlaceExecution
 } from "../itineraries/itineraryService";
 import type { AgentRunRecord, AgentSourceInput, AgentTaskInput, AgentTaskRecord, AgentTaskUpdateInput } from "./agentTypes";
+import type { PlaceSelectionSession } from "../../services/places/placeTypes";
 import type { AgentEvent } from "./agentSchemas";
 
 export type AgentToolContext = {
@@ -20,6 +22,12 @@ export type AgentToolContext = {
   threadId: string;
   runId: string;
   userId: string;
+  /**
+   * The per-run place selection session. Created fresh for each run and passed
+   * explicitly so agency notes are never held on a singleton tool. Optional only
+   * so isolated unit tests can construct a bare tool; production always sets it.
+   */
+  places?: PlaceSelectionSession;
 };
 
 export type AgentTool = {
@@ -50,7 +58,8 @@ export type CreateItineraryService = {
   createDraftFromStructuredInput(
     agencyId: string | null,
     createdByUserId: string,
-    input: StructuredItineraryInput
+    input: StructuredItineraryInput,
+    execution?: ItineraryPlaceExecution
   ): Promise<{ itinerary?: { id?: string; version?: number; status?: string }; trip?: { id?: string } } | unknown>;
 };
 
@@ -58,7 +67,8 @@ export type UpdateItineraryService = {
   replaceDraft(
     agencyId: string | null,
     itineraryId: string,
-    input: any // Using any to avoid complex zod dependency here
+    input: any, // Using any to avoid complex zod dependency here
+    execution?: ItineraryPlaceExecution
   ): Promise<{ id?: string; version?: number; status?: string } | unknown>;
 };
 
@@ -68,12 +78,14 @@ export type ItineraryAgentService = {
   createDraftFromStructuredInput(
     agencyId: string | null,
     createdByUserId: string,
-    input: StructuredItineraryInput
+    input: StructuredItineraryInput,
+    execution?: ItineraryPlaceExecution
   ): Promise<unknown>;
   replaceDraft(
     agencyId: string | null,
     itineraryId: string,
-    input: any
+    input: any,
+    execution?: ItineraryPlaceExecution
   ): Promise<unknown>;
   createPlanFromStructuredInput(
     agencyId: string | null,
@@ -87,8 +99,16 @@ export type ItineraryAgentService = {
   addDay(agencyId: string | null, input: AddItineraryDayInput): Promise<unknown>;
   updateDay(agencyId: string | null, input: UpdateItineraryDayInput): Promise<unknown>;
   removeDay(agencyId: string | null, input: RemoveItineraryDayInput): Promise<unknown>;
-  addItem(agencyId: string | null, input: AddItineraryItemInput): Promise<unknown>;
-  updateItem(agencyId: string | null, input: UpdateItineraryItemInput): Promise<unknown>;
+  addItem(
+    agencyId: string | null,
+    input: AddItineraryItemInput,
+    execution?: ItineraryPlaceExecution
+  ): Promise<unknown>;
+  updateItem(
+    agencyId: string | null,
+    input: UpdateItineraryItemInput,
+    execution?: ItineraryPlaceExecution
+  ): Promise<unknown>;
   removeItem(agencyId: string | null, input: RemoveItineraryItemInput): Promise<unknown>;
   moveItem(agencyId: string | null, input: MoveItineraryItemInput): Promise<unknown>;
 };
@@ -133,6 +153,14 @@ export function createAgentToolRegistry(tools: AgentTool[], options: AgentToolRe
       try {
         return await tool.execute(context, input);
       } catch (error) {
+        // A blocked or unknown place is recoverable: hand it back so the model can
+        // pick a replacement instead of failing the whole run.
+        if (
+          error instanceof ApiError &&
+          (error.code === "PLACE_BLOCKED" || error.code === "PLACE_SNAPSHOT_NOT_FOUND")
+        ) {
+          return { error: { code: error.code, message: error.message }, retryable: true };
+        }
         if (error instanceof ZodError) {
           const summary = error.issues
             .slice(0, 5)

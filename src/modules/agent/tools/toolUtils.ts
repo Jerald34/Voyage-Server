@@ -3,6 +3,10 @@ import type { PrismaClient } from "@prisma/client";
 import { prisma } from "../../../db/prisma";
 import { ApiError } from "../../../http/errors";
 import type { MapsProvider, ResolvedPlace } from "../../../services/maps";
+import {
+  createPlaceSnapshotRepository,
+  toPlaceSnapshotProvider
+} from "../../../services/places/placeSnapshotRepository";
 import type { AgentToolContext } from "../agentTools";
 import type { AgentRunRecord } from "../agentTypes";
 
@@ -52,43 +56,14 @@ export function toProviderName(provider: ResolvedPlace["provider"]) {
   return provider.toLowerCase();
 }
 
-export function toPlaceSnapshotProvider(provider: ResolvedPlace["provider"]): any {
-  return provider === "NOMINATIM" ? "GOOGLE_MAPS" : provider;
-}
+export { toPlaceSnapshotProvider };
 
+/**
+ * Snapshot persistence now lives in the places service so that layer never has to
+ * import agent tool modules. Kept here as a re-export for the existing callers.
+ */
 export async function upsertPlaceSnapshot(client: PrismaClient, place: ResolvedPlace) {
-  return client.placeSnapshot.upsert({
-    where: {
-      provider_providerPlaceId: {
-        provider: toPlaceSnapshotProvider(place.provider),
-        providerPlaceId: place.providerPlaceId
-      }
-    },
-    create: {
-      provider: toPlaceSnapshotProvider(place.provider),
-      providerPlaceId: place.providerPlaceId,
-      name: place.name,
-      formattedAddress: place.formattedAddress,
-      latitude: place.location.latitude,
-      longitude: place.location.longitude,
-      rating: place.rating,
-      websiteUrl: place.websiteUrl,
-      phoneNumber: place.phoneNumber,
-      metadata: place.metadata as any,
-      fetchedAt: new Date()
-    },
-    update: {
-      name: place.name,
-      formattedAddress: place.formattedAddress,
-      latitude: place.location.latitude,
-      longitude: place.location.longitude,
-      rating: place.rating,
-      websiteUrl: place.websiteUrl,
-      phoneNumber: place.phoneNumber,
-      metadata: place.metadata as any,
-      fetchedAt: new Date()
-    }
-  });
+  return createPlaceSnapshotRepository(client).upsertPlaceSnapshot(place);
 }
 
 export function mapPinpointPayload(placeSnapshotId: string, place: ResolvedPlace) {
@@ -98,7 +73,14 @@ export function mapPinpointPayload(placeSnapshotId: string, place: ResolvedPlace
     formattedAddress: place.formattedAddress ?? null,
     lat: place.location.latitude,
     lng: place.location.longitude,
-    provider: place.provider
+    provider: place.provider,
+    // Carried through for SSE/client normalization. A missing status stays absent
+    // rather than becoming a value the client could read as "open"; the checked
+    // time is serialized only alongside a recognized observation.
+    businessStatus: place.businessStatus ?? null,
+    businessStatusCheckedAt: place.businessStatus
+      ? place.businessStatusCheckedAt?.toISOString() ?? null
+      : null
   };
 }
 
