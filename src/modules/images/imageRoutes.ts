@@ -3,9 +3,9 @@ import { Router } from "express";
 import { env } from "../../config/env";
 import { ApiError } from "../../http/errors";
 import { requireAuth } from "../../http/authMiddleware";
-import { requestUploadSchema } from "./imageSchemas";
+import { imageIdParamsSchema, requestUploadSchema } from "./imageSchemas";
 import { imageService } from "./imageService";
-import { isCloudinaryConfigured, uploadPlacePhoto } from "../../services/cloudinary";
+import { isCloudinaryConfigured, uploadPlacePhotoBuffer } from "../../services/cloudinary";
 import { prisma } from "../../db/prisma";
 
 export const imageRoutes = Router();
@@ -42,11 +42,15 @@ function extractPlaceIdFromPhotoName(name: string): string | null {
 function lazyCacheToCloudinary(upstreamUrl: string, placeId: string) {
   (async () => {
     try {
-      // Upload to Cloudinary using the direct upstream URL (with key as query param)
-      // so Cloudinary's fetch can reach it without needing a header-based auth.
+      // Fetch the photo bytes server-side using header-based auth so the API key
+      // never appears in any URL or persisted Cloudinary data.
       const apiKey = env.GOOGLE_MAPS_API_KEY.trim();
-      const fetchableUrl = `${upstreamUrl}&key=${apiKey}`;
-      const uploaded = await uploadPlacePhoto(fetchableUrl, placeId);
+      const resp = await fetch(upstreamUrl, { headers: { "X-Goog-Api-Key": apiKey } });
+      if (!resp.ok) {
+        throw new Error(`Upstream photo fetch failed (${resp.status})`);
+      }
+      const buffer = Buffer.from(await resp.arrayBuffer());
+      const uploaded = await uploadPlacePhotoBuffer(buffer, placeId);
       // Update all PlaceSnapshots whose metadata.primaryPhotoUrl is the old proxy URL
       // so subsequent views go straight to Cloudinary.
       await prisma.$executeRawUnsafe(
@@ -158,7 +162,8 @@ imageRoutes.post("/upload-url", requireAuth, async (request, response, next) => 
 
 imageRoutes.post("/:imageId/complete", requireAuth, async (request, response, next) => {
   try {
-    const image = await imageService.completeUpload(request.authUser!, String(request.params.imageId));
+    const { imageId } = imageIdParamsSchema.parse(request.params);
+    const image = await imageService.completeUpload(request.authUser!, imageId);
     response.json({ image });
   } catch (error) {
     next(error);
@@ -167,7 +172,8 @@ imageRoutes.post("/:imageId/complete", requireAuth, async (request, response, ne
 
 imageRoutes.get("/:imageId/url", requireAuth, async (request, response, next) => {
   try {
-    const result = await imageService.createReadUrl(request.authUser!, String(request.params.imageId));
+    const { imageId } = imageIdParamsSchema.parse(request.params);
+    const result = await imageService.createReadUrl(request.authUser!, imageId);
     response.json(result);
   } catch (error) {
     next(error);

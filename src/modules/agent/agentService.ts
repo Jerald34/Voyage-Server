@@ -3,11 +3,16 @@ import { publishAgentRunEvent } from "./agentEvents";
 import { agentLogger } from "./agentLogger";
 import {
   agentEventSchema,
-  approveItineraryThreadSchema,
+  saveItineraryThreadSchema,
   createMessageSchema,
   createThreadSchema,
+  updateThreadTitleSchema,
   type AgentEvent
 } from "./agentSchemas";
+import {
+  deriveTitleFromMessage,
+  deriveTitleFromItineraryPayload
+} from "./agentThreadTitler";
 import type {
   AgentRepository,
   AgentRunRecord,
@@ -17,7 +22,8 @@ import type {
   AgentTaskUpdateInput,
   AgentTaskRecord,
   AgentSourceInput,
-  AgentRunStatus
+  AgentRunStatus,
+  CompleteRunUsage
 } from "./agentTypes";
 import { createPrismaAgentRepository } from "./agentRepository";
 
@@ -177,8 +183,14 @@ export function createAgentService(options: {
   const modelProvider = options.modelProvider ?? "openai";
   const modelName = options.modelName ?? "gpt-5-mini";
 
-  async function getRun(runId: string) {
-    const run = await options.repository.findRunById(runId);
+  /**
+   * F2: When agencyId is provided, only returns the run if it belongs to that
+   * agency. Returns 404 RUN_NOT_FOUND for both "not found" and "wrong agency"
+   * cases to avoid exposing which run IDs exist in other tenants (mirrors the
+   * thread-level findThreadByAgency 404 behaviour).
+   */
+  async function getRun(runId: string, agencyId?: string | null) {
+    const run = await options.repository.findRunById(runId, agencyId);
     if (!run) {
       throw new ApiError(404, "RUN_NOT_FOUND", "Agent run not found.");
     }
@@ -230,6 +242,35 @@ export function createAgentService(options: {
     touchThread(threadId).catch(() => {});
   }
 
+  async function maybeRenameFromFirstMessage(threadId: string, content: string) {
+    try {
+      const result = await options.repository.listThreadMessages({
+        threadId,
+        agencyId: null,
+        cursor: null,
+        limit: 2
+      });
+      const userCount = (result?.messages ?? []).filter((m) => m.role === "USER").length;
+      if (userCount !== 1) return; // bail if this isn't the first user message
+      const derived = deriveTitleFromMessage(content);
+      if (!derived) return;
+      await options.repository.updateThreadTitle({ threadId, title: derived, manual: false });
+    } catch {
+      // best-effort; never block the user write
+    }
+  }
+
+  async function maybeRenameFromItineraryEvent(threadId: string, event: AgentEvent) {
+    if (event.type !== "itinerary.created" && event.type !== "itinerary.updated") return;
+    const derived = deriveTitleFromItineraryPayload(event.payload);
+    if (!derived) return;
+    try {
+      await options.repository.updateThreadTitle({ threadId, title: derived, manual: false });
+    } catch {
+      // best-effort
+    }
+  }
+
   return {
     async createThread(agencyId: string, userId: string, input: unknown) {
       const parsed = createThreadSchema.parse(input);
@@ -245,7 +286,7 @@ export function createAgentService(options: {
       return options.repository.listThreadsByAgency(agencyId);
     },
 
-    async getThread(agencyId: string, threadId: string) {
+    async getThread(agencyId: string | null, threadId: string) {
       const thread = await options.repository.findThreadByAgency(threadId, agencyId);
       if (!thread) {
         throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
@@ -260,24 +301,38 @@ export function createAgentService(options: {
       }
     },
 
-    async approveItineraryThread(agencyId: string, threadId: string, input: unknown) {
-      const parsed = approveItineraryThreadSchema.parse(input);
+    async saveItineraryThread(agencyId: string, threadId: string, input: unknown) {
+      const parsed = saveItineraryThreadSchema.parse(input);
       const thread = await this.getThread(agencyId, threadId);
       if (thread.tripId) {
         throw new ApiError(409, "THREAD_ALREADY_BOUND", "This thread is already attached to a trip.");
       }
 
-      const approved = await options.repository.approveItineraryThread({
+      const saved = await options.repository.saveItineraryThread({
         agencyId,
         threadId,
         input: parsed
       });
-      if (!approved) {
+      if (!saved) {
         throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
       }
 
       await touchThread(threadId);
-      return approved;
+      return saved;
+    },
+
+    async updateThreadTitle(agencyId: string, threadId: string, input: unknown) {
+      const parsed = updateThreadTitleSchema.parse(input);
+      await this.getThread(agencyId, threadId); // 404 if cross-agency
+      const updated = await options.repository.updateThreadTitle({
+        threadId,
+        title: parsed.title,
+        manual: true
+      });
+      if (!updated) {
+        throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
+      }
+      return updated;
     },
 
     async appendUserMessageAndCreateRun(
@@ -300,11 +355,13 @@ export function createAgentService(options: {
         modelName
       });
       await touchThread(threadId);
+      await maybeRenameFromFirstMessage(threadId, parsed.content);
       return result;
     },
 
-    async startRun(runId: string, startedAtOverride?: Date) {
-      const run = await getRun(runId);
+    async startRun(runId: string, startedAtOverride?: Date, agencyId?: string | null) {
+      // F2: Pass agencyId to scope the run lookup to the calling agency.
+      const run = await getRun(runId, agencyId);
       assertRunOpen(run);
 
       const startedAt = startedAtOverride ?? now();
@@ -333,11 +390,13 @@ export function createAgentService(options: {
       });
       debouncedTouchThread(run.threadId);
       publishAgentRunEvent(run.id, parsed, persisted.id);
+      await maybeRenameFromItineraryEvent(run.threadId, parsed);
       return persisted;
     },
 
-    async listRunEvents(runId: string) {
-      await getRun(runId);
+    async listRunEvents(runId: string, agencyId?: string | null) {
+      // F2: Scope the run lookup to the calling agency before returning events.
+      await getRun(runId, agencyId);
       return options.repository.listRunEvents(runId);
     },
 
@@ -428,7 +487,7 @@ export function createAgentService(options: {
       return created;
     },
 
-    async completeRun(runId: string, assistantContent: string) {
+    async completeRun(runId: string, assistantContent: string, usage?: CompleteRunUsage) {
       agentLogger.agentResponse(runId, assistantContent);
       const run = await getRun(runId);
       assertRunOpen(run);
@@ -452,7 +511,8 @@ export function createAgentService(options: {
       const completed = await options.repository.completeRunIfOpen(runId, {
         assistantContent,
         completedAt,
-        processSnapshot: processSnapshot ?? undefined
+        processSnapshot: processSnapshot ?? undefined,
+        usage
       });
       if (!completed) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
@@ -488,8 +548,9 @@ export function createAgentService(options: {
       return failedRun;
     },
 
-    async cancelRun(runId: string) {
-      const run = await getRun(runId);
+    async cancelRun(runId: string, agencyId?: string | null) {
+      // F2: Scope the run lookup to the calling agency before cancelling.
+      const run = await getRun(runId, agencyId);
       if (isTerminalRunStatus(run.status)) return;
       await options.repository.cancelRunIfOpen(runId);
       // Notify connected SSE clients so they close the stream

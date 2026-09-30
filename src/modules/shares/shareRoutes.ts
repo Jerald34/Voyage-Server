@@ -1,8 +1,16 @@
 import type { Request } from "express";
 import { Router } from "express";
 import { requireAuth } from "../../http/authMiddleware";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
-import { createShareInputSchema, replyCommentInputSchema } from "./shareSchemas";
+import {
+  commentIdParamsSchema,
+  createShareInputSchema,
+  itineraryIdParamsSchema,
+  listSharesQuerySchema,
+  replyCommentInputSchema,
+  shareIdParamsSchema
+} from "./shareSchemas";
 import { shareService } from "./shareService";
 
 function getAgencyId(request: Request): string {
@@ -10,14 +18,15 @@ function getAgencyId(request: Request): string {
 }
 
 export const shareRoutes = Router({ mergeParams: true });
+const agencyIdParamsSchema = idParamsSchema("agencyId");
 
 shareRoutes.use(requireAuth);
 shareRoutes.use(async (request, _response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const access = await agencyAccessService.requireVerifiedAgencyMember(
       request.authUser!,
-      String(params.agencyId)
+      agencyId
     );
     // Store resolved UUID on request so all downstream handlers use the real ID
     request.resolvedAgencyId = access.agency.id;
@@ -31,7 +40,7 @@ shareRoutes.use(async (request, _response, next) => {
 shareRoutes.post("/:itineraryId", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
-    const itineraryId = String(request.params.itineraryId);
+    const { itineraryId } = itineraryIdParamsSchema.parse(request.params);
     const input = createShareInputSchema.parse(request.body);
     const share = await shareService.createShare(agencyId, itineraryId, input);
     response.status(201).json({ share });
@@ -44,7 +53,7 @@ shareRoutes.post("/:itineraryId", async (request, response, next) => {
 shareRoutes.get("/", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
-    const tripId = typeof request.query.tripId === "string" ? request.query.tripId : undefined;
+    const { tripId } = listSharesQuerySchema.parse(request.query);
     const shares = await shareService.listSharesForTrip(agencyId, tripId);
     response.json({ shares });
   } catch (error) {
@@ -80,7 +89,7 @@ shareRoutes.get("/unread-counts-by-trip", async (request, response, next) => {
 shareRoutes.delete("/:shareId", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
-    const shareId = String(request.params.shareId);
+    const { shareId } = shareIdParamsSchema.parse(request.params);
     const share = await shareService.revokeShare(agencyId, shareId);
     response.json({ share });
   } catch (error) {
@@ -92,7 +101,7 @@ shareRoutes.delete("/:shareId", async (request, response, next) => {
 shareRoutes.get("/:shareId/comments", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
-    const shareId = String(request.params.shareId);
+    const { shareId } = shareIdParamsSchema.parse(request.params);
     const comments = await shareService.listComments(agencyId, shareId);
     response.json({ comments });
   } catch (error) {
@@ -104,7 +113,7 @@ shareRoutes.get("/:shareId/comments", async (request, response, next) => {
 shareRoutes.post("/comments/:commentId/reply", async (request, response, next) => {
   try {
     const agencyId = getAgencyId(request);
-    const commentId = String(request.params.commentId);
+    const { commentId } = commentIdParamsSchema.parse(request.params);
     const { content } = replyCommentInputSchema.parse(request.body);
     const comment = await shareService.replyToComment(agencyId, commentId, content);
     response.json({ comment });

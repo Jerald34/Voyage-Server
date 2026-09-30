@@ -1,4 +1,15 @@
 import type { AgentEvent } from "./agentSchemas";
+import type { UsageSummary } from "./agentRunUsage";
+
+export interface CompleteRunUsage {
+  promptTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  cachedTokens: number;
+  thoughtsTokens: number;
+  costUsd: number;
+  detail: UsageSummary["detail"];
+}
 
 export type AgentThreadStatus = "ACTIVE" | "ARCHIVED";
 export type AgentMessageRole = "USER" | "ASSISTANT" | "SYSTEM_VISIBLE";
@@ -21,7 +32,7 @@ export type AgentMessageRecord = {
 export type AgentRunRecord = {
   id: string;
   threadId: string;
-  agencyId: string;
+  agencyId: string | null;
   triggerMessageId: string | null;
   status: AgentRunStatus;
   modelProvider: string;
@@ -118,11 +129,12 @@ export type AgentRunEventRecord = {
 
 export type AgentThreadRecord = {
   id: string;
-  agencyId: string;
+  agencyId: string | null;
   tripId: string | null;
   createdByUserId: string;
   title: string;
   status: AgentThreadStatus;
+  titleSetByUser: boolean;
   messages: AgentMessageRecord[];
   events: AgentRunEventRecord[];
   createdAt: Date;
@@ -154,15 +166,15 @@ export type ApprovedItineraryThreadRecord = {
   };
   itinerary: {
     id: string;
-    tripId: string;
-    agencyId: string;
+    tripId: string | null;
+    agencyId: string | null;
     version: number;
     status: string;
   };
 };
 
 export type AgentOrchestratorRunInput = {
-  agencyId: string;
+  agencyId: string | null;
   threadId: string;
   runId: string;
   userId: string;
@@ -180,7 +192,7 @@ export type AgentOrchestrator = {
 
 export type AgentOrchestratorAgentService = {
   getThread(
-    agencyId: string,
+    agencyId: string | null,
     threadId: string
   ): Promise<{ messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string }> }>;
   startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
@@ -194,7 +206,8 @@ export type AgentOrchestratorAgentService = {
   failToolCall(toolCallId: string, code: string, message: string, completedAt: Date): Promise<unknown>;
   completeRun(
     runId: string,
-    assistantContent: string
+    assistantContent: string,
+    usage?: CompleteRunUsage
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] }>;
   failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
   listOpenTasksForThread(threadId: string): Promise<Array<{ id: string; label: string; status: string }>>;
@@ -202,15 +215,15 @@ export type AgentOrchestratorAgentService = {
 
 export interface AgentRepository {
   createThread(data: {
-    agencyId: string;
+    agencyId: string | null;
     createdByUserId: string;
     title: string;
     tripId?: string | null;
   }): Promise<AgentThreadRecord>;
   listThreadsByAgency(agencyId: string): Promise<AgentThreadRecord[]>;
-  findThreadByAgency(id: string, agencyId: string): Promise<AgentThreadRecord | null>;
-  deleteThreadByAgency(id: string, agencyId: string): Promise<boolean>;
-  approveItineraryThread(data: {
+  findThreadByAgency(id: string, agencyId: string | null): Promise<AgentThreadRecord | null>;
+  deleteThreadByAgency(id: string, agencyId: string | null): Promise<boolean>;
+  saveItineraryThread(data: {
     agencyId: string;
     threadId: string;
     input: ApproveItineraryThreadInput;
@@ -225,7 +238,7 @@ export interface AgentRepository {
   }): Promise<AgentMessageRecord>;
   createRun(data: {
     threadId: string;
-    agencyId: string;
+    agencyId: string | null;
     triggerMessageId?: string | null;
     modelProvider: string;
     modelName: string;
@@ -233,14 +246,15 @@ export interface AgentRepository {
   startRun(id: string, startedAt: Date): Promise<AgentRunRecord | null>;
   createUserMessageAndRun(data: {
     threadId: string;
-    agencyId: string;
+    agencyId: string | null;
     authorUserId: string;
     content: string;
     metadata?: unknown;
     modelProvider: string;
     modelName: string;
   }): Promise<{ message: AgentMessageRecord; run: AgentRunRecord }>;
-  findRunById(id: string): Promise<AgentRunRecord | null>;
+  /** F2: agencyId scopes the lookup to the tenant — pass it to prevent cross-tenant IDOR. */
+  findRunById(id: string, agencyId?: string | null): Promise<AgentRunRecord | null>;
   listRunEvents(runId: string): Promise<AgentRunEventRecord[]>;
   touchThread?(threadId: string, updatedAt: Date): Promise<void>;
   createRunEvent(data: {
@@ -296,6 +310,7 @@ export interface AgentRepository {
       assistantContent: string;
       completedAt: Date;
       processSnapshot?: Record<string, unknown>;
+      usage?: CompleteRunUsage;
     }
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] } | null>;
   failRunIfOpen(
@@ -309,7 +324,7 @@ export interface AgentRepository {
   cancelRunIfOpen(id: string): Promise<AgentRunRecord | null>;
   listThreadMessages(params: {
     threadId: string;
-    agencyId: string;
+    agencyId: string | null;
     cursor?: string | null;
     limit: number;
   }): Promise<{
@@ -323,4 +338,9 @@ export interface AgentRepository {
     }>;
     nextCursor: string | null;
   }>;
+  updateThreadTitle(args: {
+    threadId: string;
+    title: string;
+    manual: boolean;
+  }): Promise<AgentThreadRecord | null>;
 }

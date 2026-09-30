@@ -1,6 +1,7 @@
 import { Router } from "express";
 import multer from "multer";
 import { requireAuth } from "../../http/authMiddleware";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import * as agentController from "./agentController";
 
@@ -10,14 +11,15 @@ const upload = multer({
 });
 
 const router = Router({ mergeParams: true });
+const agencyIdParamsSchema = idParamsSchema("agencyId");
 
 router.use(requireAuth);
 router.use(async (request, _response, next) => {
   try {
-    const params = request.params as Record<string, string | undefined>;
+    const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const access = await agencyAccessService.requireVerifiedAgencyMember(
       request.authUser!,
-      String(params.agencyId)
+      agencyId
     );
     request.resolvedAgencyId = access.agency.id;
     next();
@@ -31,8 +33,10 @@ router.post("/threads", agentController.createThread);
 router.get("/threads/:id", agentController.getThread);
 router.get("/threads/:id/messages", agentController.listThreadMessages);
 router.delete("/threads/:id", agentController.deleteThread);
-router.post("/threads/:id/approve-itinerary", agentController.approveItineraryThread);
-router.post("/threads/:id/approve", agentController.approveItineraryThread);
+router.patch("/threads/:id", agentController.updateThreadTitle);
+router.post("/threads/:id/save", agentController.saveItineraryThread);
+// Deprecated alias — remove after one release.
+router.post("/threads/:id/approve", agentController.saveItineraryThread);
 router.post("/threads/:id/messages", agentController.createMessage);
 router.post("/threads/:id/images", upload.array("images", 3), agentController.uploadChatImages);
 router.get("/runs/:id/stream", agentController.runStream);

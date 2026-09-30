@@ -8,7 +8,7 @@ datasource db {
 
 enum UserRole {
   USER
-  ADMIN
+  SUPER_ADMIN
 }
 
 enum UserStatus {
@@ -19,6 +19,12 @@ enum UserStatus {
 enum AuthProvider {
   GOOGLE
   APPLE
+}
+
+enum UserAccountType {
+  PENDING
+  PERSONAL
+  AGENCY_USER
 }
 
 enum AgencyStatus {
@@ -90,6 +96,19 @@ enum PlaceProvider {
   NOMINATIM
 }
 
+enum PlaceBusinessStatus {
+  OPERATIONAL
+  CLOSED_TEMPORARILY
+  CLOSED_PERMANENTLY
+}
+
+enum AgencyPlaceNoteStatus {
+  AVOID
+  CLOSED
+  PREFERRED
+  NEUTRAL
+}
+
 enum AgentThreadStatus {
   ACTIVE
   ARCHIVED
@@ -136,6 +155,7 @@ model User {
   displayName         String
   role                UserRole                 @default(USER)
   status              UserStatus               @default(ACTIVE)
+  accountType         UserAccountType          @default(PENDING)
   emailVerifiedAt     DateTime?
   avatarImageId       String?                  @unique @db.Uuid
   avatarImage         ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
@@ -148,6 +168,9 @@ model User {
   verifiedAgencies    Agency[]                 @relation("AgencyVerifiedBy")
   rejectedAgencies    Agency[]                 @relation("AgencyRejectedBy")
   suspendedAgencies   Agency[]                 @relation("AgencySuspendedBy")
+  invitedAgencies     AgencyInvitation[]       @relation("AgencyInvitationInviter")
+  acceptedInvitations AgencyInvitation[]       @relation("AgencyInvitationAccepter")
+  revokedInvitations  AgencyInvitation[]       @relation("AgencyInvitationRevoker")
   imageAssets         ImageAsset[]             @relation("UserImageAssets")
   adminAuditEvents    AdminAuditEvent[]        @relation("AdminAuditActor")
   createdClientTrips  ClientTrip[]             @relation("ClientTripCreator")
@@ -155,6 +178,9 @@ model User {
   createdItineraries  Itinerary[]              @relation("ItineraryCreator")
   createdAgentThreads AgentThread[]            @relation("AgentThreadCreator")
   agentMessages       AgentMessage[]           @relation("AgentMessageAuthor")
+  problemReports      ProblemReport[]          @relation("ProblemReporter")
+  resolvedReports     ProblemReport[]          @relation("ProblemResolver")
+  createdPlaceNotes   AgencyPlaceNote[]        @relation("AgencyPlaceNoteAuthor")
   createdAt           DateTime                 @default(now())
   updatedAt           DateTime                 @updatedAt
 
@@ -241,12 +267,16 @@ model Agency {
   country                String?
   city                   String?
   memberships            AgencyMembership[]
+  invitations            AgencyInvitation[]
   imageAssets            ImageAsset[]       @relation("AgencyImageAssets")
   clientTrips            ClientTrip[]
   itineraries            Itinerary[]
   itineraryShares        ItineraryShare[]
   agentThreads           AgentThread[]
   agentRuns              AgentRun[]
+  tripReviews            TripReview[]
+  problemReports         ProblemReport[]
+  placeNotes             AgencyPlaceNote[]
   createdAt              DateTime           @default(now())
   updatedAt              DateTime           @updatedAt
 
@@ -267,6 +297,32 @@ model AgencyMembership {
 
   @@unique([agencyId, userId])
   @@index([userId])
+}
+
+model AgencyInvitation {
+  id               String         @id @default(uuid()) @db.Uuid
+  agencyId         String         @db.Uuid
+  agency           Agency         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  email            String
+  emailNormalized  String
+  role             MembershipRole
+  invitedByUserId  String         @db.Uuid
+  invitedByUser    User           @relation("AgencyInvitationInviter", fields: [invitedByUserId], references: [id])
+  tokenHash        String         @unique
+  expiresAt        DateTime
+  acceptedAt       DateTime?
+  acceptedByUserId String?        @db.Uuid
+  acceptedByUser   User?          @relation("AgencyInvitationAccepter", fields: [acceptedByUserId], references: [id])
+  revokedAt        DateTime?
+  revokedByUserId  String?        @db.Uuid
+  revokedByUser    User?          @relation("AgencyInvitationRevoker", fields: [revokedByUserId], references: [id])
+  createdAt        DateTime       @default(now())
+  updatedAt        DateTime       @updatedAt
+
+  @@index([agencyId])
+  @@index([emailNormalized])
+  @@index([expiresAt])
+  @@index([agencyId, emailNormalized])
 }
 
 model ImageAsset {
@@ -314,13 +370,13 @@ model AdminAuditEvent {
 }
 
 model ClientTrip {
-  id                      String           @id @default(uuid()) @db.Uuid
-  agencyId                String           @db.Uuid
-  agency                  Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  createdByUserId         String           @db.Uuid
-  createdByUser           User             @relation("ClientTripCreator", fields: [createdByUserId], references: [id])
-  assignedOrganizerUserId String?          @db.Uuid
-  assignedOrganizerUser   User?            @relation("ClientTripOrganizer", fields: [assignedOrganizerUserId], references: [id])
+  id                      String              @id @default(uuid()) @db.Uuid
+  agencyId                String              @db.Uuid
+  agency                  Agency              @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  createdByUserId         String              @db.Uuid
+  createdByUser           User                @relation("ClientTripCreator", fields: [createdByUserId], references: [id])
+  assignedOrganizerUserId String?             @db.Uuid
+  assignedOrganizerUser   User?               @relation("ClientTripOrganizer", fields: [assignedOrganizerUserId], references: [id])
   title                   String
   destinationSummary      String?
   clientName              String?
@@ -328,12 +384,14 @@ model ClientTrip {
   endDate                 DateTime?
   travelerCount           Int?
   budgetLevel             String?
-  status                  ClientTripStatus @default(DRAFT)
+  status                  ClientTripStatus    @default(DRAFT)
   itineraries             Itinerary[]
   itineraryShares         ItineraryShare[]
   agentThreads            AgentThread[]
-  createdAt               DateTime         @default(now())
-  updatedAt               DateTime         @updatedAt
+  tripReviews             TripReview[]
+  tripReviewEmailLog      TripReviewEmailLog?
+  createdAt               DateTime            @default(now())
+  updatedAt               DateTime            @updatedAt
 
   @@unique([id, agencyId])
   @@index([agencyId])
@@ -345,10 +403,10 @@ model ClientTrip {
 
 model Itinerary {
   id              String           @id @default(uuid()) @db.Uuid
-  agencyId        String           @db.Uuid
-  agency          Agency           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  tripId          String           @db.Uuid
-  trip            ClientTrip       @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
+  agencyId        String?          @db.Uuid
+  agency          Agency?          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  tripId          String?          @db.Uuid
+  trip            ClientTrip?      @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: Cascade)
   createdByUserId String           @db.Uuid
   createdByUser   User             @relation("ItineraryCreator", fields: [createdByUserId], references: [id])
   title           String
@@ -420,6 +478,11 @@ model PlaceSnapshot {
   phoneNumber      String?
   metadata         Json?
   fetchedAt        DateTime
+  // Provider business status, tracked on its own clock: `businessStatusCheckedAt`
+  // only advances on a successful response carrying a recognized status. Both are
+  // null for rows written before the place freshness gate migration.
+  businessStatus          PlaceBusinessStatus?
+  businessStatusCheckedAt DateTime?
   itineraryItems   ItineraryItem[]
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
@@ -428,16 +491,40 @@ model PlaceSnapshot {
   @@index([providerPlaceId])
 }
 
+/// Agency-scoped staff notes about a place. `provider` and `providerPlaceId` are
+/// both set (a resolved place) or both null (an unresolved name). A null
+/// `cityContext` makes an unresolved note agency-global.
+model AgencyPlaceNote {
+  id              String                @id @default(uuid()) @db.Uuid
+  agencyId        String                @db.Uuid
+  agency          Agency                @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  provider        PlaceProvider?
+  providerPlaceId String?
+  placeName       String
+  cityContext     String?
+  status          AgencyPlaceNoteStatus @default(NEUTRAL)
+  note            String?
+  createdByUserId String                @db.Uuid
+  createdByUser   User                  @relation("AgencyPlaceNoteAuthor", fields: [createdByUserId], references: [id])
+  createdAt       DateTime              @default(now())
+  updatedAt       DateTime              @updatedAt
+
+  @@unique([agencyId, provider, providerPlaceId])
+  @@index([agencyId, cityContext])
+  @@index([agencyId, placeName])
+}
+
 model AgentThread {
   id              String            @id @default(uuid()) @db.Uuid
-  agencyId        String            @db.Uuid
-  agency          Agency            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  agencyId        String?           @db.Uuid
+  agency          Agency?           @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   tripId          String?           @db.Uuid
   trip            ClientTrip?       @relation(fields: [tripId, agencyId], references: [id, agencyId], onDelete: NoAction)
   createdByUserId String            @db.Uuid
   createdByUser   User              @relation("AgentThreadCreator", fields: [createdByUserId], references: [id])
   title           String
   status          AgentThreadStatus @default(ACTIVE)
+  titleSetByUser  Boolean           @default(false)
   messages        AgentMessage[]
   runs            AgentRun[]
   toolCalls       AgentToolCall[]
@@ -480,14 +567,23 @@ model AgentMessage {
 model AgentRun {
   id               String          @id @default(uuid()) @db.Uuid
   threadId         String          @db.Uuid
-  thread           AgentThread     @relation(fields: [threadId, agencyId], references: [id, agencyId], onDelete: Cascade)
-  agencyId         String          @db.Uuid
-  agency           Agency          @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  thread           AgentThread?    @relation(fields: [threadId, agencyId], references: [id, agencyId], onDelete: Cascade)
+  agencyId         String?         @db.Uuid
+  agency           Agency?         @relation(fields: [agencyId], references: [id], onDelete: Cascade)
   triggerMessageId String?         @db.Uuid
   triggerMessage   AgentMessage?   @relation("AgentRunTriggerMessage", fields: [triggerMessageId, threadId], references: [id, threadId], onDelete: NoAction)
   status           AgentRunStatus  @default(QUEUED)
   modelProvider    String
   modelName        String
+  // Usage metering (forward-only; null for runs created before this shipped)
+  promptTokens   Int?
+  outputTokens   Int?
+  totalTokens    Int?
+  cachedTokens   Int?
+  thoughtsTokens Int?
+  costUsd        Decimal? @db.Decimal(12, 6)
+  usageDetail    Json?
+  usageUserId    String?  @db.Uuid
   startedAt        DateTime?
   completedAt      DateTime?
   failedAt         DateTime?
@@ -506,6 +602,8 @@ model AgentRun {
   @@index([agencyId])
   @@index([triggerMessageId])
   @@index([status])
+  @@index([usageUserId, createdAt])
+  @@index([agencyId, createdAt])
 }
 
 model AgentToolCall {
@@ -593,28 +691,32 @@ enum CommentStatus {
 }
 
 model ItineraryShare {
-  id           String             @id @default(cuid())
-  token        String             @unique
-  itineraryId  String             @db.Uuid
-  itinerary    Itinerary          @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
-  tripId       String             @db.Uuid
-  trip         ClientTrip         @relation(fields: [tripId], references: [id], onDelete: Cascade)
-  agencyId     String             @db.Uuid
-  agency       Agency             @relation(fields: [agencyId], references: [id], onDelete: Cascade)
-  clientName   String?
-  clientEmail  String?
-  expiresAt    DateTime?
-  revokedAt    DateTime?
-  viewCount    Int                @default(0)
-  lastViewedAt DateTime?
-  comments     ItineraryComment[]
-  createdAt    DateTime           @default(now())
-  updatedAt    DateTime           @updatedAt
+  id                    String             @id @default(cuid())
+  token                 String             @unique
+  itineraryId           String             @db.Uuid
+  itinerary             Itinerary          @relation(fields: [itineraryId], references: [id], onDelete: Cascade)
+  tripId                String?            @db.Uuid
+  trip                  ClientTrip?        @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  agencyId              String?            @db.Uuid
+  agency                Agency?            @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  clientName            String?
+  clientEmail           String?
+  expiresAt             DateTime?
+  revokedAt             DateTime?
+  viewCount             Int                @default(0)
+  lastViewedAt          DateTime?
+  proposalRating        Int?
+  proposalRatingComment String?
+  proposalRatedAt       DateTime?
+  comments              ItineraryComment[]
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
 
   @@index([itineraryId])
   @@index([tripId])
   @@index([agencyId])
   @@index([token])
+  @@index([proposalRating])
 }
 
 model ItineraryComment {
@@ -633,4 +735,71 @@ model ItineraryComment {
 
   @@index([shareId])
   @@index([status])
+}
+
+model TripReview {
+  id                   String     @id @default(uuid()) @db.Uuid
+  tripId               String     @db.Uuid
+  trip                 ClientTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  agencyId             String     @db.Uuid
+  agency               Agency     @relation(fields: [agencyId], references: [id], onDelete: Cascade)
+  rating               Int
+  npsScore             Int?
+  reviewText           String?
+  respondentName       String?
+  respondentEmail      String?
+  consentToTestimonial Boolean    @default(false)
+  submittedAt          DateTime   @default(now())
+  emailSentAt          DateTime?
+  createdAt            DateTime   @default(now())
+
+  @@index([agencyId])
+  @@index([agencyId, submittedAt])
+  @@index([rating])
+}
+
+model TripReviewEmailLog {
+  tripId String     @id @db.Uuid
+  trip   ClientTrip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  sentAt DateTime   @default(now())
+}
+
+enum ProblemCategory {
+  BUG
+  BILLING
+  FEATURE
+  OTHER
+}
+
+enum ReportStatus {
+  NEW
+  IN_PROGRESS
+  RESOLVED
+  WONT_FIX
+}
+
+model ProblemReport {
+  id                    String          @id @default(uuid()) @db.Uuid
+  reporterUserId        String          @db.Uuid
+  reporterUser          User            @relation("ProblemReporter", fields: [reporterUserId], references: [id])
+  agencyId              String?         @db.Uuid
+  agency                Agency?         @relation(fields: [agencyId], references: [id], onDelete: SetNull)
+  category              ProblemCategory @default(OTHER)
+  subject               String
+  message               String
+  status                ReportStatus    @default(NEW)
+  adminNotes            String?
+  githubIssueUrl        String?
+  githubIssueNumber     Int?
+  resolvedByAdminUserId String?         @db.Uuid
+  resolvedByAdminUser   User?           @relation("ProblemResolver", fields: [resolvedByAdminUserId], references: [id])
+  resolvedAt            DateTime?
+  appContext            String?
+  userAgent             String?
+  createdAt             DateTime        @default(now())
+  updatedAt             DateTime        @updatedAt
+
+  @@index([status])
+  @@index([reporterUserId])
+  @@index([createdAt])
 }

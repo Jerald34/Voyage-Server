@@ -1,7 +1,8 @@
 import type { PrismaClient } from "@prisma/client";
 import type { MapsProvider, ResolvedPlace } from "../../../services/maps";
-import { isCloudinaryConfigured, uploadPlacePhoto } from "../../../services/cloudinary";
+import { isCloudinaryConfigured, uploadPlacePhotoBuffer } from "../../../services/cloudinary";
 import { upsertPlaceSnapshot } from "./toolUtils";
+import { createPlaceSnapshotRepository } from "../../../services/places/placeSnapshotRepository";
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -60,16 +61,14 @@ export async function enrichResolvedPlaceForSnapshot(
         // Cache the photo on Cloudinary so subsequent views don't bill Google.
         if (isCloudinaryConfigured()) {
           try {
-            // Use a direct Google media URL (with API key) so Cloudinary can
-            // fetch the image directly. The proxy URL (photoUri) points back
-            // to our server which Cloudinary may not be able to reach
-            // (especially in local dev or if the server is behind a firewall).
+            // Fetch photo bytes server-side with header-based authentication so
+            // the API key never appears in any URL or persisted data.
             const photoName = details.photos[0].name;
-            const fetchableUrl = (photoName && maps?.getPhotoMediaUrl)
-              ? maps.getPhotoMediaUrl(photoName)
-              : primaryPhotoUrl;
-            const uploaded = await uploadPlacePhoto(fetchableUrl, place.providerPlaceId);
-            primaryPhotoUrl = uploaded.url;
+            if (photoName && maps?.fetchPlacePhoto) {
+              const { bytes } = await maps.fetchPlacePhoto(photoName, { width: 400, height: 400 });
+              const uploaded = await uploadPlacePhotoBuffer(bytes, place.providerPlaceId);
+              primaryPhotoUrl = uploaded.url;
+            }
           } catch (err) {
             // Cloudinary upload is best-effort; fall back to the proxy URL.
             console.error("[Enrichment] Cloudinary upload failed for", place.providerPlaceId, err);
@@ -89,10 +88,20 @@ export async function enrichResolvedPlaceForSnapshot(
       rating: typeof details.rating === "number" ? details.rating : enriched.rating,
       websiteUrl: nonEmptyString(details.websiteUri) ? details.websiteUri : enriched.websiteUrl,
       phoneNumber: nonEmptyString(details.phoneNumber) ? details.phoneNumber : enriched.phoneNumber,
-      metadata
+      metadata,
+      // Only a recognized status carries an observation, and it keeps the time the
+      // details request actually started. A response without a status leaves the
+      // existing observation untouched — a missing field is not a reopening.
+      ...(details.businessStatus
+        ? {
+            businessStatus: details.businessStatus,
+            businessStatusCheckedAt: details.businessStatusCheckedAt
+          }
+        : {})
     };
   } catch {
-    // Some providers or deployments cannot return details; keep the resolved place usable.
+    // Details failed: there is no observation, so the stored status and its
+    // checked-at time both stay exactly as they were. A failure is not a check.
   }
 
   return enriched;
@@ -166,12 +175,34 @@ export async function backfillUnenrichedSnapshots(options: {
         rating: snapshot.rating ?? undefined,
         websiteUrl: snapshot.websiteUrl ?? undefined,
         phoneNumber: snapshot.phoneNumber ?? undefined,
-        metadata: (snapshot.metadata as Record<string, unknown>) ?? {}
+        metadata: (snapshot.metadata as Record<string, unknown>) ?? {},
+        // Carry the stored status forward so eligibility and display keep working
+        // during the backfill. The checked-at time comes from the stored row; the
+        // reconstruction never invents one.
+        ...(snapshot.businessStatus
+          ? {
+              businessStatus: snapshot.businessStatus,
+              businessStatusCheckedAt: snapshot.businessStatusCheckedAt ?? undefined
+            }
+          : {})
       };
 
       try {
         const enriched = await enrichResolvedPlaceForSnapshot(maps, place);
+        // The general upsert deliberately writes no status columns. When the
+        // details call produced a fresh recognized observation, record it through
+        // the conditional status path so an older response cannot win.
         await upsertPlaceSnapshot(client, enriched);
+        if (enriched.businessStatus && enriched.businessStatusCheckedAt) {
+          await createPlaceSnapshotRepository(client).observeStatus(
+            enriched.provider,
+            enriched.providerPlaceId,
+            {
+              businessStatus: enriched.businessStatus,
+              businessStatusCheckedAt: enriched.businessStatusCheckedAt
+            }
+          );
+        }
       } catch {
         // Best-effort; individual failures don't block others.
       }

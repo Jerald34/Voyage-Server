@@ -16,6 +16,11 @@ import {
   createUpdateItineraryTool,
   createWebSearchTool
 } from "../src/modules/agent/agentTools";
+import { createPlaceSelectionService } from "../src/services/places/placeSelectionService";
+import { createPlaceSnapshotRepository } from "../src/services/places/placeSnapshotRepository";
+import { buildPlaceGate } from "../src/services/places/placeGate";
+import { enrichResolvedPlaceForSnapshot } from "../src/modules/agent/tools/placeSnapshotEnrichment";
+import { createItineraryService } from "../src/modules/itineraries/itineraryService";
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
 import type { ModelProvider } from "../src/services/modelProvider";
@@ -78,6 +83,9 @@ function createFakeAgentService(run = createRun()) {
     metadata: unknown;
     createdAt: Date;
   }> = [];
+  // Captures every completeRun invocation (incl. the optional usage summary) so tests
+  // can assert the orchestrator forwards accumulated model usage.
+  const completeRunCalls: Array<{ runId: string; assistantContent: string; usage: unknown }> = [];
   const service: AgentOrchestratorAgentService = {
     async getThread() {
       return {
@@ -202,7 +210,8 @@ function createFakeAgentService(run = createRun()) {
       }
       return created;
     },
-    async completeRun(runId, assistantContent) {
+    async completeRun(runId, assistantContent, usage) {
+      completeRunCalls.push({ runId, assistantContent, usage });
       run.status = "COMPLETED";
       run.completedAt = new Date("2026-04-28T00:00:00.000Z");
       events.push({
@@ -258,8 +267,19 @@ function createFakeAgentService(run = createRun()) {
     }
   };
 
-  return { service, events, run, toolCalls, tasks, sources };
+  return { service, events, run, toolCalls, tasks, sources, completeRunCalls };
 }
+
+// Shared fake usage so every model call reports tokens/cost; the orchestrator should
+// accumulate these and forward the summary to completeRun.
+const FAKE_MODEL_USAGE = {
+  model: "test-model",
+  promptTokenCount: 100,
+  candidatesTokenCount: 40,
+  totalTokenCount: 140,
+  cachedContentTokenCount: 0,
+  estimatedCostUsd: { prompt: 0.001, output: 0.001, total: 0.002 }
+} as const;
 
 function createModelProvider(content: string | string[]): ModelProvider & { calls: Array<Parameters<ModelProvider["complete"]>[0]> } {
   const contents = Array.isArray(content) ? [...content] : [content];
@@ -268,7 +288,7 @@ function createModelProvider(content: string | string[]): ModelProvider & { call
     calls,
     async complete(input) {
       calls.push(input);
-      return { content: contents.shift() ?? contents.at(-1) ?? "" };
+      return { content: contents.shift() ?? contents.at(-1) ?? "", usage: { ...FAKE_MODEL_USAGE } };
     }
   };
 }
@@ -316,6 +336,43 @@ function createRunInput() {
     userId: "user-1",
     userContent: "Build a Cebu itinerary."
   };
+}
+
+
+// ---------------------------------------------------------------------------
+// Place-gate test helpers
+//
+// Resolution and eligibility now live in the guarded itinerary service, not in
+// the tool. Tests that exercise resolution therefore build a real service over a
+// fake repository plus a real selection session over fake maps, so the assertions
+// cover the actual production path instead of a bypass.
+// ---------------------------------------------------------------------------
+function createTestPlaceSession(maps: any, placeSnapshotClient: any, agencyId: string | null = "agency-1") {
+  return createPlaceSelectionService({
+    repository: createPlaceSnapshotRepository(placeSnapshotClient),
+    maps,
+    scheduler: {
+      refresh: async () => ({ kind: "fresh" as const }),
+      scheduleRead: () => {},
+      drain: async () => {},
+      stats: () => ({}) as any
+    } as any,
+    createGate: async () => buildPlaceGate([]),
+    ttlMs: 30 * 24 * 60 * 60 * 1000,
+    now: () => new Date(),
+    runBudget: { remaining: 20 },
+    enrich: maps ? (place: any) => enrichResolvedPlaceForSnapshot(maps, place) : undefined
+  }).createSession(agencyId);
+}
+
+function createGuardedItineraryService(onCreate: (input: any) => any) {
+  return createItineraryService({
+    repository: {
+      async createTripWithItinerary(args: any) {
+        return onCreate({ trip: args.trip, itinerary: args.itinerary });
+      }
+    } as any
+  }) as any;
 }
 
 describe("agent orchestrator", () => {
@@ -685,14 +742,16 @@ describe("agent orchestrator", () => {
       phoneNumber?: string;
       metadata?: Record<string, unknown>;
     }> = [];
+    let capturedMaps: any;
+    let capturedClient: any;
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
         agentService: service,
-        maps: {
+        maps: (capturedMaps = {
           async searchPlaces() {
             return [];
           },
-          async getPlaceDetails(placeId) {
+          async getPlaceDetails(placeId: string) {
             detailsCalls.push(placeId);
             return {
               id: placeId,
@@ -710,7 +769,7 @@ describe("agent orchestrator", () => {
               ]
             };
           },
-          async getPlacePhotos(placeId, maxResults) {
+          async getPlacePhotos(placeId: string, maxResults?: number) {
             photoCalls.push({ placeId, maxResults });
             return [
               { name: `${placeId}/photos/1`, photoUri: "https://example.com/photo-1.jpg" },
@@ -721,7 +780,7 @@ describe("agent orchestrator", () => {
           async estimateRoute() {
             return {};
           },
-          async resolvePlace(input) {
+          async resolvePlace(input: any) {
             resolvedPlaces.push(input);
             return {
               provider: "GOOGLE_MAPS",
@@ -732,8 +791,8 @@ describe("agent orchestrator", () => {
               metadata: { source: "resolved" }
             };
           }
-        },
-        placeSnapshotClient: {
+        }),
+        placeSnapshotClient: (capturedClient = {
           placeSnapshot: {
             async upsert(args: { create: { name: string; metadata?: Record<string, unknown> } }) {
               upsertedPlaces.push(args.create.name);
@@ -741,21 +800,23 @@ describe("agent orchestrator", () => {
               return { id: "11111111-1111-4111-8111-111111111111" };
             }
           }
-        } as never,
-        itineraryService: {
-          async createDraftFromStructuredInput(_agencyId, _userId, input) {
-            createdInputs.push(input);
-            return { trip: { id: "trip-baguio" }, itinerary: { id: "itinerary-baguio" } };
-          }
-        }
+        }) as never,
+        itineraryService: createGuardedItineraryService((input: any) => {
+          createdInputs.push(input);
+          return { trip: { id: "trip-baguio" }, itinerary: { id: "itinerary-baguio" } };
+        })
       })
     ]);
 
-    await registry.execute("create_itinerary", createRunInput(), {
-      location: "Baguio City, Philippines",
-      duration_days: 2,
-      highlights: ["Burnham Park boating", "Mines View Park views"]
-    });
+    await registry.execute(
+      "create_itinerary",
+      { ...createRunInput(), places: await createTestPlaceSession(capturedMaps, capturedClient) },
+      {
+        location: "Baguio City, Philippines",
+        duration_days: 2,
+        highlights: ["Burnham Park boating", "Mines View Park views"]
+      }
+    );
 
     expect(resolvedPlaces).toEqual([
       { placeName: "Burnham Park boating", cityContext: "Baguio City, Philippines" },
@@ -1216,6 +1277,68 @@ describe("agent orchestrator", () => {
       type: "message.delta",
       payload: { delta: "Final response grounded by Google Search: Cebu travel advisories result." }
     });
+  });
+
+  it("passes summed model usage to completeRun", async () => {
+    const { service, completeRunCalls } = createFakeAgentService();
+    const modelOutput = JSON.stringify({
+      assistantMessage: "I checked a tool.",
+      toolCalls: [
+        {
+          name: "web_search",
+          input: { query: "Cebu travel advisories", maxResults: 1 }
+        }
+      ]
+    });
+    // Three model calls (initial loop + continuation + synthesis), each reporting
+    // FAKE_MODEL_USAGE, so the accumulator should sum tokens across phases.
+    const modelProvider = createModelProvider([
+      modelOutput,
+      "Final response grounded by Google Search: Cebu travel advisories result."
+    ]);
+    const registry = createAgentToolRegistry([
+      createWebSearchTool({
+        agentService: service,
+        webSearch: {
+          async search() {
+            return [
+              {
+                title: "Cebu travel advisories",
+                url: "https://example.com/advisories",
+                snippet: "Official travel advisory result",
+                provider: "google_custom_search" as const
+              }
+            ];
+          }
+        }
+      })
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: registry
+    });
+
+    await orchestrator.run(createRunInput());
+
+    const lastCall = completeRunCalls.at(-1);
+    expect(lastCall).toBeDefined();
+    const usageArg = lastCall?.usage as {
+      totalTokens: number;
+      promptTokens: number;
+      outputTokens: number;
+      calls: number;
+      detail: Array<{ phase: string }>;
+    };
+    expect(usageArg).toBeDefined();
+    expect(usageArg.totalTokens).toBeGreaterThan(0);
+    expect(usageArg.detail.length).toBeGreaterThanOrEqual(1);
+    // Three model calls each report 140 total tokens -> summed across the run.
+    expect(usageArg.totalTokens).toBe(FAKE_MODEL_USAGE.totalTokenCount * modelProvider.calls.length);
+    expect(usageArg.calls).toBe(modelProvider.calls.length);
+    // Both phases recorded: loop (initial + continuation) and synthesis.
+    expect(usageArg.detail.some((entry) => entry.phase === "loop")).toBe(true);
+    expect(usageArg.detail.some((entry) => entry.phase === "synthesis")).toBe(true);
   });
 
   it("does not fail the run when web_search provider is unavailable", async () => {
@@ -1811,10 +1934,12 @@ describe("agent orchestrator", () => {
     }> = [];
     let snapshotIndex = 0;
 
+    let routeMaps: any;
+    let routeClient: any;
     const registry = createAgentToolRegistry([
       createCreateItineraryTool({
         agentService: service,
-        maps: {
+        maps: (routeMaps = {
           async searchPlaces() {
             return [];
           },
@@ -1827,7 +1952,7 @@ describe("agent orchestrator", () => {
           async searchNearby() {
             return [];
           },
-          async resolvePlace(input) {
+          async resolvePlace(input: any) {
             const isBurnham = input.placeName === "Burnham Park";
             return {
               provider: "GOOGLE_MAPS",
@@ -1840,7 +1965,7 @@ describe("agent orchestrator", () => {
               metadata: {}
             };
           },
-          async estimateRoute(input) {
+          async estimateRoute(input: any) {
             routeCalls.push({
               origin: input.origin,
               destination: input.destination
@@ -1852,8 +1977,8 @@ describe("agent orchestrator", () => {
               polyline: "_p~iF~ps|U_ulLnnqC_mqNvxq`@"
             };
           }
-        },
-        placeSnapshotClient: {
+        }),
+        placeSnapshotClient: (routeClient = {
           placeSnapshot: {
             async upsert() {
               snapshotIndex += 1;
@@ -1865,17 +1990,18 @@ describe("agent orchestrator", () => {
               };
             }
           }
-        } as never,
-        itineraryService: {
-          async createDraftFromStructuredInput(_agencyId, _userId, input) {
-            createdInputs.push(input);
-            return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
-          }
-        }
+        }) as never,
+        itineraryService: createGuardedItineraryService((input: any) => {
+          createdInputs.push(input);
+          return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
+        })
       })
     ]);
 
-    await registry.execute("create_itinerary", createRunInput(), {
+    await registry.execute("create_itinerary", {
+      ...createRunInput(),
+      places: await createTestPlaceSession(routeMaps, routeClient)
+    }, {
       trip: {
         title: "Baguio route test",
         destinationSummary: "Baguio"
@@ -2213,7 +2339,7 @@ describe("agent orchestrator", () => {
     });
   });
 
-  it("persists NOMINATIM snapshots with a DB-safe provider enum", async () => {
+  it("persists NOMINATIM snapshots under their real provider enum", async () => {
     const captured: Array<{
       provider: string;
       providerPlaceId: string;
@@ -2300,11 +2426,18 @@ describe("agent orchestrator", () => {
       formattedAddress: "Olongapo City, Zambales",
       lat: 14.8363313,
       lng: 120.2828655,
-      provider: "NOMINATIM"
+      provider: "NOMINATIM",
+      // Nominatim reports no business status, and a missing value must never be
+      // serialized as anything the client could read as "open".
+      businessStatus: null,
+      businessStatusCheckedAt: null
     });
+    // NOMINATIM is a real value in the PlaceProvider enum, so it is stored as
+    // itself. Mislabelling these rows as GOOGLE_MAPS made their OSM identifiers
+    // look like Google place IDs to the status refresher.
     expect(captured).toEqual([
       {
-        provider: "GOOGLE_MAPS",
+        provider: "NOMINATIM",
         providerPlaceId: "nominatim:olongapo-city",
         name: "Olongapo City",
         formattedAddress: "Olongapo City, Zambales"

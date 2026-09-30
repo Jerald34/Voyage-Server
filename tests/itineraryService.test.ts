@@ -149,6 +149,25 @@ function createMemoryRepository(): ItineraryRepository & {
     },
     async moveItem() {
       throw new Error("not implemented in memory repo");
+    },
+    async approveTrip(tripId, agencyId) {
+      const trip = trips.find((t) => t.id === tripId && t.agencyId === agencyId);
+      if (!trip) {
+        throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+      }
+      const itinerary = itineraries
+        .filter((i) => i.tripId === tripId)
+        .sort((a, b) => b.updatedAt.getTime() - a.updatedAt.getTime())[0] ?? null;
+
+      if (trip.status === "APPROVED_INTERNAL" && itinerary?.status === "APPROVED_INTERNAL") {
+        return { trip, itinerary };
+      }
+
+      trip.status = "APPROVED_INTERNAL";
+      if (itinerary && itinerary.status !== "APPROVED_INTERNAL") {
+        itinerary.status = "APPROVED_INTERNAL";
+      }
+      return { trip, itinerary };
     }
   };
 }
@@ -368,5 +387,45 @@ describe("itinerary service", () => {
       name: "ZodError"
     });
     expect(repository.trips).toHaveLength(0);
+  });
+});
+
+describe("approveTrip", () => {
+  it("flips ClientTrip and Itinerary to APPROVED_INTERNAL", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    // Seed a trip with IN_REVIEW status and a NEEDS_REVIEW itinerary
+    const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
+    created.trip.status = "IN_REVIEW";
+    created.itinerary.status = "NEEDS_REVIEW";
+
+    const result = await service.approveTrip("agency-1", created.trip.id);
+
+    expect(result.trip.status).toBe("APPROVED_INTERNAL");
+    expect(result.itinerary?.status).toBe("APPROVED_INTERNAL");
+  });
+
+  it("is idempotent on already-approved trips", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    // Seed a trip that is already APPROVED_INTERNAL
+    const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
+    created.trip.status = "APPROVED_INTERNAL";
+    created.itinerary.status = "APPROVED_INTERNAL";
+
+    const result = await service.approveTrip("agency-1", created.trip.id);
+
+    expect(result.trip.status).toBe("APPROVED_INTERNAL");
+  });
+
+  it("throws a 404 ApiError for a trip belonging to a different agency", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    // Seed a trip under "agency-other"
+    const created = await service.createDraftFromStructuredInput("agency-other", "user-1", createStructuredInput());
+
+    await expect(service.approveTrip("agency-1", created.trip.id)).rejects.toMatchObject({
+      statusCode: 404
+    });
   });
 });

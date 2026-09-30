@@ -3,7 +3,7 @@ import { prisma } from "../src/db/prisma";
 export type AdminSeedUser = {
   id: string;
   emailNormalized: string;
-  role: "USER" | "ADMIN";
+  role: "USER" | "SUPER_ADMIN";
 };
 
 export type AdminSeedRepository = {
@@ -37,7 +37,7 @@ export async function promoteAdminEmails(repository: AdminSeedRepository, adminE
       continue;
     }
 
-    if (user.role !== "ADMIN") {
+    if (user.role !== "SUPER_ADMIN") {
       await repository.promoteUserToAdmin(user.id);
       await repository.createAdminAuditEvent({
         adminUserId: user.id,
@@ -69,7 +69,7 @@ export function createPrismaAdminSeedRepository(): AdminSeedRepository {
     async promoteUserToAdmin(userId) {
       await prisma.user.update({
         where: { id: userId },
-        data: { role: "ADMIN" }
+        data: { role: "SUPER_ADMIN" }
       });
     },
     async createAdminAuditEvent(data) {

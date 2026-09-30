@@ -1,5 +1,6 @@
 import { env } from "../config/env";
 import { ApiError } from "../http/errors";
+import { redactSecrets } from "../utils/redaction";
 
 export type WebSearchResult = {
   title: string;
@@ -58,7 +59,7 @@ export function createSerperSearchProvider(options: SerperProviderOptions = {}):
 
         if (!response.ok) {
           const errorBody = await response.text().catch(() => "Unknown error");
-          console.error(`[WebSearch] Serper API Error:`, errorBody);
+          console.error(`[WebSearch] Serper API Error:`, redactSecrets(errorBody));
           throw webSearchUnavailable(
             `Serper provider returned ${response.status}. Detail: ${errorBody.slice(0, 500)}`
           );

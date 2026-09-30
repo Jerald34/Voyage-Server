@@ -1,5 +1,5 @@
 import { Router } from "express";
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { getUserCapabilities } from "../../services/capabilities";
 import { clearSessionCookie, setSessionCookie } from "../../http/cookies";
 import { requireAuth } from "../../http/authMiddleware";
@@ -7,12 +7,75 @@ import { ApiError } from "../../http/errors";
 import { env } from "../../config/env";
 import { verifyAppleIdToken, verifyGoogleAuthorizationCode } from "../../services/oauth";
 import {
+  appleCallbackBodySchema,
+  confirmVerificationSchema,
   emailCheckSchema,
+  googleCallbackQuerySchema,
   loginSchema,
+  requestPasswordResetSchema,
   registerSchema,
-  updateProfileSchema
+  setAccountTypeSchema,
+  updateProfileSchema,
+  verificationRequestSchema,
+  confirmPasswordResetSchema
 } from "./authSchemas";
 import { authService } from "./authService";
+
+// ---------------------------------------------------------------------------
+// F3 — OAuth login-CSRF: state + nonce cookie helpers
+// ---------------------------------------------------------------------------
+
+const OAUTH_STATE_COOKIE = "voyage_oauth_state";
+const OAUTH_NONCE_COOKIE = "voyage_oauth_nonce";
+/** 10 minutes — enough time for the user to complete the OAuth flow. */
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+const OAUTH_PROVIDER_DENIED_MESSAGE = "The OAuth provider denied the sign-in request. Please try again.";
+
+// These short-lived OAuth CSRF cookies stay `SameSite=None` (unlike the session
+// cookie, which is now Lax via the same-origin proxy). They must survive the
+// cross-site round-trip back from the identity provider — in particular Apple uses
+// `response_mode=form_post`, i.e. a CROSS-SITE POST to the callback, on which a Lax
+// cookie would NOT be sent (Lax rides only top-level GET navigations). None is
+// required here; `Secure` is mandatory for None and is accepted on localhost.
+const OAUTH_COOKIE_OPTS = {
+  httpOnly: true,
+  secure: true,
+  sameSite: "none" as const,
+  path: "/",
+  maxAge: OAUTH_STATE_TTL_MS
+};
+
+function generateOAuthCsrfTokens(response: import("express").Response) {
+  const state = randomBytes(32).toString("base64url");
+  const nonce = randomUUID();
+  response.cookie(OAUTH_STATE_COOKIE, state, OAUTH_COOKIE_OPTS);
+  response.cookie(OAUTH_NONCE_COOKIE, nonce, OAUTH_COOKIE_OPTS);
+  return { state, nonce };
+}
+
+function clearOAuthStateCookies(response: import("express").Response) {
+  response.clearCookie(OAUTH_STATE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
+  response.clearCookie(OAUTH_NONCE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
+}
+
+function consumeExpectedOAuthState(
+  request: import("express").Request,
+  response: import("express").Response
+) {
+  const expected = request.cookies?.[OAUTH_STATE_COOKIE];
+  clearOAuthStateCookies(response);
+  return typeof expected === "string" ? expected : undefined;
+}
+
+function verifyOAuthState(expected: string | undefined, received: string) {
+  if (!expected || expected !== received) {
+    throw new ApiError(400, "OAUTH_STATE_MISMATCH", "OAuth state parameter is missing or invalid. Please try signing in again.");
+  }
+}
+
+function rejectOAuthProviderDenied() {
+  throw new ApiError(400, "OAUTH_PROVIDER_ERROR", OAUTH_PROVIDER_DENIED_MESSAGE);
+}
 
 export const authRoutes = Router();
 
@@ -22,6 +85,7 @@ export function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
     email: user.email,
     displayName: user.displayName,
     role: user.role,
+    accountType: user.accountType,
     status: user.status,
     emailVerifiedAt: user.emailVerifiedAt,
     capabilities: getUserCapabilities(user),
@@ -38,8 +102,10 @@ authRoutes.post("/register", async (request, response, next) => {
   try {
     const input = registerSchema.parse(request.body);
     const result = await authService.registerWithEmail(input);
-    setSessionCookie(response, result.sessionToken);
-    response.status(201).json({ user: serializeUser(result.user as NonNullable<Express.Request["authUser"]>) });
+    response.status(201).json({
+      user: serializeUser(result.user as NonNullable<Express.Request["authUser"]>),
+      emailVerificationRequired: true
+    });
   } catch (error) {
     next(error);
   }
@@ -83,6 +149,16 @@ authRoutes.patch("/me", requireAuth, async (request, response, next) => {
   }
 });
 
+authRoutes.post("/me/account-type", requireAuth, async (request, response, next) => {
+  try {
+    const input = setAccountTypeSchema.parse(request.body);
+    const user = await authService.setAccountType(request.authUser!.id, input.accountType);
+    response.json({ user: serializeUser(user as NonNullable<Express.Request["authUser"]>) });
+  } catch (error) {
+    next(error);
+  }
+});
+
 authRoutes.post("/email/check", async (request, response, next) => {
   try {
     const input = emailCheckSchema.parse(request.body);
@@ -92,26 +168,53 @@ authRoutes.post("/email/check", async (request, response, next) => {
   }
 });
 
-authRoutes.post("/email/verification/request", (_request, _response, next) => {
-  next(new ApiError(501, "EMAIL_VERIFICATION_UNAVAILABLE", "Email verification is not available in this deployment."));
+authRoutes.post("/email/verification/request", async (request, response, next) => {
+  try {
+    const input = verificationRequestSchema.parse(request.body);
+    await authService.requestEmailVerificationByEmail(input.email);
+    response.status(202).json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.post("/password/reset/request", (_request, _response, next) => {
-  next(new ApiError(501, "PASSWORD_RESET_UNAVAILABLE", "Password reset is not available in this deployment."));
+authRoutes.post("/email/verification/confirm", async (request, response, next) => {
+  try {
+    const input = confirmVerificationSchema.parse(request.body);
+    await authService.confirmEmailVerification(input.token);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.post("/password/reset/confirm", (_request, _response, next) => {
-  next(new ApiError(501, "PASSWORD_RESET_UNAVAILABLE", "Password reset is not available in this deployment."));
+authRoutes.post("/password/reset/request", async (request, response, next) => {
+  try {
+    const input = requestPasswordResetSchema.parse(request.body);
+    await authService.requestPasswordReset({ email: input.email });
+    response.status(202).json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
-authRoutes.post("/email/verification/confirm", (_request, _response, next) => {
-  next(new ApiError(501, "EMAIL_VERIFICATION_UNAVAILABLE", "Email verification is not available in this deployment."));
+authRoutes.post("/password/reset/confirm", async (request, response, next) => {
+  try {
+    const input = confirmPasswordResetSchema.parse(request.body);
+    await authService.confirmPasswordReset(input);
+    response.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
 });
 
 authRoutes.get("/google/start", (_request, response, next) => {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
     return next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured."));
   }
+
+  // F3: Generate state (CSRF protection) and nonce, bind to session via httpOnly cookies.
+  const { state, nonce } = generateOAuthCsrfTokens(response);
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
@@ -120,17 +223,27 @@ authRoutes.get("/google/start", (_request, response, next) => {
   url.searchParams.set("scope", "openid email profile");
   url.searchParams.set("access_type", "offline");
   url.searchParams.set("prompt", "consent");
-  url.searchParams.set("nonce", randomUUID());
+  url.searchParams.set("state", state);
+  url.searchParams.set("nonce", nonce);
   response.redirect(url.toString());
 });
 
 authRoutes.get("/google/callback", async (request, response, next) => {
   try {
-    const authCode = typeof request.query.code === "string" ? request.query.code : "";
-    if (!authCode) {
+    const expectedState = consumeExpectedOAuthState(request, response);
+    const { code, error, state } = googleCallbackQuerySchema.parse(request.query);
+
+    // F3: Verify state cookie before processing the authorization code.
+    verifyOAuthState(expectedState, state ?? "");
+
+    if (error) {
+      rejectOAuthProviderDenied();
+    }
+
+    if (!code) {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Google authorization code is required.");
     }
-    const claims = await verifyGoogleAuthorizationCode(authCode);
+    const claims = await verifyGoogleAuthorizationCode(code);
     const result = await authService.signInWithVerifiedOAuth(claims);
     setSessionCookie(response, result.sessionToken);
     response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
@@ -144,19 +257,33 @@ authRoutes.get("/apple/start", (_request, response, next) => {
     return next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Apple sign-in is not configured."));
   }
 
+  // F3: Generate state (CSRF protection) and nonce, bind to session via httpOnly cookies.
+  // Apple uses response_mode=form_post, so state is round-tripped through the POST body.
+  const { state, nonce } = generateOAuthCsrfTokens(response);
+
   const url = new URL("https://appleid.apple.com/auth/authorize");
   url.searchParams.set("client_id", env.APPLE_CLIENT_ID);
   url.searchParams.set("redirect_uri", env.APPLE_REDIRECT_URI);
   url.searchParams.set("response_type", "id_token");
   url.searchParams.set("scope", "email name");
   url.searchParams.set("response_mode", "form_post");
-  url.searchParams.set("nonce", randomUUID());
+  url.searchParams.set("state", state);
+  url.searchParams.set("nonce", nonce);
   response.redirect(url.toString());
 });
 
 authRoutes.post("/apple/callback", async (request, response, next) => {
   try {
-    const idToken = typeof request.body?.id_token === "string" ? request.body.id_token : "";
+    const expectedState = consumeExpectedOAuthState(request, response);
+    const { error, id_token: idToken, state } = appleCallbackBodySchema.parse(request.body);
+
+    // F3: Verify state (round-tripped via form_post body for Apple).
+    verifyOAuthState(expectedState, state ?? "");
+
+    if (error) {
+      rejectOAuthProviderDenied();
+    }
+
     if (!idToken) {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Apple id_token is required.");
     }

@@ -76,6 +76,15 @@ export function createPrismaAgencyRepository(client: PrismaClient = prisma): Age
     },
     async createAdminAuditEvent(data) {
       return client.adminAuditEvent.create({ data: data as never }) as Promise<AdminAuditRecord>;
+    },
+    async deleteAgencyCascade(agencyId) {
+      await client.agency.delete({ where: { id: agencyId } });
+    },
+    async updateUser(userId, data) {
+      return client.user.update({ where: { id: userId }, data });
+    },
+    async findUserById(userId) {
+      return client.user.findUnique({ where: { id: userId } });
     }
   };
 }

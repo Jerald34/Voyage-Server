@@ -86,6 +86,17 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
       return trips as Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>;
     },
 
+    async listTripsForUser(agencyId, filter) {
+      const where = filter.role === "STAFF"
+        ? { agencyId, assignedOrganizerUserId: filter.userId }
+        : { agencyId };
+      return client.clientTrip.findMany({
+        where,
+        include: { itineraries: { select: { id: true, status: true, version: true }, orderBy: { createdAt: "desc" }, take: 1 } },
+        orderBy: { createdAt: "desc" }
+      }) as Promise<Array<ClientTripRecord & { itineraries: Array<{ id: string; status: string; version: number }> }>>;
+    },
+
     async createTripWithItinerary(data) {
       return client.$transaction(async (tx) => {
         const trip = await tx.clientTrip.create({
@@ -668,6 +679,47 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
           fromItems: fromDay?.items ?? [],
           toItems: toDay?.items ?? []
         };
+      });
+    },
+
+    async approveTrip(tripId, agencyId) {
+      return client.$transaction(async (tx) => {
+        const trip = await tx.clientTrip.findFirst({
+          where: { id: tripId, agencyId },
+          include: {
+            itineraries: {
+              orderBy: { updatedAt: "desc" as const },
+              take: 1,
+              include: includeItineraryDetails()
+            }
+          }
+        });
+        if (!trip) {
+          throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+        }
+
+        const itinerary = (trip.itineraries[0] as ItineraryRecord | undefined) ?? null;
+
+        if (trip.status === "APPROVED_INTERNAL" && itinerary?.status === "APPROVED_INTERNAL") {
+          return { trip: trip as unknown as ClientTripRecord, itinerary };
+        }
+
+        const updatedTrip = await tx.clientTrip.update({
+          where: { id: tripId },
+          data: { status: "APPROVED_INTERNAL" }
+        });
+
+        let updatedItinerary: ItineraryRecord | null = itinerary;
+        if (itinerary && itinerary.status !== "APPROVED_INTERNAL") {
+          const raw = await tx.itinerary.update({
+            where: { id: itinerary.id },
+            data: { status: "APPROVED_INTERNAL" },
+            include: includeItineraryDetails()
+          });
+          updatedItinerary = raw as ItineraryRecord;
+        }
+
+        return { trip: updatedTrip as unknown as ClientTripRecord, itinerary: updatedItinerary };
       });
     }
   };

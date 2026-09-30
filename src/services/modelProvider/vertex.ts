@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { join } from "node:path";
 import { env } from "../../config/env";
 import { ApiError } from "../../http/errors";
+import { redactSecrets } from "../../utils/redaction";
 import { GoogleAuth } from "google-auth-library";
 import { createOpenAiCompatibleProvider } from "./openaiCompatible";
 import type { ModelProvider, ModelMessage, ModelCompletionInput, ModelUsage, ModelStreamChunk } from "./types";
@@ -685,7 +686,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
 
       if (!response.ok) {
         const errorBody = await response.text().catch(() => "Could not read error body");
-        console.error(`Vertex AI provider error (${response.status}):`, errorBody);
+        console.error(`Vertex AI provider error (${response.status}):`, redactSecrets(errorBody));
         throw new ApiError(503, "GOOGLE_VERTEX_UNAVAILABLE", "Google Vertex AI provider is unavailable. Check your Google Cloud API key and try again.");
       }
 
@@ -760,7 +761,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
 
         if (!response.ok || !response.body) {
           const errorBody = await response.text().catch(() => "Could not read error body");
-          console.error(`Vertex AI provider error (${response.status}):`, errorBody);
+          console.error(`Vertex AI provider error (${response.status}):`, redactSecrets(errorBody));
           if (
             apiKey &&
             errorBody.includes("API_KEY_SERVICE_BLOCKED") &&

@@ -54,11 +54,11 @@ describe("app routes", () => {
     });
   });
 
-  it("requires auth for agency agent thread approval", async () => {
+  it("requires auth for agency agent thread save (formerly approve-itinerary)", async () => {
     const app = createApp();
 
     const response = await request(app)
-      .post("/agencies/agency-1/agent/threads/thread-1/approve-itinerary")
+      .post("/agencies/agency-1/agent/threads/thread-1/save")
       .send({
         itineraryId: "00000000-0000-4000-8000-000000000010",
         clientName: "Santos Family",
@@ -115,16 +115,59 @@ describe("app routes", () => {
     });
   });
 
-  it("disables email verification requests in this deployment", async () => {
+  it("rejects registration payloads with unknown keys", async () => {
+    const app = createApp();
+
+    const response = await request(app).post("/auth/register").send({
+      email: "new-user@example.com",
+      password: "correct horse battery staple",
+      displayName: "New User",
+      role: "SUPER_ADMIN"
+    });
+
+    expect(response.status).toBe(400);
+    expect(response.body).toEqual({
+      error: {
+        code: "VALIDATION_ERROR",
+        message: "Request validation failed.",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            keys: ["role"]
+          })
+        ])
+      }
+    });
+  });
+
+  it("validates email verification request input", async () => {
     const app = createApp();
 
     const response = await request(app).post("/auth/email/verification/request").send({});
 
-    expect(response.status).toBe(501);
+    expect(response.status).toBe(400);
+  });
+
+  it("rejects unknown login keys", async () => {
+    const app = createApp();
+
+    const response = await request(app).post("/auth/login").send({
+      email: "user@example.com",
+      password: "password",
+      extra: true
+    });
+
+    expect(response.status).toBe(400);
     expect(response.body).toEqual({
       error: {
-        code: "EMAIL_VERIFICATION_UNAVAILABLE",
-        message: "Email verification is not available in this deployment."
+        code: "VALIDATION_ERROR",
+        message: "Request validation failed.",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            code: "unrecognized_keys",
+            keys: ["extra"]
+          })
+        ])
       }
     });
   });
@@ -142,6 +185,62 @@ describe("app routes", () => {
 
     expect(response.status).toBe(401);
     expect(response.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
+
+  it("PATCH /threads/:id requires auth", async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .patch(`/agencies/agency-1/agent/threads/thread-1`)
+      .send({ title: "Honeymoon Bali" });
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
+
+  it("POST /threads/:id/save requires auth", async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .post("/agencies/agency-1/agent/threads/thread-1/save")
+      .send({
+        itineraryId: "00000000-0000-4000-8000-000000000010",
+        clientName: "Test Client",
+        destination: "Tokyo, Japan"
+      });
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({
+      error: {
+        code: "AUTH_REQUIRED",
+        message: "Sign in is required."
+      }
+    });
+  });
+
+  it("POST /threads/:id/approve (legacy alias) requires auth", async () => {
+    const app = createApp();
+
+    const res = await request(app)
+      .post("/agencies/agency-1/agent/threads/thread-1/approve")
+      .send({
+        itineraryId: "00000000-0000-4000-8000-000000000010",
+        clientName: "Legacy Client",
+        destination: "Lisbon"
+      });
+
+    expect(res.status).toBe(401);
+    expect(res.body).toEqual({
       error: {
         code: "AUTH_REQUIRED",
         message: "Sign in is required."

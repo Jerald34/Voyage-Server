@@ -29,11 +29,12 @@ export type CloudinaryUploadResult = {
 };
 
 /**
- * Upload a place photo URL to Cloudinary for caching. Subsequent views serve
- * from Cloudinary instead of billing the Google Place Photo API every time.
+ * Upload a place photo from a raw Buffer to Cloudinary.
+ * The Google API key is never included in any URL — bytes were fetched
+ * server-side using header-based authentication.
  */
-export async function uploadPlacePhoto(
-  photoUrl: string,
+export async function uploadPlacePhotoBuffer(
+  buffer: Buffer,
   placeId: string
 ): Promise<CloudinaryUploadResult> {
   ensureConfigured();
@@ -41,8 +42,7 @@ export async function uploadPlacePhoto(
   const folder = "voyage/place-photos";
 
   return new Promise<CloudinaryUploadResult>((resolve, reject) => {
-    cloudinary.uploader.upload(
-      photoUrl,
+    const stream = cloudinary.uploader.upload_stream(
       {
         folder,
         public_id: placeId.replace(/[^a-zA-Z0-9_-]/g, "_"),
@@ -66,6 +66,8 @@ export async function uploadPlacePhoto(
         });
       }
     );
+
+    stream.end(buffer);
   });
 }
 

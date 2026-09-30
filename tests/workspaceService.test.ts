@@ -37,7 +37,7 @@ describe("workspaceService.getBootstrap", () => {
       { id: "it1", tripId: "trip1", title: "Plan", summary: null, status: "DRAFT", version: 1, updatedAt: new Date() },
     ]);
 
-    const result = await getBootstrap("a1");
+    const result = await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
 
     expect(result.threads).toHaveLength(1);
     const thread = result.threads[0];
@@ -64,7 +64,7 @@ describe("workspaceService.getBootstrap", () => {
     runEventFindManyMock.mockResolvedValue([]);
     itineraryFindManyMock.mockResolvedValue([]);
 
-    await getBootstrap("a1");
+    await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
 
     const totalCalls =
       tripFindManyMock.mock.calls.length +
@@ -79,7 +79,7 @@ describe("workspaceService.getBootstrap", () => {
     tripFindManyMock.mockResolvedValue([]);
     threadFindManyMock.mockResolvedValue([]);
 
-    const result = await getBootstrap("a1");
+    const result = await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
 
     expect(result.threads).toEqual([]);
     expect(result.itinerarySummaries).toEqual({});
@@ -92,7 +92,7 @@ describe("workspaceService.getBootstrap", () => {
     tripFindManyMock.mockResolvedValue([]);
     threadFindManyMock.mockResolvedValue([]);
 
-    await getBootstrap("a1");
+    await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
 
     const threadArgs = threadFindManyMock.mock.calls[0]?.[0] as { select?: Record<string, boolean> };
     expect(threadArgs?.select).toBeDefined();

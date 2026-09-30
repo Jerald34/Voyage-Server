@@ -1,5 +1,6 @@
 import { ApiError } from "../../http/errors";
 import type { GeoPoint, PlaceSearchResult, RouteEstimateResult, ResolvedPlace, MapsProvider } from "./types";
+import { redactSecrets } from "../../utils/redaction";
 
 type GooglePlace = {
   id?: unknown;
@@ -12,6 +13,7 @@ type GooglePlace = {
   nationalPhoneNumber?: unknown;
   internationalPhoneNumber?: unknown;
   websiteUri?: unknown;
+  businessStatus?: unknown;
 };
 
 function mapsUnavailable(message = "Google Maps provider is unavailable.") {
@@ -52,6 +54,18 @@ function parseLocation(location: GooglePlace["location"]): GeoPoint | undefined 
   return { latitude, longitude };
 }
 
+/**
+ * Strict businessStatus parser: only the three recognized Google Places values are
+ * accepted. Missing or unrecognized input yields `undefined` (unverified), never a
+ * default of OPERATIONAL — a closed place must never be masked by an unrelated parse
+ * fallback.
+ */
+export function parseBusinessStatus(value: unknown) {
+  return value === "OPERATIONAL" || value === "CLOSED_TEMPORARILY" || value === "CLOSED_PERMANENTLY"
+    ? value
+    : undefined;
+}
+
 function parsePlace(place: unknown): PlaceSearchResult {
   if (!isRecord(place)) {
     throw mapsUnavailable();
@@ -59,6 +73,7 @@ function parsePlace(place: unknown): PlaceSearchResult {
 
   const displayName = isRecord(place.displayName) ? place.displayName : undefined;
   const location = isRecord(place.location) ? place.location : undefined;
+  const businessStatus = parseBusinessStatus(place.businessStatus);
 
   return {
     id: parseString(place.id) ?? "",
@@ -67,7 +82,10 @@ function parsePlace(place: unknown): PlaceSearchResult {
     location: parseLocation(location),
     rating: parseNumber(place.rating),
     userRatingCount: parseNumber(place.userRatingCount),
-    types: Array.isArray(place.types) ? place.types.filter((type): type is string => typeof type === "string") : []
+    types: Array.isArray(place.types) ? place.types.filter((type): type is string => typeof type === "string") : [],
+    // Only add the key when recognized so existing missing-field object shapes
+    // (deep-equality assertions with no businessStatus key) remain unchanged.
+    ...(businessStatus !== undefined ? { businessStatus } : {})
   };
 }
 
@@ -166,7 +184,7 @@ export async function readJsonResponse<T>(
 
     if (!response.ok) {
       const errorBody = await response.text().catch(() => "Unknown error body");
-      console.error(`[${providerName}] Request failed: ${response.status} ${response.statusText}\nURL: ${url}\nBody: ${errorBody}`);
+      console.error(redactSecrets(`[${providerName}] Request failed: ${response.status} ${response.statusText}\nURL: ${url}\nBody: ${errorBody}`));
       throw mapsUnavailable(`${providerName} returned ${response.status}: ${response.statusText}`);
     }
 

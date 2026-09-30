@@ -1,10 +1,71 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
   createImageService,
   type ImageRepository,
   type ImageStorage,
   type ImageUser
 } from "../src/modules/images/imageService";
+
+// ---------------------------------------------------------------------------
+// uploadPlacePhotoBuffer – Cloudinary buffer upload tests (Task 10)
+// ---------------------------------------------------------------------------
+
+// Cloudinary mock must be hoisted so vi.mock factory runs before imports.
+const cloudinaryMocks = vi.hoisted(() => {
+  const upload_stream = vi.fn();
+  return { upload_stream };
+});
+
+vi.mock("cloudinary", () => ({
+  v2: {
+    config: vi.fn(),
+    uploader: {
+      upload_stream: cloudinaryMocks.upload_stream,
+      upload: vi.fn()
+    }
+  }
+}));
+
+describe("uploadPlacePhotoBuffer", () => {
+  it("passes a Buffer to cloudinary.uploader.upload_stream and never a Google URL with ?key=", async () => {
+    const fakeResult = {
+      secure_url: "https://res.cloudinary.com/demo/image/upload/v1/voyage/place-photos/ChIJabc",
+      public_id: "voyage/place-photos/ChIJabc",
+      width: 400,
+      height: 300
+    };
+
+    // upload_stream receives options + callback; call the callback synchronously.
+    cloudinaryMocks.upload_stream.mockImplementationOnce((_opts: unknown, cb: (err: null, result: typeof fakeResult) => void) => {
+      const writable = {
+        end: (buf: Buffer) => {
+          // Capture and immediately invoke callback.
+          cb(null, fakeResult);
+        }
+      };
+      return writable;
+    });
+
+    const { uploadPlacePhotoBuffer } = await import("../src/services/cloudinary");
+
+    const testBuffer = Buffer.from("fake-image-data");
+    const result = await uploadPlacePhotoBuffer(testBuffer, "ChIJabc");
+
+    expect(result.url).toBe(fakeResult.secure_url);
+    expect(result.publicId).toBe(fakeResult.public_id);
+
+    // The upload_stream call must NOT have received a Google URL with a key
+    const callArgs = cloudinaryMocks.upload_stream.mock.calls[0];
+    const optionsArg = callArgs[0] as Record<string, unknown>;
+    // options should not contain any URL
+    const optionsStr = JSON.stringify(optionsArg);
+    expect(optionsStr).not.toContain("?key=");
+    expect(optionsStr).not.toContain("googleapis.com");
+    // folder and public_id should be set
+    expect(optionsArg.folder).toBe("voyage/place-photos");
+    expect(typeof optionsArg.public_id).toBe("string");
+  });
+});
 
 function createUser(overrides: Partial<ImageUser> = {}): ImageUser {
   return {

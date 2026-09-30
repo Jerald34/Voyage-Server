@@ -4,6 +4,7 @@ import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import {
   sendPasswordResetEmail,
+  sendVerificationEmail,
   type VerificationEmailPayload
 } from "../../services/email";
 import { hashPassword, verifyPassword } from "../../services/password";
@@ -47,13 +48,49 @@ export function createAuthService(options: AuthServiceOptions) {
     return { session, sessionToken };
   }
 
+  const VERIFICATION_RESEND_COOLDOWN_MS = 60 * 1000;
+  const lastVerificationRequestAt = new Map<string, number>();
+
   async function requestEmailVerification(userId: string) {
-    void userId;
-    throw new ApiError(
-      501,
-      "EMAIL_VERIFICATION_UNAVAILABLE",
-      "Email verification is not available in this deployment."
-    );
+    const user = await options.repository.findUserById(userId);
+    if (!user) {
+      throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+    }
+
+    assertActiveUser(user);
+
+    if (user.emailVerifiedAt) {
+      throw new ApiError(409, "EMAIL_ALREADY_VERIFIED", "This email address is already verified.");
+    }
+
+    const requestedAt = now();
+    const previous = lastVerificationRequestAt.get(user.id);
+    if (previous && requestedAt.getTime() - previous < VERIFICATION_RESEND_COOLDOWN_MS) {
+      throw new ApiError(
+        429,
+        "VERIFICATION_RESEND_COOLDOWN",
+        "Please wait a minute before requesting another verification email."
+      );
+    }
+    lastVerificationRequestAt.set(user.id, requestedAt.getTime());
+
+    await options.repository.markUnusedVerificationTokensUsed(user.id, requestedAt);
+
+    const rawToken = createRandomToken();
+    await options.repository.createVerificationToken({
+      userId: user.id,
+      tokenHash: hashToken(rawToken),
+      expiresAt: addHours(requestedAt, 24)
+    });
+
+    const verifyUrl = new URL("/verify-email", appOrigin);
+    verifyUrl.searchParams.set("token", rawToken);
+
+    await options.emailSender.sendVerificationEmail({
+      to: user.email,
+      displayName: user.displayName,
+      verificationUrl: verifyUrl.toString()
+    });
   }
 
   async function requestPasswordReset(userId: string) {
@@ -101,10 +138,14 @@ export function createAuthService(options: AuthServiceOptions) {
         emailNormalized,
         passwordHash: await hashPassword(input.password, passwordPepper),
         displayName: input.displayName.trim(),
-        emailVerifiedAt: now()
+        emailVerifiedAt: null
       });
-      const { sessionToken, session } = await createSession(user.id);
-      return { user, session, sessionToken };
+
+      await requestEmailVerification(user.id).catch((error) => {
+        console.error("[auth] Failed to send verification email on register:", error);
+      });
+
+      return { user };
     },
 
     async loginWithEmail(input: { email: string; password: string }) {
@@ -120,6 +161,14 @@ export function createAuthService(options: AuthServiceOptions) {
         throw new ApiError(401, "INVALID_CREDENTIALS", "Email or password is incorrect.");
       }
 
+      if (!user.emailVerifiedAt) {
+        throw new ApiError(
+          403,
+          "EMAIL_NOT_VERIFIED",
+          "Please verify your email address before signing in. Check your inbox for the confirmation link."
+        );
+      }
+
       const { sessionToken, session } = await createSession(user.id);
       return { user, session, sessionToken };
     },
@@ -129,8 +178,12 @@ export function createAuthService(options: AuthServiceOptions) {
     },
 
     async requestPasswordReset(input: { email: string }) {
+      // F7: Non-enumerating — always return successfully regardless of whether
+      // the email exists. This prevents an attacker from using the 404 vs 202
+      // difference to determine which email addresses have Voyage accounts.
       const user = await options.repository.findUserByEmailNormalized(normalizeEmail(input.email));
       if (!user || user.status !== "ACTIVE") {
+        // Silently no-op for unknown or disabled accounts.
         return;
       }
 
@@ -176,13 +229,58 @@ export function createAuthService(options: AuthServiceOptions) {
 
     requestEmailVerification,
 
+    async requestEmailVerificationByEmail(email: string) {
+      // F7: Non-enumerating — never surface EMAIL_NOT_FOUND or EMAIL_ALREADY_VERIFIED
+      // to the caller. An attacker could otherwise use these status codes to
+      // enumerate which email addresses are registered and their verification state.
+      const user = await options.repository.findUserByEmailNormalized(normalizeEmail(email));
+      if (!user || user.status !== "ACTIVE" || user.emailVerifiedAt) {
+        // Silently no-op for unknown, disabled, or already-verified accounts.
+        return;
+      }
+      await requestEmailVerification(user.id).catch((error) => {
+        console.error("[auth] Failed to resend verification email:", error);
+      });
+    },
+
     async confirmEmailVerification(rawToken: string) {
-      void rawToken;
-      throw new ApiError(
-        501,
-        "EMAIL_VERIFICATION_UNAVAILABLE",
-        "Email verification is not available in this deployment."
-      );
+      const token = await options.repository.findVerificationTokenByHash(hashToken(rawToken));
+      if (!token || token.usedAt || token.expiresAt <= now()) {
+        throw new ApiError(
+          400,
+          "INVALID_OR_EXPIRED_TOKEN",
+          "This verification link is invalid or has expired. Request a new one."
+        );
+      }
+
+      const user = await options.repository.findUserById(token.userId);
+      if (!user) {
+        throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+      }
+      assertActiveUser(user);
+
+      const verifiedAt = now();
+      await options.repository.markVerificationTokenUsed(token.id, verifiedAt);
+
+      const updated = user.emailVerifiedAt
+        ? user
+        : await options.repository.updateUser(user.id, { emailVerifiedAt: verifiedAt });
+
+      return { user: updated };
+    },
+
+    async setAccountType(userId: string, target: "PERSONAL" | "AGENCY_USER") {
+      if (target !== "PERSONAL" && target !== "AGENCY_USER") {
+        throw new ApiError(400, "INVALID_ACCOUNT_TYPE", "Account type must be PERSONAL or AGENCY_USER.");
+      }
+      const user = await options.repository.findUserById(userId);
+      if (!user) {
+        throw new ApiError(404, "USER_NOT_FOUND", "User not found.");
+      }
+      if (user.accountType !== "PENDING") {
+        throw new ApiError(409, "ACCOUNT_TYPE_ALREADY_SET", "Your account type has already been set.");
+      }
+      return options.repository.updateUser(userId, { accountType: target });
     },
 
     async checkEmail(email: string) {
@@ -214,6 +312,8 @@ export function createAuthService(options: AuthServiceOptions) {
       const verifiedAt = input.emailVerified ? now() : null;
 
       if (!user) {
+        // New user: create account. If email is unverified by the provider, leave
+        // emailVerifiedAt null — user can verify via the normal email flow later.
         user = await options.repository.createUser({
           email: input.email.trim(),
           emailNormalized,
@@ -222,6 +322,18 @@ export function createAuthService(options: AuthServiceOptions) {
           emailVerifiedAt: verifiedAt
         });
       } else {
+        // F1: Existing user with a matching email — only link when the provider
+        // has confirmed ownership (emailVerified === true). An unverified provider
+        // email proves only that the OAuth provider issued a token, NOT that the
+        // human controls this email address. Linking without verification allows
+        // account takeover of any existing Voyage account.
+        if (!input.emailVerified) {
+          throw new ApiError(
+            403,
+            "OAUTH_EMAIL_UNVERIFIED",
+            "The email address on this account has not been verified by the sign-in provider. Please verify your email with the provider and try again."
+          );
+        }
         assertActiveUser(user);
         if (verifiedAt && !user.emailVerifiedAt) {
           user = await options.repository.updateUser(user.id, { emailVerifiedAt: verifiedAt });
@@ -367,7 +479,7 @@ export function createPrismaAuthRepository(client: PrismaClient = prisma): AuthR
 export const authService = createAuthService({
   repository: createPrismaAuthRepository(),
   emailSender: {
-    sendVerificationEmail: async () => undefined,
+    sendVerificationEmail,
     sendPasswordResetEmail
   }
 });

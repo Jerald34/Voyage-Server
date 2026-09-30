@@ -8,7 +8,7 @@ export function getUserCapabilities(user: UserWithMemberships) {
   return {
     canUseApp: user.status === "ACTIVE",
     canRegisterAgency: user.status === "ACTIVE",
-    canReviewAgencies: user.status === "ACTIVE" && user.role === "ADMIN",
+    canReviewAgencies: user.status === "ACTIVE" && user.role === "SUPER_ADMIN",
     agencyMembershipCount: user.memberships?.length ?? 0
   };
 }

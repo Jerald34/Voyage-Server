@@ -1,7 +1,18 @@
 import { env, publicApiOrigin } from "../../config/env";
 import { ApiError } from "../../http/errors";
 import type { GeoPoint, MapsProvider, PlaceDetailsResult, PlaceSearchResult, RouteEstimateResult, ResolvedPlace } from "./types";
-import { parseNumber, parseDurationSeconds, parseRoute, parsePlace, parseResponseArray, isRecord, parseString, readJsonResponse } from "./parsing";
+import {
+  parseNumber,
+  parseDurationSeconds,
+  parseRoute,
+  parsePlace,
+  parseResponseArray,
+  isRecord,
+  parseString,
+  readJsonResponse,
+  parseBusinessStatus
+} from "./parsing";
+import { redactSecrets } from "../../utils/redaction";
 
 type GoogleMapsProviderOptions = {
   apiKey?: string;
@@ -58,6 +69,9 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         body.languageCode = input.languageCode;
       }
 
+      // Captured immediately before the request is issued so businessStatusCheckedAt
+      // reflects when the status was actually observed, not when parsing completed.
+      const requestStartedAt = new Date();
       const response = await readJsonResponse<unknown>(
         fetchImpl,
         "https://places.googleapis.com/v1/places:searchText",
@@ -65,7 +79,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
           method: "POST",
           headers: providerHeaders(
             apiKey,
-            "places.id,places.displayName,places.location"
+            "places.id,places.displayName,places.location,places.businessStatus"
           ),
           body: JSON.stringify(body)
         },
@@ -86,6 +100,11 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         formattedAddress: place.address,
         location: place.location,
         rating: place.rating,
+        // Only attach a checked-at time when the status itself was recognized; never
+        // record an observation time without a recognized status.
+        ...(place.businessStatus !== undefined
+          ? { businessStatus: place.businessStatus, businessStatusCheckedAt: requestStartedAt }
+          : {}),
         metadata: {
           query,
           types: place.types,
@@ -108,6 +127,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         body.maxResultCount = input.maxResultCount;
       }
 
+      const requestStartedAt = new Date();
       const response = await readJsonResponse<unknown>(
         fetchImpl,
         "https://places.googleapis.com/v1/places:searchText",
@@ -115,7 +135,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
           method: "POST",
           headers: providerHeaders(
             apiKey,
-            "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types"
+            "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.businessStatus"
           ),
           body: JSON.stringify(body)
         },
@@ -123,7 +143,11 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         "Google Maps API"
       );
 
-      return parseResponseArray(response, "places").map(parsePlace);
+      return parseResponseArray(response, "places")
+        .map(parsePlace)
+        .map((place) =>
+          place.businessStatus !== undefined ? { ...place, businessStatusCheckedAt: requestStartedAt } : place
+        );
     },
 
     async searchNearby(input) {
@@ -148,6 +172,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         body.languageCode = input.languageCode;
       }
 
+      const requestStartedAt = new Date();
       const response = await readJsonResponse<unknown>(
         fetchImpl,
         "https://places.googleapis.com/v1/places:searchNearby",
@@ -155,7 +180,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
           method: "POST",
           headers: providerHeaders(
             apiKey,
-            "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types"
+            "places.id,places.displayName,places.formattedAddress,places.location,places.rating,places.userRatingCount,places.types,places.businessStatus"
           ),
           body: JSON.stringify(body)
         },
@@ -163,10 +188,15 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         "Google Maps API"
       );
 
-      return parseResponseArray(response, "places").map(parsePlace);
+      return parseResponseArray(response, "places")
+        .map(parsePlace)
+        .map((place) =>
+          place.businessStatus !== undefined ? { ...place, businessStatusCheckedAt: requestStartedAt } : place
+        );
     },
 
     async getPlaceDetails(placeId) {
+      const requestStartedAt = new Date();
       const response = await readJsonResponse<unknown>(
         fetchImpl,
         `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
@@ -174,7 +204,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
           method: "GET",
           headers: providerHeaders(
             apiKey,
-            "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri,photos"
+            "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri,photos,businessStatus"
           )
         },
         timeoutMs,
@@ -205,14 +235,85 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         ...place,
         phoneNumber: parseString(details.nationalPhoneNumber) ?? parseString(details.internationalPhoneNumber),
         websiteUri: parseString(details.websiteUri),
-        photos
+        photos,
+        // `place` already carries businessStatus (if recognized) via the spread above;
+        // only attach the checked-at time when that status was actually recognized.
+        ...(place.businessStatus !== undefined ? { businessStatusCheckedAt: requestStartedAt } : {})
       };
     },
 
-    getPhotoMediaUrl(photoName: string): string {
-      // Direct Google media URL with API key as query param so external services
-      // (Cloudinary) can fetch the image without needing custom headers.
-      return `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${DEFAULT_PHOTO_WIDTH_PX}&maxHeightPx=${DEFAULT_PHOTO_HEIGHT_PX}&key=${apiKey}`;
+    async getPlaceStatus(placeId) {
+      // Inexpensive status-only refresh: no photos, no coordinates, no enrichment
+      // fields. Goes through the same authenticated, timeout-limited readJsonResponse
+      // helper as every other call so errors/timeouts map identically.
+      const requestStartedAt = new Date();
+      const response = await readJsonResponse<unknown>(
+        fetchImpl,
+        `https://places.googleapis.com/v1/places/${encodeURIComponent(placeId)}`,
+        {
+          method: "GET",
+          headers: providerHeaders(apiKey, "id,businessStatus")
+        },
+        timeoutMs,
+        "Google Maps API"
+      );
+
+      const businessStatus = isRecord(response) ? parseBusinessStatus(response.businessStatus) : undefined;
+      return businessStatus !== undefined ? { businessStatus, businessStatusCheckedAt: requestStartedAt } : {};
+    },
+
+    async fetchPlacePhoto(photoName, dimensions) {
+      const PHOTO_NAME_PATTERN = /^places\/[A-Za-z0-9_-]+\/photos\/[A-Za-z0-9_-]+$/;
+      if (!PHOTO_NAME_PATTERN.test(photoName)) {
+        throw mapsUnavailable("Invalid photo resource name.");
+      }
+
+      const MAX_BYTES = 10 * 1024 * 1024; // 10 MB
+
+      const url = `https://places.googleapis.com/v1/${photoName}/media?maxWidthPx=${dimensions.width}&maxHeightPx=${dimensions.height}`;
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+      try {
+        const response = await fetchImpl(url, {
+          headers: { "X-Goog-Api-Key": apiKey },
+          signal: controller.signal
+        });
+
+        if (!response.ok) {
+          const body = await response.text().catch(() => "");
+          console.error(redactSecrets(`[Google Maps API] Photo fetch failed: ${response.status} ${response.statusText}\nBody: ${body}`));
+          throw mapsUnavailable(`Photo fetch failed (${response.status}).`);
+        }
+
+        const contentLengthHeader = response.headers.get("content-length");
+        if (contentLengthHeader !== null) {
+          const contentLength = Number(contentLengthHeader);
+          if (Number.isFinite(contentLength) && contentLength > MAX_BYTES) {
+            throw mapsUnavailable("Photo response exceeds maximum allowed size.");
+          }
+        }
+
+        const contentType = response.headers.get("content-type") ?? "";
+        if (!contentType.startsWith("image/")) {
+          throw mapsUnavailable("Photo response has an unexpected content type.");
+        }
+
+        const arrayBuffer = await response.arrayBuffer();
+        const bytes = Buffer.from(arrayBuffer);
+        if (bytes.length > MAX_BYTES) {
+          throw mapsUnavailable("Photo response exceeds maximum allowed size.");
+        }
+
+        return { bytes, contentType };
+      } catch (error) {
+        if (error instanceof ApiError) {
+          throw error;
+        }
+        throw mapsUnavailable();
+      } finally {
+        clearTimeout(timeout);
+      }
     },
 
     async getPlacePhotos(placeId, maxResults = 1) {
