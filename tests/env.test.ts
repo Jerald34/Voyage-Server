@@ -55,6 +55,18 @@ describe("parseEnv", () => {
     expect(parsed.RATE_LIMIT_BASELINE_MAX).toBe(300);
   });
 
+  it("defaults agent quotas and rejects a short API_PROXY_SECRET", async () => {
+    const { parseEnv } = await loadEnvModule();
+    const parsed = parseEnv({ API_PROXY_SECRET: "   " });
+
+    expect(parsed.API_PROXY_SECRET).toBe("");
+    expect(parsed.RATE_LIMIT_AGENT_MESSAGES_PER_MINUTE).toBe(10);
+    expect(parsed.RATE_LIMIT_AGENT_MESSAGES_PER_DAY).toBe(200);
+    expect(parsed.RATE_LIMIT_AGENCY_AGENT_MESSAGES_PER_DAY).toBe(1000);
+    expect(parseEnv({ API_PROXY_SECRET: ` ${"s".repeat(32)} ` }).API_PROXY_SECRET).toBe("s".repeat(32));
+    expect(() => parseEnv({ API_PROXY_SECRET: "too-short" })).toThrowError(/at least 32 characters/);
+  });
+
   it("requires RATE_LIMIT_REDIS_URL in production", async () => {
     const { parseEnv } = await loadEnvModule();
 

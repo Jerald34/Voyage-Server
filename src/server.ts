@@ -24,6 +24,13 @@ function closeServer(server: import("node:http").Server): Promise<void> {
 }
 
 async function main() {
+  if (env.NODE_ENV === "production" && !env.API_PROXY_SECRET) {
+    console.warn(
+      "[rate-limit] API_PROXY_SECRET is not set. Requests arriving through the Next.js /api proxy " +
+        "will be rate-limited by the proxy's IP, so all users share one bucket."
+    );
+  }
+
   const rateLimiterStores = await initializeRateLimiterStoreLifecycle();
 
   try {

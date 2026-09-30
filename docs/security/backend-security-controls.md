@@ -22,6 +22,8 @@ All rate limiters return HTTP 429 with the following response body:
 | Baseline | Every request | Client IP | 15 min | 300 |
 | Health | `GET /health` | Client IP | 1 min | 120 |
 | Login | `POST /auth/login` | Client IP + SHA-256(normalized email) | 15 min | 10 |
+| Login spraying | `POST /auth/login` | Client IP (failed attempts only) | 15 min | 30 |
+| Login account | `POST /auth/login` | SHA-256(normalized email), any IP (failed attempts only) | 1 hour | 30 |
 | Registration | `POST /auth/register` | Client IP | 1 hour | 5 |
 | Email operations | email check, verification request/confirm, password reset request/confirm | Client IP | 1 hour | 5 request / 20 confirm |
 | OAuth | Google/Apple start + callback | Client IP | 15 min | 20 |
@@ -31,12 +33,29 @@ All rate limiters return HTTP 429 with the following response body:
 | Review endpoints | review check + submit | Client IP + SHA-256(token) | 1 hour | 30 check / 10 submit |
 | Photo proxy | `GET /images/place-photo` | Client IP | 1 min | 60 |
 
+### Authenticated Quotas
+
+Keyed on the signed-in user (or agency), not the IP, so they hold across devices and networks. Anonymous requests skip them (auth rejects those later; the IP baseline still applies). They fail **open** on a store outage: the caller is authenticated and attributable, and a Redis blip should not take chat down.
+
+| Policy | Routes | Key | Window | Maximum |
+|---|---|---|---|---|
+| Agent message burst | `POST /agencies/:agencyId/agent/threads/:id/messages` | User | 1 min | `RATE_LIMIT_AGENT_MESSAGES_PER_MINUTE` (10) |
+| Agent message daily | same | User (successful requests only) | 24 hours | `RATE_LIMIT_AGENT_MESSAGES_PER_DAY` (200) |
+| Agency agent daily | same | Agency, members only (successful requests only) | 24 hours | `RATE_LIMIT_AGENCY_AGENT_MESSAGES_PER_DAY` (1000) |
+| Chat image upload | `POST /agencies/:agencyId/agent/threads/:id/images` | User | 1 hour | 30 |
+| Image upload URL | `POST /images/upload-url` | User | 1 hour | 60 |
+| Team invite | `POST /agencies/:agencyId/team` | User | 1 hour | 20 |
+| Support report | `POST /support/reports` | User | 1 hour | 10 |
+| Agency creation | `POST /agencies` | User | 24 hours | 5 |
+
+The agency quota is only charged to members of that agency, so nobody can exhaust another agency's quota by posting to its URL.
+
 ### Rate Limiter Implementation
 
 The limiter factory is located at `src/http/rateLimiters.ts` and implements the following behavior:
 
-- **Header behavior**: Sets `standardHeaders: true` and `legacyHeaders: false`, enabling standard `RateLimit-*` headers in responses.
-- **Request tracking**: Enabled for all requests via `skipSuccessfulRequests: false`.
+- **Header behavior**: Uses the IETF RateLimit header fields (`standardHeaders: "draft-8"`, `legacyHeaders: false`). Every response carries `RateLimit: "<policy>"; r=<remaining>; t=<seconds>` and `RateLimit-Policy: "<policy>"; q=<limit>; w=<window>; pk=:<partition>:`, one entry per policy that applied (e.g. baseline + route). 429 responses also carry `Retry-After`. CORS exposes `Retry-After`, `RateLimit` and `RateLimit-Policy` to the app origin.
+- **Request tracking**: Counts every request by default; login spraying/account policies count failures only, and daily agent quotas count successes only.
 - **Key prefix strategy**: Each policy uses a distinct key prefix for rate limit counters.
 - **Secret hashing**: Sensitive values (email addresses, public tokens) are hashed with SHA-256 before being used in limiter keys. Raw emails, tokens, OAuth codes, and API keys never appear in rate limit keys.
 - **Redis failure handling**: On Redis errors, the limiter logs a redacted operational error and fails closed for abuse-sensitive routes to prevent bypass attacks.
@@ -56,6 +75,10 @@ Production deployments require the `RATE_LIMIT_REDIS_URL` environment variable, 
 | `RATE_LIMIT_REDIS_URL` | *(required in production)* | Redis connection URL for distributed rate limit counters |
 | `RATE_LIMIT_PREFIX` | `voyage:rate-limit:` | Namespace prefix for all rate limit keys |
 | `RATE_LIMIT_BASELINE_MAX` | `300` | Maximum baseline requests per 15 minutes per IP |
+| `RATE_LIMIT_AGENT_MESSAGES_PER_MINUTE` | `10` | Agent messages per user per minute |
+| `RATE_LIMIT_AGENT_MESSAGES_PER_DAY` | `200` | Agent messages per user per 24 hours |
+| `RATE_LIMIT_AGENCY_AGENT_MESSAGES_PER_DAY` | `1000` | Agent messages per agency per 24 hours |
+| `API_PROXY_SECRET` | *(empty; set in production)* | Shared secret that lets the Next.js `/api` proxy forward the real client IP (see §3). At least 32 characters. |
 
 ### Expected Secret Format
 
@@ -84,6 +107,15 @@ The backend assumes exactly **one trusted reverse proxy** in front of the applic
 - **More than one proxy** without adjusting trust settings: `request.ip` may reflect an intermediate proxy, breaking IP-based rate limiting.
 
 Deployers must ensure that the trust proxy configuration matches the actual deployment topology.
+
+### Requests Through the Next.js `/api` Proxy
+
+The browser calls the backend through the app's own `/api/*` path (Vercel → Railway), so for those requests `request.ip` is the Vercel server's IP, identical for every user. To keep IP limits per-client, the client's `proxy.js` (and the `/api/stream` route) sends two headers:
+
+- `x-voyage-client-ip` — the client IP from Vercel's `x-real-ip` / `x-forwarded-for`, which Vercel's edge overwrites.
+- `x-voyage-proxy-secret` — the shared `API_PROXY_SECRET`.
+
+`src/http/clientIp.ts` uses the forwarded IP only when the secret matches (constant-time comparison) and the value is a valid IP; otherwise it falls back to `request.ip`. The proxy always strips client-sent copies of both headers. Set the **same** `API_PROXY_SECRET` on the backend (Railway) and the client (Vercel, server-only — never `NEXT_PUBLIC_`). The backend logs a warning at boot in production when it is missing.
 
 ## 4. Request Validation Rules and VALIDATION_ERROR Contract
 
@@ -308,7 +340,8 @@ After deployment, verify the following:
 1. **Rate Limiting**
    - Perform repeated requests to a public endpoint (e.g., `GET /health`)
    - Verify the 429 response is returned after the limit is exceeded
-   - Confirm standard `RateLimit-Limit`, `RateLimit-Remaining`, and `RateLimit-Reset` headers are present
+   - Confirm `RateLimit` / `RateLimit-Policy` headers are present, and `Retry-After` on the 429
+   - Through the app origin (`https://<app>/api/health`), confirm two different networks get independent `RateLimit` remaining counts (proves `API_PROXY_SECRET` is set on both sides)
 
 2. **Distributed Counters**
    - Deploy two or more application replicas

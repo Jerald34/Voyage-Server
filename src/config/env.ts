@@ -34,6 +34,19 @@ const envSchema = z.object({
   RATE_LIMIT_REDIS_URL: trimmedString().default(""),
   RATE_LIMIT_PREFIX: trimmedStringWithDefault("voyage:rate-limit:"),
   RATE_LIMIT_BASELINE_MAX: z.coerce.number().int().positive().default(300),
+  // Per-user and per-agency caps on agent messages (each one starts a paid LLM run).
+  RATE_LIMIT_AGENT_MESSAGES_PER_MINUTE: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_AGENT_MESSAGES_PER_DAY: z.coerce.number().int().positive().default(200),
+  RATE_LIMIT_AGENCY_AGENT_MESSAGES_PER_DAY: z.coerce.number().int().positive().default(1000),
+  // Shared secret the Next.js `/api` proxy sends so this server can trust the client IP
+  // it forwards. Without it, every proxied request looks like it comes from the proxy's
+  // own IP and all users share one rate-limit bucket. Must match the client's value.
+  API_PROXY_SECRET: z.preprocess(
+    (value) => (typeof value === "string" ? value.trim() : value),
+    z.string().refine((value) => value === "" || value.length >= 32, {
+      message: "API_PROXY_SECRET must be at least 32 characters when set."
+    })
+  ).default(""),
   EMAIL_FROM: z.string().default("Voyage <no-reply@example.com>"),
   SMTP_HOST: z.string().default(""),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
