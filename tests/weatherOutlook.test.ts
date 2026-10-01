@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { RawDailyWeather, WeatherProvider } from "../src/services/weather/types";
 import { getWeatherForDates, roundPoint, summarizeTypicalDay } from "../src/services/weather/weatherOutlook";
+import { daysBetween } from "../src/services/weather/dates";
 
 function raw(date: string, overrides: Partial<RawDailyWeather> = {}): RawDailyWeather {
   return {
@@ -325,6 +326,52 @@ describe("getWeatherForDates typical-history windows", () => {
     });
 
     expect(result.get("2026-10-17")).toMatchObject({ status: "OK", weather: { kind: "TYPICAL" } });
+  });
+});
+
+describe("getWeatherForDates bounded archive ranges", () => {
+  const TODAY = "2026-10-01";
+  const LATEST_END = "2026-09-29";
+
+  it("keeps every history request within 366 days when one group spans more than a year", async () => {
+    const provider = fakeProvider({
+      history: (start, end) => {
+        const rows: RawDailyWeather[] = [];
+        for (let date = start; date <= end; ) {
+          rows.push(raw(date, { precipitationMm: 2 }));
+          const [y, m, d] = date.split("-").map(Number);
+          date = new Date(Date.UTC(y, m - 1, d + 1)).toISOString().slice(0, 10);
+        }
+        return rows;
+      }
+    });
+    const dates = ["2026-11-01", "2027-03-15", "2027-12-20", "2028-06-01"];
+
+    const result = await getWeatherForDates({ provider, location: BAGUIO, dates, today: TODAY, typicalYears: 2 });
+
+    const calls = provider.getDailyHistory.mock.calls;
+    expect(calls.length).toBeGreaterThan(0);
+    for (const [, start, end] of calls) {
+      expect(daysBetween(start, end) + 1).toBeLessThanOrEqual(366);
+      expect(end <= LATEST_END).toBe(true);
+    }
+    for (const date of dates) {
+      expect(result.get(date)).toMatchObject({ status: "OK", weather: { kind: "TYPICAL", sampleYears: 2, wetYears: 2 } });
+    }
+  });
+
+  it("still makes one request per year for a group inside one year", async () => {
+    const provider = fakeProvider({ history: (start) => [raw(start)] });
+
+    await getWeatherForDates({
+      provider,
+      location: BAGUIO,
+      dates: ["2026-11-01", "2026-11-03"],
+      today: TODAY,
+      typicalYears: 3
+    });
+
+    expect(provider.getDailyHistory).toHaveBeenCalledTimes(3);
   });
 });
 

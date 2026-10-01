@@ -2786,6 +2786,92 @@ describe("weather in continuation context", () => {
   });
 });
 
+describe("weather for several places", () => {
+  function weatherFor(name: string, latitude: number, summary: string) {
+    return {
+      location: { name, latitude, longitude: 120.6 },
+      days: [
+        { date: "2026-10-10", status: "OK", kind: "FORECAST", condition: "RAIN", summary, rainRisk: true }
+      ]
+    };
+  }
+
+  function buildMultiCityRun(places: Array<ReturnType<typeof weatherFor>>) {
+    const { service, run } = createFakeAgentService();
+    const queue = [...places];
+    const provider = createModelProvider([
+      ...places.map((place) => `{"tool": "weather_forecast", "placeName": "${place.location.name}", "startDate": "2026-10-10"}`),
+      "Planned around the weather.",
+      "Planned around the weather."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast"],
+      maxToolCallsPerRun: 10,
+      toolRegistry: createAgentToolRegistry([
+        { name: "weather_forecast", async execute() { return queue.shift(); } }
+      ])
+    });
+    return { orchestrator, provider, run };
+  }
+
+  it("keeps the first city's weather after a second city is fetched", async () => {
+    const { orchestrator, provider, run } = buildMultiCityRun([
+      weatherFor("Baguio", 16.4, "Rain in Baguio"),
+      weatherFor("Vigan", 17.57, "Rain in Vigan")
+    ]);
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const synthesisUser = provider.calls.at(-1)?.messages.at(-1)?.content ?? "";
+    expect(synthesisUser).toContain("Weather already fetched with weather_forecast for Baguio");
+    expect(synthesisUser).toContain("Weather already fetched with weather_forecast for Vigan");
+    expect(synthesisUser).toContain("Rain in Baguio");
+    expect(synthesisUser).toContain("Rain in Vigan");
+  });
+
+  it("keeps at most three places, evicting the oldest", async () => {
+    const { orchestrator, provider } = buildMultiCityRun([
+      weatherFor("Baguio", 16.4, "Rain in Baguio"),
+      weatherFor("Vigan", 17.57, "Rain in Vigan"),
+      weatherFor("Sagada", 17.08, "Rain in Sagada"),
+      weatherFor("Banaue", 16.92, "Rain in Banaue")
+    ]);
+
+    await orchestrator.run(createRunInput());
+
+    const continuation = provider.calls[4].messages.at(-1)?.content ?? "";
+    expect(continuation).not.toContain("Rain in Baguio");
+    for (const name of ["Vigan", "Sagada", "Banaue"]) {
+      expect(continuation).toContain(`Weather already fetched with weather_forecast for ${name}`);
+    }
+  });
+
+  it("caps the combined weather blocks at 2000 characters", async () => {
+    const { buildWeatherContextBlocks } = await import("../src/modules/agent/weatherContextBlock");
+    const many = (name: string, latitude: number) => ({
+      location: { name, latitude, longitude: 120.6 },
+      days: Array.from({ length: 14 }, (_, index) => ({
+        date: `2026-10-${String(index + 1).padStart(2, "0")}`,
+        status: "OK",
+        kind: "FORECAST",
+        summary: `${name} ${"x".repeat(150)}`,
+        rainRisk: false
+      }))
+    });
+
+    const block = buildWeatherContextBlocks([many("Baguio", 16.4), many("Vigan", 17.57), many("Sagada", 17.08)]);
+
+    expect(block.length).toBeLessThanOrEqual(2000);
+    for (const name of ["Baguio", "Vigan", "Sagada"]) {
+      expect(block).toContain(`Weather already fetched with weather_forecast for ${name}`);
+    }
+    expect(buildWeatherContextBlocks([])).toBe("");
+  });
+});
+
 describe("unavailable tools", () => {
   it("keeps the run alive when the model calls a tool that is not registered", async () => {
     const { service, run } = createFakeAgentService();

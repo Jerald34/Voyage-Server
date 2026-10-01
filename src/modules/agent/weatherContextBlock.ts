@@ -1,5 +1,5 @@
 /**
- * A compact, run-scoped echo of the latest weather_forecast result.
+ * A compact, run-scoped echo of recent weather_forecast results, one per place.
  *
  * Continuation and synthesis turns keep only the last few tool results, so the
  * weather call (made once, before plan_itinerary) scrolls out after a plan and a
@@ -44,7 +44,7 @@ function describeDay(day: unknown): string | null {
 }
 
 /** Render the block, or "" when the output has no usable day. */
-export function buildWeatherContextBlock(output: unknown): string {
+export function buildWeatherContextBlock(output: unknown, maxChars = MAX_BLOCK_CHARS): string {
   if (!isUsableWeatherOutput(output)) return "";
   const record = output as Record<string, unknown>;
   const location = isRecord(record.location) && typeof record.location.name === "string"
@@ -58,12 +58,51 @@ export function buildWeatherContextBlock(output: unknown): string {
   const days = (record.days as unknown[]).slice(0, MAX_WEATHER_DAYS);
   const lines: string[] = [...header];
   let length = header.join("\n").length;
+  if (length > maxChars) return "";
   for (const day of days) {
     const line = describeDay(day);
     if (!line) continue;
-    if (length + 1 + line.length > MAX_BLOCK_CHARS) break;
+    if (length + 1 + line.length > maxChars) break;
     lines.push(line);
     length += 1 + line.length;
   }
   return lines.join("\n");
+}
+
+/** Places kept per run; fetching a fourth evicts the oldest. */
+export const MAX_WEATHER_PLACES = 3;
+
+/**
+ * A key for the place a weather_forecast output describes, so a repeat fetch
+ * for the same place replaces its entry. Coordinates first: two names can
+ * resolve to the same point.
+ */
+export function weatherLocationKey(output: unknown): string {
+  const location = isRecord(output) && isRecord(output.location) ? output.location : null;
+  if (location && typeof location.latitude === "number" && typeof location.longitude === "number") {
+    return `${location.latitude.toFixed(2)},${location.longitude.toFixed(2)}`;
+  }
+  if (location && typeof location.name === "string") return location.name.trim().toLowerCase();
+  return "unknown";
+}
+
+/**
+ * Render several places' blocks, oldest first, within MAX_BLOCK_CHARS in total.
+ * Each block gets an even share of what is left, so space a short block does
+ * not use passes to the next one.
+ */
+export function buildWeatherContextBlocks(outputs: unknown[]): string {
+  const usable = outputs.filter(isUsableWeatherOutput);
+  const separator = "\n\n";
+  const blocks: string[] = [];
+  let remaining = MAX_BLOCK_CHARS;
+  usable.forEach((output, index) => {
+    const separatorLength = blocks.length > 0 ? separator.length : 0;
+    const budget = Math.floor((remaining - separatorLength) / (usable.length - index));
+    const block = buildWeatherContextBlock(output, budget);
+    if (!block) return;
+    blocks.push(block);
+    remaining -= separatorLength + block.length;
+  });
+  return blocks.join(separator);
 }

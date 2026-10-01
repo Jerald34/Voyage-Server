@@ -7,7 +7,12 @@ import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
 import type { PlaceSelectionSession } from "../../services/places/placeTypes";
 import { buildPlaceAdvisoryBlock, savedItemAdvisories } from "./placeAdvisoryBlock";
 import { buildTravelerNeedsBlock, parseStoredTravelerNeeds } from "./travelerNeeds";
-import { buildWeatherContextBlock, isUsableWeatherOutput } from "./weatherContextBlock";
+import {
+  buildWeatherContextBlocks,
+  isUsableWeatherOutput,
+  MAX_WEATHER_PLACES,
+  weatherLocationKey
+} from "./weatherContextBlock";
 import { overlayPlaceAdvisories } from "../itineraries/savedPlaceAdvisories";
 import type {
   AgentOrchestrator,
@@ -427,9 +432,11 @@ export function createAgentOrchestrator(options: {
         // Set when the tool loop must end now and go straight to synthesis.
         let stopToolLoop = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
-        // The latest usable weather_forecast result, rendered compactly. The raw result
-        // scrolls out of the continuation tail after a plan and a couple of adds.
-        let latestWeatherBlock = "";
+        // Recent usable weather_forecast results, one per place (oldest first), rendered
+        // compactly. The raw results scroll out of the continuation tail after a plan and
+        // a couple of adds, and a multi-city trip needs every city's weather.
+        const weatherByPlace = new Map<string, unknown>();
+        let weatherBlock = "";
 
         // Track how many times each item is touched by editing tools to detect cascade loops
         // where the agent repeatedly adjusts times/positions without converging.
@@ -517,7 +524,16 @@ export function createAgentOrchestrator(options: {
                 output
               );
               if (toolCall.name === "weather_forecast" && isUsableWeatherOutput(output)) {
-                latestWeatherBlock = buildWeatherContextBlock(output);
+                const key = weatherLocationKey(output);
+                // Re-inserting moves a refreshed place to the newest position.
+                weatherByPlace.delete(key);
+                weatherByPlace.set(key, output);
+                while (weatherByPlace.size > MAX_WEATHER_PLACES) {
+                  const oldest = weatherByPlace.keys().next().value;
+                  if (oldest === undefined) break;
+                  weatherByPlace.delete(oldest);
+                }
+                weatherBlock = buildWeatherContextBlocks([...weatherByPlace.values()]);
               }
               const compactOutput = makeCompactToolOutput(toolCall.name, output);
               toolResults.push({ name: toolCall.name, output: compactOutput });
@@ -673,7 +689,7 @@ export function createAgentOrchestrator(options: {
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
             travelerNeedsBlock,
             buildRunDateBlock(now()),
-            latestWeatherBlock,
+            weatherBlock,
             continuationTaskBlock
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
@@ -835,7 +851,7 @@ export function createAgentOrchestrator(options: {
                   ? `Recent tool results JSON (last ${synthesisToolResults.length} of ${toolResults.length}; ${synthesisOmittedCount} older itinerary-streaming result(s) omitted because the cumulative state is above):`
                   : "Tool results JSON:",
                 stringifyToolResults(synthesisToolResults),
-                latestWeatherBlock,
+                weatherBlock,
                 // User content, not the system prompt: the synthesis prompt stays byte-identical.
                 travelerNeedsBlock
               ].filter(Boolean).join("\n\n")

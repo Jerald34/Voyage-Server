@@ -114,6 +114,28 @@ export function summarizeTypicalDay(date: string, samples: RawDailyWeather[]): D
 }
 
 /**
+ * Longest span, in days from a bucket's first date to its last, that one archive
+ * request may cover. Shifting a range back by whole years can add a Feb 29, so
+ * 364 here keeps every shifted request at 366 calendar days or fewer.
+ */
+const MAX_BUCKET_SPAN_DAYS = 364;
+
+/**
+ * Splits sorted typical dates into runs that each fit one bounded archive request.
+ * A group whose dates span more than a year would otherwise request every day in
+ * between, for each sampled year.
+ */
+function bucketTypicalDates(sortedDates: string[]): string[][] {
+  const buckets: string[][] = [];
+  for (const date of sortedDates) {
+    const current = buckets[buckets.length - 1];
+    if (current && daysBetween(current[0], date) <= MAX_BUCKET_SPAN_DAYS) current.push(date);
+    else buckets.push([date]);
+  }
+  return buckets;
+}
+
+/**
  * Looks up each date for one location.
  * - Within the forecast window: the forecast.
  * - Later: typical weather from past years.
@@ -165,32 +187,43 @@ export async function getWeatherForDates(options: {
 
   if (typicalDates.length > 0) {
     typicalDates.sort();
-    const start = typicalDates[0];
-    const end = typicalDates[typicalDates.length - 1];
-    // Start at the first offset whose shifted end date the archive can already serve
-    // (a date a year or more out would otherwise land on today or later), then keep
-    // typicalYears consecutive offsets so the sample count is not reduced.
+    const buckets = bucketTypicalDates(typicalDates);
     const latestArchiveEnd = addDays(today, -ARCHIVE_LAG_DAYS);
-    let firstBack = Math.max(1, Number(end.slice(0, 4)) - Number(latestArchiveEnd.slice(0, 4)));
-    while (shiftYears(end, -firstBack) > latestArchiveEnd) firstBack += 1;
-    const yearsBack = Array.from({ length: typicalYears }, (_, index) => firstBack + index);
-    const histories = await Promise.allSettled(
-      yearsBack.map((back) => provider.getDailyHistory(location, shiftYears(start, -back), shiftYears(end, -back)))
+    const samplesByDate = new Map<string, RawDailyWeather[]>(typicalDates.map((date) => [date, []]));
+    let requests = 0;
+    let failures = 0;
+
+    await Promise.all(
+      buckets.map(async (bucket) => {
+        const start = bucket[0];
+        const end = bucket[bucket.length - 1];
+        // Start at the first offset whose shifted end date the archive can already serve
+        // (a date a year or more out would otherwise land on today or later), then keep
+        // typicalYears consecutive offsets so the sample count is not reduced.
+        let firstBack = Math.max(1, Number(end.slice(0, 4)) - Number(latestArchiveEnd.slice(0, 4)));
+        while (shiftYears(end, -firstBack) > latestArchiveEnd) firstBack += 1;
+        const yearsBack = Array.from({ length: typicalYears }, (_, index) => firstBack + index);
+        const histories = await Promise.allSettled(
+          yearsBack.map((back) => provider.getDailyHistory(location, shiftYears(start, -back), shiftYears(end, -back)))
+        );
+        requests += histories.length;
+
+        histories.forEach((outcome, index) => {
+          if (outcome.status !== "fulfilled") {
+            failures += 1;
+            return;
+          }
+          const back = yearsBack[index];
+          const byDate = new Map(outcome.value.map((row) => [row.date, row]));
+          for (const date of bucket) {
+            const sample = byDate.get(shiftYears(date, -back));
+            if (sample) samplesByDate.get(date)!.push(sample);
+          }
+        });
+      })
     );
 
-    const samplesByDate = new Map<string, RawDailyWeather[]>(typicalDates.map((date) => [date, []]));
-    histories.forEach((outcome, index) => {
-      if (outcome.status !== "fulfilled") return;
-      const back = yearsBack[index];
-      const byDate = new Map(outcome.value.map((row) => [row.date, row]));
-      for (const date of typicalDates) {
-        const sample = byDate.get(shiftYears(date, -back));
-        if (sample) samplesByDate.get(date)!.push(sample);
-      }
-    });
-
-    const failures = histories.filter((outcome) => outcome.status === "rejected").length;
-    if (failures > 0) console.error(`[Weather] ${failures} of ${yearsBack.length} history lookups failed.`);
+    if (failures > 0) console.error(`[Weather] ${failures} of ${requests} history lookups failed.`);
 
     for (const date of typicalDates) {
       const typical = summarizeTypicalDay(date, samplesByDate.get(date) ?? []);
