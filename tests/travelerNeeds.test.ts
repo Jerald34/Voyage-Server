@@ -6,6 +6,7 @@ import {
   travelerNeedsSchema
 } from "../src/modules/agent/travelerNeeds";
 import { createMessageSchema } from "../src/modules/agent/agentSchemas";
+import { buildVoyageSystemPrompt } from "../src/modules/agent/agentPrompts";
 
 describe("travelerNeedsSchema", () => {
   it("canonicalizes order, drops duplicates and blank notes", () => {
@@ -68,5 +69,16 @@ describe("createMessageSchema traveler needs", () => {
 
   it("rejects malformed needs", () => {
     expect(() => createMessageSchema.parse({ content: "Plan", travelerNeeds: { needs: ["FLYING"] } })).toThrow();
+  });
+});
+
+describe("accessibility rules in the system prompt", () => {
+  it("are present and keep the prompt byte-identical across calls", () => {
+    const prompt = buildVoyageSystemPrompt("add_itinerary_item, estimate_route");
+
+    expect(prompt).toContain("Accessibility-Aware Planning");
+    expect(prompt).toContain("A missing field means unknown");
+    expect(prompt).toContain("transitRoutingPreference LESS_WALKING");
+    expect(buildVoyageSystemPrompt("add_itinerary_item, estimate_route")).toBe(prompt);
   });
 });

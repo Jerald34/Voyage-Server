@@ -6,6 +6,7 @@ import type { AgentEvent } from "./agentSchemas";
 import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
 import type { PlaceSelectionSession } from "../../services/places/placeTypes";
 import { buildPlaceAdvisoryBlock, savedItemAdvisories } from "./placeAdvisoryBlock";
+import { buildTravelerNeedsBlock, parseStoredTravelerNeeds } from "./travelerNeeds";
 import { overlayPlaceAdvisories } from "../itineraries/savedPlaceAdvisories";
 import type {
   AgentOrchestrator,
@@ -167,6 +168,8 @@ export function createAgentOrchestrator(options: {
 
         let conversationHistory: ModelMessage[] = [];
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
+        // Per-thread traveler needs, formatted once per run for the runtime context.
+        let travelerNeedsBlock = "";
         // One session per run, created after the run's agency is established. A
         // failure here must not fail the run: without a session, tools simply
         // perform no place checks, which is the pre-feature behavior.
@@ -218,6 +221,7 @@ export function createAgentOrchestrator(options: {
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
           activeItineraryContext = buildActiveItineraryContext(thread);
+          travelerNeedsBlock = buildTravelerNeedsBlock(parseStoredTravelerNeeds(thread.travelerNeeds));
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
           conversationHistory = recentMessages
             .map((message: any) => {
@@ -280,6 +284,7 @@ export function createAgentOrchestrator(options: {
           const taskBlock = buildTaskListBlock(openTasks);
           const initialRuntimeContext = [
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
+            travelerNeedsBlock,
             buildRunDateBlock(now()),
             taskBlock
           ].filter(Boolean).join("\n\n---\n\n");
@@ -623,6 +628,7 @@ export function createAgentOrchestrator(options: {
           const continuationTaskBlock = buildTaskListBlock(openTasks);
           const continuationRuntimeContext = [
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
+            travelerNeedsBlock,
             buildRunDateBlock(now()),
             continuationTaskBlock
           ].filter(Boolean).join("\n\n---\n\n");

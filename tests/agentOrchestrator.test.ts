@@ -2518,3 +2518,65 @@ describe("weather tool failures", () => {
     expect(provider.calls[1].messages.at(-1)?.content).toContain("WEATHER_PROVIDER_UNAVAILABLE");
   });
 });
+
+describe("traveler accessibility needs", () => {
+  const needsThread = {
+    messages: [{ role: "USER", content: "Plan 2 days in Baguio." }],
+    travelerNeeds: { needs: ["WHEELCHAIR"], notes: "Uses a foldable wheelchair." }
+  };
+
+  it("puts the thread's needs into the first turn's user message, not the system prompt", async () => {
+    const { service } = createFakeAgentService();
+    service.getThread = async () => needsThread as any;
+    const provider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run({ ...createRunInput(), userContent: "Plan 2 days in Baguio." });
+
+    const messages = provider.calls[0].messages;
+    const lastUser = messages.filter((message) => message.role === "user").at(-1);
+    expect(lastUser?.content).toContain("Traveler accessibility needs for this trip");
+    expect(lastUser?.content).toContain("Wheelchair user: needs step-free access");
+    expect(lastUser?.content).toContain('Staff notes: "Uses a foldable wheelchair."');
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).not.toContain("Uses a foldable wheelchair.");
+  });
+
+  it("keeps the needs on continuation turns", async () => {
+    const { service } = createFakeAgentService();
+    service.getThread = async () => needsThread as any;
+    const provider = createModelProvider([
+      '{"tool": "web_search", "query": "wheelchair accessible attractions Baguio"}',
+      "Here is an accessible plan.",
+      "Here is an accessible plan."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["web_search"],
+      toolRegistry: createAgentToolRegistry([{ name: "web_search", async execute() { return []; } }])
+    });
+
+    await orchestrator.run({ ...createRunInput(), userContent: "Plan 2 days in Baguio." });
+
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("Traveler accessibility needs for this trip");
+  });
+
+  it("adds nothing when the thread has no needs", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(JSON.stringify(provider.calls[0].messages)).not.toContain("Traveler accessibility needs");
+  });
+});
