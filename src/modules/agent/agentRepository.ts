@@ -1,6 +1,7 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
+import { hasTravelerNeeds } from "./travelerNeeds";
 import type {
   AgentRepository,
   AgentThreadRecord,
@@ -334,10 +335,20 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         if (data.travelerNeeds !== undefined) {
           // Needs travel with the message that set them, in the same transaction,
           // so the run that starts next reads them from the thread.
-          await tx.agentThread.update({
-            where: { id: data.threadId },
-            data: { travelerNeeds: toJsonInput(data.travelerNeeds) }
+          // Scoped by agency as well as id, so this write can never cross tenants.
+          // An empty selection is stored as SQL NULL: sensitive data is not kept
+          // around once staff clear it.
+          const updated = await tx.agentThread.updateMany({
+            where: { id: data.threadId, agencyId: data.agencyId },
+            data: {
+              travelerNeeds: hasTravelerNeeds(data.travelerNeeds)
+                ? toJsonInput(data.travelerNeeds)
+                : Prisma.DbNull
+            }
           });
+          if (updated.count === 0) {
+            throw new ApiError(404, "THREAD_NOT_FOUND", "Agent thread not found.");
+          }
         }
         const message = await tx.agentMessage.create({
           data: {

@@ -55,7 +55,8 @@ export function hasTravelerNeeds(needs: TravelerNeeds | null | undefined): needs
 }
 
 function quote(value: string) {
-  const collapsed = value.replace(/\s+/g, " ").trim();
+  // \s misses NEL (U+0085) and other control characters; fold them all to spaces.
+  const collapsed = value.replace(/[\s\p{Cc}]+/gu, " ").trim();
   const clipped = collapsed.length > MAX_TRAVELER_NOTES ? `${collapsed.slice(0, MAX_TRAVELER_NOTES - 1)}…` : collapsed;
   // JSON.stringify gives escaped, unambiguously delimited data.
   return JSON.stringify(clipped);
