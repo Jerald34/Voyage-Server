@@ -522,6 +522,8 @@ export function createAgentOrchestrator(options: {
 
               const isRecoverableToolFailure =
                 (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
+                (toolCall.name === "weather_forecast" &&
+                  ["WEATHER_PROVIDER_UNAVAILABLE", "MAPS_PROVIDER_UNAVAILABLE", "AGENT_TOOL_LIMIT_REACHED"].includes(details.code)) ||
                 ([
                   "search_google_places",
                   "get_google_place_details",

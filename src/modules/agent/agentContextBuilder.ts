@@ -75,7 +75,8 @@ export const CONTINUATION_TRIGGER_TOOL_NAMES = new Set([
   "route_logistics",
   "place_insights",
   "search_nearby_google_places",
-  "get_google_place_photos"
+  "get_google_place_photos",
+  "weather_forecast"
 ]);
 
 // ---------------------------------------------------------------------------

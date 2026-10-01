@@ -2489,3 +2489,32 @@ describe("runtime date and image context", () => {
     }
   });
 });
+
+describe("weather tool failures", () => {
+  it("keeps the run alive when the weather provider is unavailable", async () => {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}',
+      "Weather is unavailable right now, so I planned without it.",
+      "Weather is unavailable right now, so I planned without it."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast"],
+      toolRegistry: createAgentToolRegistry([
+        {
+          name: "weather_forecast",
+          async execute() {
+            throw new ApiError(503, "WEATHER_PROVIDER_UNAVAILABLE", "Weather provider is unavailable.");
+          }
+        }
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("WEATHER_PROVIDER_UNAVAILABLE");
+  });
+});
