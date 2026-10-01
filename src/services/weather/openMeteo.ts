@@ -58,7 +58,9 @@ export function parseOpenMeteoDaily(body: unknown): RawDailyWeather[] {
     const values = columns[name];
     return Array.isArray(values) ? finiteOrNull(values[index]) : null;
   };
-  const times = Array.isArray(columns.time) ? columns.time : [];
+  // An empty result here would be cached for hours or days, so a missing time column is an error.
+  if (!Array.isArray(columns.time)) throw weatherUnavailable("Weather provider returned no daily dates.");
+  const times = columns.time;
 
   const rows: RawDailyWeather[] = [];
   times.forEach((date, index) => {
@@ -97,6 +99,9 @@ async function getJson(fetchImpl: typeof fetch, url: URL, timeoutMs: number): Pr
     return await response.json();
   } catch (error) {
     if (error instanceof ApiError) throw error;
+    // Log the cause (path only: the query string carries coordinates) before the generic error hides it.
+    const cause = error instanceof Error ? `${error.name}: ${error.message}` : String(error);
+    console.error(redactSecrets(`[Weather] Open-Meteo request error: ${url.pathname} ${cause}`));
     throw weatherUnavailable();
   } finally {
     clearTimeout(timeout);

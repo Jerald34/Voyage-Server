@@ -162,4 +162,45 @@ describe("Open-Meteo provider", () => {
       code: "WEATHER_PROVIDER_UNAVAILABLE"
     });
   });
+
+  it("rejects a daily block whose time column is not an array instead of returning an empty (cacheable) result", async () => {
+    const provider = createOpenMeteoProvider({
+      fetchImpl: async () => jsonResponse({ daily: { time: "2026-10-01", weather_code: [1] } })
+    });
+
+    await expect(provider.getDailyForecast({ latitude: 1, longitude: 2 })).rejects.toMatchObject({
+      code: "WEATHER_PROVIDER_UNAVAILABLE"
+    });
+    expect(() => parseOpenMeteoDaily({ daily: {} })).toThrow();
+  });
+
+  it("logs the cause of network errors with the path only, never the query string", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const provider = createOpenMeteoProvider({
+      fetchImpl: async () => {
+        throw Object.assign(new Error("getaddrinfo ENOTFOUND"), { name: "TypeError" });
+      }
+    });
+
+    await expect(provider.getDailyForecast({ latitude: 16.4023, longitude: 120.596 })).rejects.toMatchObject({
+      code: "WEATHER_PROVIDER_UNAVAILABLE"
+    });
+
+    const logged = errorSpy.mock.calls.map((call) => call.join(" ")).join(" | ");
+    expect(logged).toContain("[Weather] Open-Meteo request error: /v1/forecast TypeError: getaddrinfo ENOTFOUND");
+    expect(logged).not.toContain("latitude");
+    expect(logged).not.toContain("?");
+  });
+
+  it("logs the cause of response parse errors", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const provider = createOpenMeteoProvider({
+      fetchImpl: async () => new Response("<html>not json</html>", { status: 200 })
+    });
+
+    await expect(provider.getDailyForecast({ latitude: 1, longitude: 2 })).rejects.toMatchObject({
+      code: "WEATHER_PROVIDER_UNAVAILABLE"
+    });
+    expect(errorSpy.mock.calls.map((call) => call.join(" ")).join(" | ")).toContain("Open-Meteo request error: /v1/forecast SyntaxError");
+  });
 });

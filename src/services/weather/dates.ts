@@ -1,5 +1,9 @@
 const ISO_DATE = /^(\d{4})-(\d{2})-(\d{2})$/;
 
+/**
+ * Splits YYYY-MM-DD into numbers. It does no validation: callers must check the
+ * input with isIsoDate first, otherwise they get NaN parts or a date the helpers misread.
+ */
 function parts(isoDate: string): [number, number, number] {
   const [year, month, day] = isoDate.split("-").map(Number);
   return [year, month, day];

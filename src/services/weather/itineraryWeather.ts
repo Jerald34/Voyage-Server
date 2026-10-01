@@ -1,4 +1,4 @@
-import { addDays, toIsoDate } from "./dates";
+import { addDays, isIsoDate, toIsoDate } from "./dates";
 import { getWeatherForDates } from "./weatherOutlook";
 import {
   WEATHER_ATTRIBUTION,
@@ -52,10 +52,18 @@ export function resolveDayDate(
   tripStartDate: Date | string | null
 ): string | null {
   const own = toDate(day.date);
-  if (own) return toIsoDate(own);
-  const start = toDate(tripStartDate);
-  if (!start || !Number.isInteger(day.dayNumber) || day.dayNumber < 1) return null;
-  return addDays(toIsoDate(start), day.dayNumber - 1);
+  let result: string | null = null;
+  if (own) {
+    result = toIsoDate(own);
+  } else {
+    const start = toDate(tripStartDate);
+    if (!start || !Number.isInteger(day.dayNumber) || day.dayNumber < 1) return null;
+    const startIso = toIsoDate(start);
+    // Years beyond 9999 serialise as "+010000-..." and break the date helpers.
+    if (!isIsoDate(startIso)) return null;
+    result = addDays(startIso, day.dayNumber - 1);
+  }
+  return isIsoDate(result) ? result : null;
 }
 
 /** The average position of the day's located stops. */
@@ -115,16 +123,22 @@ export async function buildItineraryWeather(options: {
   const lookups = new Map<string, Map<string, WeatherLookup>>();
   await Promise.all(
     [...groups.entries()].map(async ([key, group]) => {
-      lookups.set(
-        key,
-        await getWeatherForDates({
-          provider,
-          location: group.location,
-          dates: group.dates,
-          today,
-          typicalYears: options.typicalYears
-        })
-      );
+      try {
+        lookups.set(
+          key,
+          await getWeatherForDates({
+            provider,
+            location: group.location,
+            dates: group.dates,
+            today,
+            typicalYears: options.typicalYears
+          })
+        );
+      } catch (error) {
+        // Weather is supplementary: an unexpected failure must not reject the whole itinerary.
+        console.error("[Weather] Itinerary weather lookup failed.", error instanceof Error ? error.message : error);
+        lookups.set(key, new Map(group.dates.map((date): [string, WeatherLookup] => [date, { status: "UNAVAILABLE" }])));
+      }
     })
   );
 

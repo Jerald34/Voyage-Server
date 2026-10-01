@@ -43,6 +43,12 @@ describe("resolveDayDate", () => {
     expect(resolveDayDate({ date: null, dayNumber: 1 }, null)).toBeNull();
     expect(resolveDayDate({ date: "not a date", dayNumber: 1 }, null)).toBeNull();
   });
+
+  it("returns null for years outside 0000-9999 instead of an unusable date", () => {
+    expect(resolveDayDate({ date: new Date("+010000-01-01T00:00:00.000Z"), dayNumber: 1 }, null)).toBeNull();
+    expect(resolveDayDate({ date: null, dayNumber: 1 }, new Date("+010000-01-01T00:00:00.000Z"))).toBeNull();
+    expect(resolveDayDate({ date: null, dayNumber: 2 }, "9999-12-31")).toBeNull();
+  });
 });
 
 describe("resolveDayLocation", () => {
@@ -115,6 +121,37 @@ describe("buildItineraryWeather", () => {
     expect(noStops.days[0]).toEqual({ dayId: "day-1", dayNumber: 1, date: "2026-10-10", status: "NO_LOCATION", weather: null });
     expect(past.days[0]).toEqual({ dayId: "day-1", dayNumber: 1, date: "2026-08-01", status: "PAST", weather: null });
     expect(weather.getDailyForecast).not.toHaveBeenCalled();
+  });
+
+  it("reports NO_DATE for a year-10000 day instead of throwing", async () => {
+    const weather = provider([]);
+
+    const result = await buildItineraryWeather({
+      days: [{ id: "day-1", dayNumber: 1, date: new Date("+010000-01-01T00:00:00.000Z"), items: [stop(16.4, 120.6)] }],
+      tripStartDate: null,
+      provider: weather,
+      now,
+      typicalYears: 5
+    });
+
+    expect(result.days[0]).toEqual({ dayId: "day-1", dayNumber: 1, date: null, status: "NO_DATE", weather: null });
+    expect(weather.getDailyForecast).not.toHaveBeenCalled();
+  });
+
+  it("marks a location group UNAVAILABLE when its lookup throws unexpectedly", async () => {
+    const weather = provider([]);
+    const days = [
+      { id: "day-1", dayNumber: 1, date: "2026-12-10", items: [stop(16.4, 120.6)] },
+      { id: "day-2", dayNumber: 2, date: "2026-12-11", items: [stop(10.3, 123.9)] }
+    ];
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    // An infinite sample size makes the outlook lookup itself throw (invalid array length), outside any provider call.
+    const result = await buildItineraryWeather({ days, tripStartDate: null, provider: weather, now, typicalYears: Infinity });
+
+    expect(result.days.map((day) => day.status)).toEqual(["UNAVAILABLE", "UNAVAILABLE"]);
+    expect(result.days.map((day) => day.date)).toEqual(["2026-12-10", "2026-12-11"]);
+    vi.restoreAllMocks();
   });
 
   it("marks dated days UNAVAILABLE when weather is disabled", async () => {

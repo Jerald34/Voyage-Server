@@ -58,4 +58,38 @@ describe("createCachedWeatherProvider", () => {
     await cached.getDailyHistory({ latitude: 16.4, longitude: 120.6 }, "2024-10-10", "2024-10-12");
     expect(inner.getDailyHistory).toHaveBeenCalledTimes(2);
   });
+
+  it("shares one inner call between concurrent requests for points in the same rounded cell", async () => {
+    let release: (rows: never[]) => void = () => undefined;
+    const inner = {
+      name: "open-meteo" as const,
+      getDailyForecast: vi.fn(() => new Promise<never[]>((resolve) => (release = resolve))),
+      getDailyHistory: vi.fn(async () => [])
+    };
+    const cached = createCachedWeatherProvider(inner);
+
+    const first = cached.getDailyForecast({ latitude: 16.4023, longitude: 120.5961 });
+    const second = cached.getDailyForecast({ latitude: 16.4049, longitude: 120.5951 });
+    release([]);
+    await Promise.all([first, second]);
+
+    expect(inner.getDailyForecast).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries after an inner rejection instead of caching it", async () => {
+    const inner = {
+      name: "open-meteo" as const,
+      getDailyForecast: vi
+        .fn()
+        .mockRejectedValueOnce(new Error("down"))
+        .mockResolvedValueOnce([]),
+      getDailyHistory: vi.fn(async () => [])
+    };
+    const cached = createCachedWeatherProvider(inner);
+    const point = { latitude: 16.4, longitude: 120.6 };
+
+    await expect(cached.getDailyForecast(point)).rejects.toThrow("down");
+    await expect(cached.getDailyForecast(point)).resolves.toEqual([]);
+    expect(inner.getDailyForecast).toHaveBeenCalledTimes(2);
+  });
 });
