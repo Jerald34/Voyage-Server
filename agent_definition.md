@@ -75,6 +75,7 @@ Used to generate the final response after all tool calls are complete.
 | :--- | :--- | :--- |
 | `record_agent_task` | Tracks internal work phases. | `label`, `status` (PENDING, RUNNING, COMPLETED, FAILED). |
 | `web_search` | Real-time web evidence (Serper). | `query`, `maxResults`. |
+| `weather_forecast` | Daily forecast up to ~15 days ahead, or typical weather from past years for later dates (Open-Meteo). | `placeName`, `cityContext`, `startDate`, `endDate` (max 14 days). |
 
 ---
 
