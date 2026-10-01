@@ -835,7 +835,9 @@ export function createAgentOrchestrator(options: {
                   ? `Recent tool results JSON (last ${synthesisToolResults.length} of ${toolResults.length}; ${synthesisOmittedCount} older itinerary-streaming result(s) omitted because the cumulative state is above):`
                   : "Tool results JSON:",
                 stringifyToolResults(synthesisToolResults),
-                latestWeatherBlock
+                latestWeatherBlock,
+                // User content, not the system prompt: the synthesis prompt stays byte-identical.
+                travelerNeedsBlock
               ].filter(Boolean).join("\n\n")
             }
           ];

@@ -2625,6 +2625,43 @@ describe("traveler accessibility needs", () => {
     expect(provider.calls[1].messages.at(-1)?.content).toContain("Traveler accessibility needs for this trip");
   });
 
+  it("puts the needs into the synthesis user message and keeps the synthesis prompt identical across threads", async () => {
+    async function synthesisFor(thread: unknown) {
+      const { service } = createFakeAgentService();
+      service.getThread = async () => thread as any;
+      const provider = createModelProvider([
+        '{"tool": "web_search", "query": "wheelchair accessible attractions Baguio"}',
+        "Here is an accessible plan.",
+        "Here is an accessible plan."
+      ]);
+      const orchestrator = createAgentOrchestrator({
+        modelProvider: provider,
+        agentService: service,
+        availableToolNames: ["web_search"],
+        toolRegistry: createAgentToolRegistry([{ name: "web_search", async execute() { return []; } }])
+      });
+      await orchestrator.run({ ...createRunInput(), userContent: "Plan 2 days in Baguio." });
+      return provider.calls.at(-1)!.messages;
+    }
+
+    const withNeeds = await synthesisFor(needsThread);
+    const otherNeeds = await synthesisFor({
+      messages: needsThread.messages,
+      travelerNeeds: { needs: ["SENIOR"], notes: "Needs a rest every hour." }
+    });
+    const withoutNeeds = await synthesisFor({ messages: needsThread.messages });
+
+    const synthesisUser = withNeeds.at(-1)?.content ?? "";
+    expect(synthesisUser).toContain("Traveler accessibility needs for this trip");
+    expect(synthesisUser).toContain("Wheelchair user: needs step-free access");
+    expect(withNeeds[0].role).toBe("system");
+    expect(withNeeds[0].content).toContain("If traveler accessibility needs are listed");
+    expect(withNeeds[0].content).not.toContain("Uses a foldable wheelchair.");
+    expect(otherNeeds[0].content).toBe(withNeeds[0].content);
+    expect(withoutNeeds[0].content).toBe(withNeeds[0].content);
+    expect(withoutNeeds.at(-1)?.content).not.toContain("Traveler accessibility needs");
+  });
+
   it("adds nothing when the thread has no needs", async () => {
     const { service } = createFakeAgentService();
     const provider = createModelProvider("Here is a draft itinerary.");

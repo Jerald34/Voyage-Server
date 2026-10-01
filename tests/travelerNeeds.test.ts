@@ -6,7 +6,7 @@ import {
   travelerNeedsSchema
 } from "../src/modules/agent/travelerNeeds";
 import { createMessageSchema } from "../src/modules/agent/agentSchemas";
-import { buildVoyageSystemPrompt } from "../src/modules/agent/agentPrompts";
+import { buildVoyageSynthesisPrompt, buildVoyageSystemPrompt } from "../src/modules/agent/agentPrompts";
 
 describe("travelerNeedsSchema", () => {
   it("canonicalizes order, drops duplicates and blank notes", () => {
@@ -92,5 +92,53 @@ describe("accessibility rules in the system prompt", () => {
     expect(prompt).toContain("A missing field means unknown");
     expect(prompt).toContain("transitRoutingPreference LESS_WALKING");
     expect(buildVoyageSystemPrompt("add_itinerary_item, estimate_route")).toBe(prompt);
+  });
+});
+
+describe("traveler needs stay out of public itinerary text", () => {
+  const prompt = buildVoyageSystemPrompt("add_itinerary_item, estimate_route");
+  const accessibilitySection = prompt.slice(
+    prompt.indexOf("Accessibility-Aware Planning"),
+    prompt.indexOf("Hybrid Map Response Policy")
+  );
+
+  it("forbids mentioning the travelers' needs in item fields", () => {
+    expect(prompt).toContain(
+      "Never mention the travelers' conditions, disabilities or needs in item title, description, clientNotes or staffNotes; explain accommodations only in your chat reply."
+    );
+  });
+
+  it("has no rule that tells the model to explain needs in an item description", () => {
+    expect(prompt).not.toContain("say why in the item description");
+    // Any accessibility rule that mentions the description may only name place features.
+    const sentences = accessibilitySection.split(/(?<=\.)\s+/);
+    const describing = sentences.filter((line) => /description/i.test(line) && !line.startsWith("Never mention"));
+    expect(describing.length).toBeGreaterThan(0);
+    for (const sentence of describing) {
+      expect(sentence).not.toMatch(/\b(why|explain|because)\b/i);
+    }
+    expect(accessibilitySection).toContain("step-free paths");
+  });
+});
+
+describe("accessible transit rule scope", () => {
+  it("limits estimate_route with LESS_WALKING to long or uncertain legs or getting-around questions", () => {
+    const prompt = buildVoyageSystemPrompt("estimate_route");
+
+    expect(prompt).toContain(
+      "for a long or uncertain transit leg, or when the user asks about getting around, call estimate_route with travelMode TRANSIT and transitRoutingPreference LESS_WALKING"
+    );
+    expect(prompt).toContain("Do NOT call estimate_route between consecutive stops during planning");
+  });
+});
+
+describe("accessibility rule in the synthesis prompt", () => {
+  it("is present and the prompt is byte-identical across calls", () => {
+    const prompt = buildVoyageSynthesisPrompt();
+
+    expect(prompt).toContain(
+      "If traveler accessibility needs are listed, state in one sentence how the plan accommodates them; describe a place as accessible only when its metadata.accessibility shows true."
+    );
+    expect(buildVoyageSynthesisPrompt()).toBe(prompt);
   });
 });

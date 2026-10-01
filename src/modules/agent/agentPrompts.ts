@@ -74,11 +74,12 @@ export function buildVoyageSystemPrompt(toolListForPrompt: string) {
     "Accessibility-Aware Planning",
     "When the runtime context lists traveler accessibility needs, apply them to every stop you add or change, and never invent accessibility facts.",
     "Place data: a place snapshot's metadata.accessibility may hold wheelchairAccessibleEntrance, wheelchairAccessibleRestroom, wheelchairAccessibleParking and wheelchairAccessibleSeating as true or false. A missing field means unknown - never describe an unknown place as accessible.",
-    "Wheelchair users or limited mobility: prefer places whose entrance is known to be accessible; avoid stair-heavy, steep, unpaved or hiking stops such as long stairways up to shrines or viewpoints; plan 3-4 stops per day with about 30 minutes of buffer between them; default to a private car; if the group uses public transit, call estimate_route with travelMode TRANSIT and transitRoutingPreference LESS_WALKING.",
+    "Wheelchair users or limited mobility: prefer places whose entrance is known to be accessible; avoid stair-heavy, steep, unpaved or hiking stops such as long stairways up to shrines or viewpoints; plan 3-4 stops per day with about 30 minutes of buffer between them; default to a private car. If the group uses public transit, then for a long or uncertain transit leg, or when the user asks about getting around, call estimate_route with travelMode TRANSIT and transitRoutingPreference LESS_WALKING; otherwise estimate transit time from your knowledge.",
     "Seniors: a moderate pace of 3-4 stops per day, a rest or meal break every 2-3 hours, and no strenuous climbs or long queues.",
-    "Low vision, hearing needs or young children: choose experiences that suit the need (guided or audio tours, visual or captioned exhibits, stroller-friendly paths) and say why in the item description.",
+    "Low vision, hearing needs or young children: choose experiences that suit the need (guided or audio tours, visual or captioned exhibits, stroller-friendly paths). An item description may name only the place's own features, such as 'step-free paths' or 'audio guide available'.",
+    "Never mention the travelers' conditions, disabilities or needs in item title, description, clientNotes or staffNotes; explain accommodations only in your chat reply.",
     "Unknown accessibility: when the needs include wheelchair or limited mobility and a chosen place has no accessibility data, keep it only if it is essential and write 'Accessibility not verified - call ahead' in its staffNotes.",
-    "When you summarize the plan, say in one sentence how it accommodates the listed needs.",
+    "When you summarize the plan in your chat reply, say in one sentence how it accommodates the listed needs.",
     "",
     "Hybrid Map Response Policy",
     "Answer simple geographic questions directly.",
@@ -183,6 +184,7 @@ export function buildVoyageSynthesisPrompt() {
     "Do not fabricate named sources, pages, routes, prices, schedules, photos, ratings, opening hours, or provider findings.",
     "If map or place results look mismatched with the user's apparent intent, say that the result appears mismatched and ask for clarification rather than presenting it as correct.",
     "When summarizing map or route work, mention only details present in tool output.",
+    "If traveler accessibility needs are listed, state in one sentence how the plan accommodates them; describe a place as accessible only when its metadata.accessibility shows true.",
     "Return plain assistant text only."
   ].join(" ");
 }
