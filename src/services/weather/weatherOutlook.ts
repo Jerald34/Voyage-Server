@@ -1,4 +1,4 @@
-import { daysBetween, shiftYears } from "./dates";
+import { addDays, daysBetween, shiftYears } from "./dates";
 import { CONDITION_SEVERITY, conditionFromWmoCode } from "./weatherCodes";
 import type {
   DailyWeather,
@@ -9,8 +9,15 @@ import type {
   WeatherProvider
 } from "./types";
 
-/** Days after today that the 16-day forecast still covers (today + 15). */
-export const FORECAST_HORIZON_DAYS = 15;
+/**
+ * Furthest UTC offset (days after today) still tried against the forecast. The
+ * 16-day forecast covers the location's today through today + 15 in its own
+ * calendar, so for a location east of UTC the date at UTC offset +16 is often
+ * in the response. A missing row falls through to typical weather below.
+ */
+export const FORECAST_HORIZON_DAYS = 16;
+/** The archive lags real time; never ask it for dates later than today - 2 days. */
+const ARCHIVE_LAG_DAYS = 2;
 /** WMO convention: a "wet day" has at least 1 mm of precipitation. */
 export const WET_DAY_MM = 1;
 
@@ -70,11 +77,25 @@ function dominantCondition(samples: RawDailyWeather[]): WeatherCondition {
 
 /** Averages the same calendar day across past years into a TYPICAL entry. */
 export function summarizeTypicalDay(date: string, samples: RawDailyWeather[]): DailyWeather | null {
-  if (samples.length === 0) return null;
+  // A row with every value null carries no information; it must not count as a year.
+  const usable = samples.filter(
+    (sample) =>
+      sample.weatherCode !== null ||
+      sample.temperatureMaxC !== null ||
+      sample.temperatureMinC !== null ||
+      sample.precipitationProbabilityPct !== null ||
+      sample.precipitationMm !== null ||
+      sample.windSpeedMaxKph !== null ||
+      sample.uvIndexMax !== null
+  );
+  if (usable.length === 0) return null;
+  samples = usable;
 
   const precipitation = samples.map((sample) => sample.precipitationMm);
   const measured = precipitation.filter((value): value is number => value !== null);
   const wetYears = measured.filter((value) => value >= WET_DAY_MM).length;
+  // probability = wetYears / sampleYears * 100, so both use the years with measured precipitation.
+  const sampleYears = measured.length > 0 ? measured.length : samples.length;
 
   return {
     date,
@@ -87,7 +108,7 @@ export function summarizeTypicalDay(date: string, samples: RawDailyWeather[]): D
     precipitationMm: mean(precipitation),
     windSpeedMaxKph: mean(samples.map((sample) => sample.windSpeedMaxKph)),
     uvIndexMax: null,
-    sampleYears: samples.length,
+    sampleYears,
     wetYears: measured.length > 0 ? wetYears : null
   };
 }
@@ -146,7 +167,13 @@ export async function getWeatherForDates(options: {
     typicalDates.sort();
     const start = typicalDates[0];
     const end = typicalDates[typicalDates.length - 1];
-    const yearsBack = Array.from({ length: typicalYears }, (_, index) => index + 1);
+    // Start at the first offset whose shifted end date the archive can already serve
+    // (a date a year or more out would otherwise land on today or later), then keep
+    // typicalYears consecutive offsets so the sample count is not reduced.
+    const latestArchiveEnd = addDays(today, -ARCHIVE_LAG_DAYS);
+    let firstBack = Math.max(1, Number(end.slice(0, 4)) - Number(latestArchiveEnd.slice(0, 4)));
+    while (shiftYears(end, -firstBack) > latestArchiveEnd) firstBack += 1;
+    const yearsBack = Array.from({ length: typicalYears }, (_, index) => firstBack + index);
     const histories = await Promise.allSettled(
       yearsBack.map((back) => provider.getDailyHistory(location, shiftYears(start, -back), shiftYears(end, -back)))
     );
