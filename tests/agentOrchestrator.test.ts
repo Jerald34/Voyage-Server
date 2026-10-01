@@ -2772,3 +2772,50 @@ describe("unavailable tools", () => {
     expect(continuation).toContain("continue without it");
   });
 });
+
+describe("repeated calls to an unavailable tool", () => {
+  it("stops after three unknown-tool failures and completes through synthesis", async () => {
+    const { service, run } = createFakeAgentService();
+    // A model that calls the unknown tool on every turn, synthesis included.
+    const calls: Array<Parameters<ModelProvider["complete"]>[0]> = [];
+    const provider: ModelProvider & { calls: typeof calls } = {
+      calls,
+      async complete(input) {
+        calls.push(input);
+        return { content: '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}' };
+      }
+    };
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: [],
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(provider.calls.length).toBeLessThanOrEqual(4);
+    expect(run.status).toBe("COMPLETED");
+  });
+
+  it("names the tool and tells the model not to call it again", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}',
+      "Planned without weather.",
+      "Planned without weather."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: [],
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    const continuation = provider.calls[1].messages.at(-1)?.content ?? "";
+    expect(continuation).toContain("weather_forecast is unavailable in this run");
+    expect(continuation).toContain("Do not call weather_forecast again");
+  });
+});

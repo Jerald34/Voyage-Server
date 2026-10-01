@@ -93,6 +93,8 @@ async function streamModelCompletion(options: {
 // still passed via activeItineraryContext.itinerary, so trimming history does not lose truth.
 const CONTINUATION_TOOL_RESULTS_TAIL = 3;
 const SYNTHESIS_TOOL_RESULTS_TAIL = 5;
+// The first failures get "unavailable" feedback; this one ends the tool loop.
+const MAX_UNKNOWN_TOOL_FAILURES = 3;
 
 export function createAgentOrchestrator(options: {
   modelProvider: ModelProvider;
@@ -419,6 +421,11 @@ export function createAgentOrchestrator(options: {
 
         let toolCallsExecuted = 0;
         let hadRecoverableFailure = false;
+        // Calls to tools that are not registered in this run. A model that keeps
+        // calling one would otherwise loop until the continuation cap.
+        let unknownToolFailures = 0;
+        // Set when the tool loop must end now and go straight to synthesis.
+        let stopToolLoop = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
         // The latest usable weather_forecast result, rendered compactly. The raw result
         // scrolls out of the continuation tail after a plan and a couple of adds.
@@ -563,15 +570,23 @@ export function createAgentOrchestrator(options: {
               // The static prompt advertises tools that may be unregistered in this deployment
               // (e.g. weather_forecast with WEATHER_PROVIDER=disabled), and models sometimes
               // invent tool names. Tell the model and let it carry on rather than failing the run.
+              // After MAX_UNKNOWN_TOOL_FAILURES the model is not listening: end the tool
+              // loop and summarize what exists. The run still completes.
               if (details.code === "AGENT_TOOL_NOT_FOUND") {
+                unknownToolFailures += 1;
                 toolResults.push({
                   name: toolCall.name,
                   output: {
                     unavailable: true,
                     code: details.code,
-                    message: `The tool ${toolCall.name} is unavailable in this run; continue without it.`
+                    message: `The tool ${toolCall.name} is unavailable in this run; continue without it. Do not call ${toolCall.name} again.`
                   }
                 });
+                if (unknownToolFailures >= MAX_UNKNOWN_TOOL_FAILURES) {
+                  agentLogger.debug(input.runId, "Stopping the tool loop: repeated calls to an unavailable tool");
+                  stopToolLoop = true;
+                  return;
+                }
                 hadRecoverableFailure = true;
                 continue;
               }
@@ -641,7 +656,12 @@ export function createAgentOrchestrator(options: {
           historyPrefix = historyPrefix.slice(0, -1);
         }
 
-        while (shouldContinueLoop && continuationsRun < maxContinuations && toolCallsExecuted < maxToolCallsPerRun) {
+        while (
+          shouldContinueLoop &&
+          !stopToolLoop &&
+          continuationsRun < maxContinuations &&
+          toolCallsExecuted < maxToolCallsPerRun
+        ) {
           checkCancelled();
           continuationsRun += 1;
           hadRecoverableFailure = false;
@@ -771,7 +791,7 @@ export function createAgentOrchestrator(options: {
           const continuationTool = nextParsed.toolCalls.some((c: { name: string }) =>
             CONTINUATION_TRIGGER_TOOL_NAMES.has(c.name)
           );
-          shouldContinueLoop = lastInvokedItineraryTool || continuationTool || hadRecoverableFailure;
+          shouldContinueLoop = (lastInvokedItineraryTool || continuationTool || hadRecoverableFailure) && !stopToolLoop;
         }
 
         // Update the assistantMessage seed used by synthesis to the last continuation if we ran one.
