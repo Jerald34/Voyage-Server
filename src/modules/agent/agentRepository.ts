@@ -331,6 +331,14 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
 
     async createUserMessageAndRun(data) {
       return client.$transaction(async (tx) => {
+        if (data.travelerNeeds !== undefined) {
+          // Needs travel with the message that set them, in the same transaction,
+          // so the run that starts next reads them from the thread.
+          await tx.agentThread.update({
+            where: { id: data.threadId },
+            data: { travelerNeeds: toJsonInput(data.travelerNeeds) }
+          });
+        }
         const message = await tx.agentMessage.create({
           data: {
             threadId: data.threadId,

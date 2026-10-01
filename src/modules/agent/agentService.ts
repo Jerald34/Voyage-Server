@@ -1,6 +1,7 @@
 import { ApiError } from "../../http/errors";
 import { publishAgentRunEvent } from "./agentEvents";
 import { agentLogger } from "./agentLogger";
+import type { TravelerNeeds } from "./travelerNeeds";
 import {
   agentEventSchema,
   saveItineraryThreadSchema,
@@ -340,9 +341,10 @@ export function createAgentService(options: {
       threadId: string,
       userId: string,
       content: string,
-      imageUrls?: string[]
+      imageUrls?: string[],
+      travelerNeeds?: TravelerNeeds
     ) {
-      const parsed = createMessageSchema.parse({ content, imageUrls });
+      const parsed = createMessageSchema.parse({ content, imageUrls, travelerNeeds });
       await this.getThread(agencyId, threadId);
       const metadata = parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : undefined;
       const result = await options.repository.createUserMessageAndRun({
@@ -351,6 +353,7 @@ export function createAgentService(options: {
         authorUserId: userId,
         content: parsed.content,
         metadata,
+        travelerNeeds: parsed.travelerNeeds,
         modelProvider,
         modelName
       });

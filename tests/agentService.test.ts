@@ -544,6 +544,26 @@ describe("agent service", () => {
     expect(repository.threads).toHaveLength(1);
   });
 
+  it("passes normalized traveler needs to the repository with the message", async () => {
+    const repository = createMemoryRepository();
+    const seen: unknown[] = [];
+    const original = repository.createUserMessageAndRun.bind(repository);
+    repository.createUserMessageAndRun = async (data) => {
+      seen.push(data.travelerNeeds);
+      return original(data);
+    };
+    const service = createAgentService({ repository, modelProvider: "openai", modelName: "gpt-test" });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Baguio" });
+
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan 3 days", undefined, {
+      needs: ["WHEELCHAIR", "WHEELCHAIR"],
+      notes: "  "
+    } as any);
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Add lunch");
+
+    expect(seen).toEqual([{ needs: ["WHEELCHAIR"], notes: null }, undefined]);
+  });
+
   it("appends a user message and creates a queued run", async () => {
     const repository = createMemoryRepository();
     const service = createAgentService({
