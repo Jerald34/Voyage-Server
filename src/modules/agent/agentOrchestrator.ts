@@ -45,7 +45,9 @@ import {
   availableToolSet,
   buildRuntimeContextBlock,
   buildTaskListBlock,
+  buildRunDateBlock,
   injectRuntimeContextIntoLastUser,
+  attachImagePartsToLastUser,
   makeCompactToolOutput
 } from "./agentContextBuilder";
 
@@ -275,29 +277,17 @@ export function createAgentOrchestrator(options: {
                 }
               ];
 
-          // Attach image parts to the last user message in the conversation.
-          if (userImageParts.length > 0) {
-            let lastUserIdx = -1;
-            for (let i = historyOrCurrent.length - 1; i >= 0; i--) {
-              if (historyOrCurrent[i].role === "user") { lastUserIdx = i; break; }
-            }
-            if (lastUserIdx >= 0) {
-              const lastUserMsg = historyOrCurrent[lastUserIdx];
-              historyOrCurrent[lastUserIdx] = {
-                ...lastUserMsg,
-                parts: [{ text: lastUserMsg.content }, ...userImageParts]
-              };
-            }
-          }
-
           const taskBlock = buildTaskListBlock(openTasks);
           const initialRuntimeContext = [
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
+            buildRunDateBlock(now()),
             taskBlock
           ].filter(Boolean).join("\n\n---\n\n");
-          const historyWithContext = injectRuntimeContextIntoLastUser(
-            historyOrCurrent,
-            initialRuntimeContext
+          // Inject first, then attach images, so an image message's text part
+          // carries the runtime context (Vertex sends only `parts`).
+          const historyWithContext = attachImagePartsToLastUser(
+            injectRuntimeContextIntoLastUser(historyOrCurrent, initialRuntimeContext),
+            userImageParts
           );
 
           const initialMessages = [
@@ -631,6 +621,7 @@ export function createAgentOrchestrator(options: {
           const continuationTaskBlock = buildTaskListBlock(openTasks);
           const continuationRuntimeContext = [
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
+            buildRunDateBlock(now()),
             continuationTaskBlock
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);

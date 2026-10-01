@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/http/errors";
 import {
   createAgentOrchestrator,
@@ -402,7 +402,7 @@ describe("agent orchestrator", () => {
       expect.arrayContaining([
         { role: "user", content: "We are planning a Cebu itinerary." },
         { role: "assistant", content: "Great, what dates are you targeting?" },
-        { role: "user", content: "Build a Cebu itinerary." }
+        { role: "user", content: expect.stringContaining("Build a Cebu itinerary.") }
       ])
     );
   });
@@ -2443,5 +2443,49 @@ describe("agent orchestrator", () => {
         formattedAddress: "Olongapo City, Zambales"
       }
     ]);
+  });
+});
+
+describe("runtime date and image context", () => {
+  it("tells the model today's date on the first turn", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([]),
+      now: () => new Date("2026-10-01T03:00:00.000Z")
+    });
+
+    await orchestrator.run(createRunInput());
+
+    const lastUser = provider.calls[0].messages.filter((message) => message.role === "user").at(-1);
+    expect(lastUser?.content).toContain("Today's date (UTC): 2026-10-01.");
+    expect(lastUser?.content).toContain("Build a Cebu itinerary.");
+  });
+
+  it("keeps the runtime context inside the text part of an image message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "image/png" } }))
+    );
+    try {
+      const { service } = createFakeAgentService();
+      const provider = createModelProvider("Nice photo.");
+      const orchestrator = createAgentOrchestrator({
+        modelProvider: provider,
+        agentService: service,
+        toolRegistry: createAgentToolRegistry([]),
+        now: () => new Date("2026-10-01T03:00:00.000Z")
+      });
+
+      await orchestrator.run({ ...createRunInput(), imageUrls: ["https://example.com/photo.png"] });
+
+      const lastUser = provider.calls[0].messages.filter((message) => message.role === "user").at(-1);
+      expect(lastUser?.parts?.[0]).toEqual({ text: expect.stringContaining("Today's date (UTC): 2026-10-01.") });
+      expect(lastUser?.parts?.[1]).toEqual({ inlineData: { mimeType: "image/png", data: "AQID" } });
+    } finally {
+      vi.unstubAllGlobals();
+    }
   });
 });
