@@ -1,5 +1,13 @@
 import type { PlaceBusinessStatus } from "@prisma/client";
 
+/** Google Places accessibilityOptions. An absent field means unknown, never false. */
+export type PlaceAccessibilityOptions = {
+  wheelchairAccessibleEntrance?: boolean;
+  wheelchairAccessibleParking?: boolean;
+  wheelchairAccessibleRestroom?: boolean;
+  wheelchairAccessibleSeating?: boolean;
+};
+
 export type GeoPoint = {
   latitude: number;
   longitude: number;
@@ -24,6 +32,7 @@ export type PlaceDetailsResult = PlaceSearchResult & {
   websiteUri?: string;
   /** Photo references returned when `photos` is included in the field mask. */
   photos?: Array<{ name: string; photoUri: string }>;
+  accessibilityOptions?: PlaceAccessibilityOptions;
 };
 
 export type ResolvedPlace = {
