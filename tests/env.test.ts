@@ -168,3 +168,28 @@ describe("place freshness gate configuration", () => {
     );
   });
 });
+
+describe("weather configuration", () => {
+  it("applies documented defaults", async () => {
+    const { parseEnv } = await loadEnvModule();
+    const parsed = parseEnv({});
+
+    expect(parsed.WEATHER_PROVIDER).toBe("open-meteo");
+    expect(parsed.WEATHER_TYPICAL_YEARS).toBe(5);
+    expect(parsed.WEATHER_MAX_CALLS_PER_RUN).toBe(4);
+  });
+
+  it("can be disabled", async () => {
+    const { parseEnv } = await loadEnvModule();
+
+    expect(parseEnv({ WEATHER_PROVIDER: "disabled" }).WEATHER_PROVIDER).toBe("disabled");
+  });
+
+  it("rejects unknown providers and out-of-range typical years", async () => {
+    const { parseEnv } = await loadEnvModule();
+
+    expect(() => parseEnv({ WEATHER_PROVIDER: "google" })).toThrowError(/WEATHER_PROVIDER/);
+    expect(() => parseEnv({ WEATHER_TYPICAL_YEARS: "0" })).toThrowError(/WEATHER_TYPICAL_YEARS/);
+    expect(() => parseEnv({ WEATHER_TYPICAL_YEARS: "11" })).toThrowError(/WEATHER_TYPICAL_YEARS/);
+  });
+});
