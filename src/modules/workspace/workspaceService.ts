@@ -24,6 +24,7 @@ export type ThreadSummary = {
   createdByUserId: string;
   createdAt: Date;
   updatedAt: Date;
+  travelerNeeds: unknown;
   itineraryId: string | null;
 };
 
@@ -106,6 +107,7 @@ export async function getBootstrap(
         createdByUserId: true,
         createdAt: true,
         updatedAt: true,
+        travelerNeeds: true,
       },
     }),
   ]);
