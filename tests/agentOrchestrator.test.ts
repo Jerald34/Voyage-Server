@@ -2580,3 +2580,136 @@ describe("traveler accessibility needs", () => {
     expect(JSON.stringify(provider.calls[0].messages)).not.toContain("Traveler accessibility needs");
   });
 });
+
+describe("weather in continuation context", () => {
+  const weatherOutput = {
+    location: { name: "Baguio", latitude: 16.4, longitude: 120.6 },
+    days: [
+      {
+        date: "2026-10-10",
+        status: "OK",
+        kind: "FORECAST",
+        condition: "RAIN",
+        summary: "Rain, 16-23°C, 85% chance of rain",
+        rainRisk: true,
+        temperatureMinC: 16,
+        temperatureMaxC: 23,
+        precipitationProbabilityPct: 85
+      },
+      {
+        date: "2026-10-11",
+        status: "OK",
+        kind: "TYPICAL",
+        condition: "CLOUDY",
+        summary: "Cloudy, 15-22°C, rain on 2 of the last 5 years",
+        rainRisk: false,
+        temperatureMinC: 15,
+        temperatureMaxC: 22,
+        precipitationProbabilityPct: null,
+        wetYears: 2,
+        sampleYears: 5
+      }
+    ],
+    note: "TYPICAL days average the last 5 years; they are not a forecast.",
+    attribution: "Weather data by Open-Meteo.com"
+  };
+
+  function buildWeatherRun() {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10", "endDate": "2026-10-11"}',
+      '{"tool": "plan_itinerary", "title": "Baguio"}',
+      '{"tool": "add_itinerary_item", "title": "Stop 1"}',
+      '{"tool": "add_itinerary_item", "title": "Stop 2"}',
+      '{"tool": "add_itinerary_item", "title": "Stop 3"}',
+      "Done planning around the rain.",
+      "Done planning around the rain."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast", "plan_itinerary", "add_itinerary_item"],
+      toolRegistry: createAgentToolRegistry([
+        { name: "weather_forecast", async execute() { return weatherOutput; } },
+        { name: "plan_itinerary", async execute() { return { ok: true }; } },
+        { name: "add_itinerary_item", async execute() { return { ok: true }; } }
+      ])
+    });
+    return { orchestrator, provider, run };
+  }
+
+  it("keeps the latest weather in every continuation after the tool result scrolls out", async () => {
+    const { orchestrator, provider, run } = buildWeatherRun();
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    // calls[0] initial, calls[1..5] continuations; calls[4] is the 4th continuation
+    // (after weather, plan, add, add), where the raw weather result has left the tail.
+    for (const index of [4, 5]) {
+      const lastUser = provider.calls[index].messages.at(-1)?.content ?? "";
+      expect(lastUser).toContain("Weather already fetched");
+      expect(lastUser).toContain("TYPICAL means past-year averages, not a forecast");
+      expect(lastUser).toContain("2026-10-10 FORECAST: Rain, 16-23°C, 85% chance of rain; rain risk: yes");
+      expect(lastUser).toContain("2026-10-11 TYPICAL: Cloudy, 15-22°C, rain on 2 of the last 5 years; rain risk: no");
+    }
+    expect(provider.calls[0].messages[0].content).toBe(provider.calls[4].messages[0].content);
+  });
+
+  it("keeps the weather in the synthesis turn", async () => {
+    const { orchestrator, provider } = buildWeatherRun();
+
+    await orchestrator.run(createRunInput());
+
+    const synthesisUser = provider.calls.at(-1)?.messages.at(-1)?.content ?? "";
+    expect(synthesisUser).toContain("2026-10-10 FORECAST: Rain, 16-23°C, 85% chance of rain; rain risk: yes");
+  });
+
+  it("caps the weather block size", async () => {
+    const { buildWeatherContextBlock } = await import("../src/modules/agent/weatherContextBlock");
+    const many = {
+      ...weatherOutput,
+      days: Array.from({ length: 40 }, (_, index) => ({
+        ...weatherOutput.days[0],
+        date: `2026-10-${String((index % 28) + 1).padStart(2, "0")}`,
+        summary: "x".repeat(200)
+      }))
+    };
+
+    const block = buildWeatherContextBlock(many);
+
+    expect(block.length).toBeLessThanOrEqual(2000);
+    expect(block.split("\n").filter((line) => line.startsWith("- ")).length).toBeLessThanOrEqual(14);
+  });
+
+  it("ignores weather results with no usable day", () => {
+    return import("../src/modules/agent/weatherContextBlock").then(({ buildWeatherContextBlock }) => {
+      expect(buildWeatherContextBlock({ ...weatherOutput, days: [{ date: "2026-10-10", status: "UNAVAILABLE" }] })).toBe("");
+      expect(buildWeatherContextBlock({ unavailable: true })).toBe("");
+    });
+  });
+});
+
+describe("unavailable tools", () => {
+  it("keeps the run alive when the model calls a tool that is not registered", async () => {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}',
+      "Weather is not available, so here is the plan without it.",
+      "Weather is not available, so here is the plan without it."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: [],
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const continuation = provider.calls[1].messages.at(-1)?.content ?? "";
+    expect(continuation).toContain("AGENT_TOOL_NOT_FOUND");
+    expect(continuation).toContain("continue without it");
+  });
+});

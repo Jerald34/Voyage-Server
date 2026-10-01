@@ -7,6 +7,7 @@ import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
 import type { PlaceSelectionSession } from "../../services/places/placeTypes";
 import { buildPlaceAdvisoryBlock, savedItemAdvisories } from "./placeAdvisoryBlock";
 import { buildTravelerNeedsBlock, parseStoredTravelerNeeds } from "./travelerNeeds";
+import { buildWeatherContextBlock, isUsableWeatherOutput } from "./weatherContextBlock";
 import { overlayPlaceAdvisories } from "../itineraries/savedPlaceAdvisories";
 import type {
   AgentOrchestrator,
@@ -419,6 +420,9 @@ export function createAgentOrchestrator(options: {
         let toolCallsExecuted = 0;
         let hadRecoverableFailure = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
+        // The latest usable weather_forecast result, rendered compactly. The raw result
+        // scrolls out of the continuation tail after a plan and a couple of adds.
+        let latestWeatherBlock = "";
 
         // Track how many times each item is touched by editing tools to detect cascade loops
         // where the agent repeatedly adjusts times/positions without converging.
@@ -505,6 +509,9 @@ export function createAgentOrchestrator(options: {
                 toolCall.name,
                 output
               );
+              if (toolCall.name === "weather_forecast" && isUsableWeatherOutput(output)) {
+                latestWeatherBlock = buildWeatherContextBlock(output);
+              }
               const compactOutput = makeCompactToolOutput(toolCall.name, output);
               toolResults.push({ name: toolCall.name, output: compactOutput });
               await Promise.all([
@@ -553,6 +560,22 @@ export function createAgentOrchestrator(options: {
               // Any 400-class tool input error is recoverable: feed the error message back as a tool
               // result so the next continuation turn can self-correct rather than failing the whole run.
               // Also covers granular itinerary tools rejecting malformed UUIDs / missing itineraries.
+              // The static prompt advertises tools that may be unregistered in this deployment
+              // (e.g. weather_forecast with WEATHER_PROVIDER=disabled), and models sometimes
+              // invent tool names. Tell the model and let it carry on rather than failing the run.
+              if (details.code === "AGENT_TOOL_NOT_FOUND") {
+                toolResults.push({
+                  name: toolCall.name,
+                  output: {
+                    unavailable: true,
+                    code: details.code,
+                    message: `The tool ${toolCall.name} is unavailable in this run; continue without it.`
+                  }
+                });
+                hadRecoverableFailure = true;
+                continue;
+              }
+
               const isCorrectableInputFailure =
                 details.code === "AGENT_TOOL_INPUT_INVALID" ||
                 (GRANULAR_ITINERARY_TOOL_NAMES.has(toolCall.name) && details.code === "ITINERARY_NOT_FOUND");
@@ -630,6 +653,7 @@ export function createAgentOrchestrator(options: {
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
             travelerNeedsBlock,
             buildRunDateBlock(now()),
+            latestWeatherBlock,
             continuationTaskBlock
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
@@ -790,7 +814,8 @@ export function createAgentOrchestrator(options: {
                 synthesisOmittedCount > 0
                   ? `Recent tool results JSON (last ${synthesisToolResults.length} of ${toolResults.length}; ${synthesisOmittedCount} older itinerary-streaming result(s) omitted because the cumulative state is above):`
                   : "Tool results JSON:",
-                stringifyToolResults(synthesisToolResults)
+                stringifyToolResults(synthesisToolResults),
+                latestWeatherBlock
               ].filter(Boolean).join("\n\n")
             }
           ];
