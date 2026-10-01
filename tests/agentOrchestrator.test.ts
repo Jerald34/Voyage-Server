@@ -20,6 +20,7 @@ import { createPlaceSelectionService } from "../src/services/places/placeSelecti
 import { createPlaceSnapshotRepository } from "../src/services/places/placeSnapshotRepository";
 import { buildPlaceGate } from "../src/services/places/placeGate";
 import { enrichResolvedPlaceForSnapshot } from "../src/modules/agent/tools/placeSnapshotEnrichment";
+import { createWeatherForecastTool } from "../src/modules/agent/tools/weatherTools";
 import { createItineraryService } from "../src/modules/itineraries/itineraryService";
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
@@ -2464,6 +2465,27 @@ describe("runtime date and image context", () => {
     expect(lastUser?.content).toContain("Build a Cebu itinerary.");
   });
 
+  it("tells the model today's date on continuation turns", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "web_search", "query": "Cebu festivals this month"}',
+      "Here is a draft itinerary.",
+      "Here is a draft itinerary."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["web_search"],
+      toolRegistry: createAgentToolRegistry([{ name: "web_search", async execute() { return []; } }]),
+      now: () => new Date("2026-10-01T03:00:00.000Z")
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(provider.calls.length).toBeGreaterThanOrEqual(2);
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("Today's date (UTC): 2026-10-01.");
+  });
+
   it("keeps the runtime context inside the text part of an image message", async () => {
     vi.stubGlobal(
       "fetch",
@@ -2516,6 +2538,43 @@ describe("weather tool failures", () => {
 
     expect(run.status).toBe("COMPLETED");
     expect(provider.calls[1].messages.at(-1)?.content).toContain("WEATHER_PROVIDER_UNAVAILABLE");
+  });
+
+  it("recovers when the real weather tool cannot geocode the place", async () => {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Atlantis", "startDate": "2026-10-10"}',
+      "I could not look up the weather, so I planned without it.",
+      "I could not look up the weather, so I planned without it."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast"],
+      toolRegistry: createAgentToolRegistry([
+        createWeatherForecastTool({
+          weather: {
+            name: "open-meteo",
+            getDailyForecast: vi.fn(async () => []),
+            getDailyHistory: vi.fn(async () => [])
+          },
+          geocoder: {
+            resolvePlace: vi.fn(async () => {
+              throw new ApiError(503, "MAPS_PROVIDER_UNAVAILABLE", "Nominatim could not find the requested place.");
+            })
+          },
+          agentService: service as never,
+          typicalYears: 5,
+          now: () => new Date("2026-10-01T00:00:00.000Z")
+        })
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("MAPS_PROVIDER_UNAVAILABLE");
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("Nominatim could not find the requested place.");
   });
 });
 

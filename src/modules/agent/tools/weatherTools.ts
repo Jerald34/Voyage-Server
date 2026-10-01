@@ -8,6 +8,10 @@ import { createRunRecord, toCompactMetadata } from "./toolUtils";
 
 /** Longest range one call may cover: keeps the tool result small for the model. */
 export const WEATHER_TOOL_MAX_DAYS = 14;
+/** startDate may be at most this many days before today (UTC vs local "today" slack). */
+const WEATHER_TOOL_MIN_START_OFFSET = -1;
+/** startDate may be at most this many days after today: a year out, plus a leap day. */
+const WEATHER_TOOL_MAX_START_OFFSET = 366;
 
 const isoDateSchema = z.string().refine(isIsoDate, "Use a real date in YYYY-MM-DD format.");
 
@@ -32,6 +36,21 @@ const weatherForecastInputSchema = z
     message: `Request at most ${WEATHER_TOOL_MAX_DAYS} days per call.`,
     path: ["endDate"]
   });
+
+/** Adds the today-relative startDate bound, so it is a recoverable input error. */
+function inputSchemaFor(today: string) {
+  return weatherForecastInputSchema.refine(
+    (value) => {
+      if (!isIsoDate(value.startDate)) return true;
+      const offset = daysBetween(today, value.startDate);
+      return offset >= WEATHER_TOOL_MIN_START_OFFSET && offset <= WEATHER_TOOL_MAX_START_OFFSET;
+    },
+    {
+      message: `startDate must be between ${addDays(today, WEATHER_TOOL_MIN_START_OFFSET)} and ${addDays(today, WEATHER_TOOL_MAX_START_OFFSET)}.`,
+      path: ["startDate"]
+    }
+  );
+}
 
 const CONDITION_TEXT: Record<DailyWeather["condition"], string> = {
   CLEAR: "Clear",
@@ -76,7 +95,8 @@ export function createWeatherForecastTool(options: {
   return {
     name: "weather_forecast",
     async execute(context, input) {
-      const parsed = weatherForecastInputSchema.parse(input);
+      const today = toIsoDate(now());
+      const parsed = inputSchemaFor(today).parse(input);
       const endDate = parsed.endDate ?? parsed.startDate;
       const place = await options.geocoder.resolvePlace({
         placeName: parsed.placeName,
@@ -90,7 +110,7 @@ export function createWeatherForecastTool(options: {
         provider: options.weather,
         location: place.location,
         dates,
-        today: toIsoDate(now()),
+        today,
         typicalYears: options.typicalYears
       });
 
@@ -98,7 +118,7 @@ export function createWeatherForecastTool(options: {
         const lookup = lookups.get(date);
         if (!lookup || lookup.status !== "OK") return { date, status: lookup?.status ?? "UNAVAILABLE" };
         const weather = lookup.weather;
-        return {
+        const base = {
           date,
           status: "OK",
           kind: weather.kind,
@@ -106,8 +126,19 @@ export function createWeatherForecastTool(options: {
           summary: describeWeatherForAgent(weather),
           rainRisk: isRainRisk(weather),
           temperatureMinC: weather.temperatureMinC,
-          temperatureMaxC: weather.temperatureMaxC,
-          precipitationProbabilityPct: weather.precipitationProbabilityPct
+          temperatureMaxC: weather.temperatureMaxC
+        };
+        if (weather.kind === "FORECAST") {
+          return { ...base, precipitationProbabilityPct: weather.precipitationProbabilityPct };
+        }
+        // A TYPICAL day's internal percentage is the share of past years that were wet.
+        // Exposing it as a probability invites "40% chance of rain", so it is withheld
+        // and the raw counts are given instead.
+        return {
+          ...base,
+          precipitationProbabilityPct: null,
+          wetYears: weather.wetYears,
+          sampleYears: weather.sampleYears
         };
       });
 
@@ -121,20 +152,24 @@ export function createWeatherForecastTool(options: {
         attribution: WEATHER_ATTRIBUTION.text
       };
 
-      await options.agentService.recordSources(createRunRecord(context), [
-        {
-          sourceType: "WEB",
-          title: `Weather for ${place.name} (Open-Meteo)`,
-          url: WEATHER_ATTRIBUTION.url,
-          snippet: days
-            .map((day) => `${day.date}: ${"summary" in day ? day.summary : day.status}`)
-            .join("; ")
-            .slice(0, 500),
-          provider: "open_meteo",
-          retrievedAt: new Date(),
-          metadata: toCompactMetadata({ input: parsed, location: result.location })
-        }
-      ]);
+      // A source citation only makes sense when Open-Meteo actually supplied data.
+      const hasWeather = days.some((day) => day.status === "OK");
+      if (hasWeather) {
+        await options.agentService.recordSources(createRunRecord(context), [
+          {
+            sourceType: "WEB",
+            title: `Weather for ${place.name} (Open-Meteo)`,
+            url: WEATHER_ATTRIBUTION.url,
+            snippet: days
+              .map((day) => `${day.date}: ${"summary" in day ? day.summary : day.status}`)
+              .join("; ")
+              .slice(0, 500),
+            provider: "open_meteo",
+            retrievedAt: new Date(),
+            metadata: toCompactMetadata({ input: parsed, location: result.location })
+          }
+        ]);
+      }
 
       return result;
     }

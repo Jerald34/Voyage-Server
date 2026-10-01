@@ -129,6 +129,103 @@ describe("weather_forecast tool", () => {
   });
 });
 
+describe("weather_forecast typical weather and bounds", () => {
+  // Same calendar day in each past year: wet in even years (2024, 2022), dry otherwise.
+  function historyRow(date: string) {
+    const wet = Number(date.slice(0, 4)) % 2 === 0;
+    return {
+      date,
+      weatherCode: 3,
+      temperatureMaxC: 20,
+      temperatureMinC: 14,
+      precipitationProbabilityPct: null,
+      precipitationMm: wet ? 5 : 0,
+      windSpeedMaxKph: 10,
+      uvIndexMax: null
+    };
+  }
+
+  function withHistory() {
+    const built = buildTool();
+    built.weather.getDailyHistory.mockImplementation(async (_location: unknown, start: string) => [historyRow(start)] as never);
+    return built;
+  }
+
+  it("labels days beyond the forecast window as TYPICAL and never as a chance of rain", async () => {
+    const { tool } = withHistory();
+
+    const result = (await tool.execute(context, { placeName: "Baguio", startDate: "2026-11-20" })) as {
+      days: Array<Record<string, unknown>>;
+      note?: string;
+    };
+
+    expect(result.days).toEqual([
+      {
+        date: "2026-11-20",
+        status: "OK",
+        kind: "TYPICAL",
+        condition: "CLOUDY",
+        summary: "Cloudy, 14-20°C, rain on 2 of the last 5 years",
+        rainRisk: false,
+        temperatureMinC: 14,
+        temperatureMaxC: 20,
+        precipitationProbabilityPct: null,
+        wetYears: 2,
+        sampleYears: 5
+      }
+    ]);
+    expect(result.note).toBe("TYPICAL days average the last 5 years; they are not a forecast.");
+    expect(JSON.stringify(result)).not.toContain("chance");
+  });
+
+  it("accepts a 14-day range and rejects 15 days", async () => {
+    const { tool } = withHistory();
+    const registry = createAgentToolRegistry([tool]);
+
+    const ok = (await registry.execute("weather_forecast", context, {
+      placeName: "Baguio",
+      startDate: "2026-10-01",
+      endDate: "2026-10-14"
+    })) as { days: unknown[] };
+    expect(ok.days).toHaveLength(14);
+    await expect(
+      registry.execute("weather_forecast", context, { placeName: "Baguio", startDate: "2026-10-01", endDate: "2026-10-15" })
+    ).rejects.toMatchObject({ code: "AGENT_TOOL_INPUT_INVALID" });
+  });
+
+  it("bounds startDate to yesterday through a year and a day out", async () => {
+    const { tool, geocoder } = withHistory();
+    const registry = createAgentToolRegistry([tool]);
+
+    await expect(
+      registry.execute("weather_forecast", context, { placeName: "Baguio", startDate: "2026-09-29" })
+    ).rejects.toMatchObject({ code: "AGENT_TOOL_INPUT_INVALID" });
+    await expect(
+      registry.execute("weather_forecast", context, { placeName: "Baguio", startDate: "2027-10-03" })
+    ).rejects.toMatchObject({ code: "AGENT_TOOL_INPUT_INVALID" });
+    expect(geocoder.resolvePlace).not.toHaveBeenCalled();
+
+    await expect(registry.execute("weather_forecast", context, { placeName: "Baguio", startDate: "2026-09-30" })).resolves.toBeTruthy();
+    await expect(registry.execute("weather_forecast", context, { placeName: "Baguio", startDate: "2027-10-02" })).resolves.toBeTruthy();
+  });
+
+  it("records no source when no day has weather", async () => {
+    const { tool, agentService, weather } = buildTool();
+    weather.getDailyForecast.mockRejectedValue(new Error("provider down"));
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    try {
+      const result = (await tool.execute(context, { placeName: "Baguio", startDate: "2026-10-10" })) as {
+        days: Array<{ status: string }>;
+      };
+      expect(result.days).toEqual([{ date: "2026-10-10", status: "UNAVAILABLE" }]);
+      expect(agentService.recordSources).not.toHaveBeenCalled();
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+});
+
 describe("weather_forecast wiring", () => {
   it("canonicalizes common spellings", () => {
     expect(canonicalToolName("weatherForecast")).toBe("weather_forecast");
