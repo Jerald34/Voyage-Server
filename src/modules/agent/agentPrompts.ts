@@ -146,6 +146,7 @@ export function buildVoyageSystemPrompt(toolListForPrompt: string) {
     'Example: {"tool": "search_google_places", "query": "best restaurants in Rome"}',
     'Example: {"tool": "search_nearby_google_places", "placeName": "Shibuya Crossing", "cityContext": "Tokyo, Japan", "query": "restaurants"}',
     'Example: {"tool": "route_logistics", "originPlaceName": "Shibuya Crossing", "destinationPlaceName": "Senso-ji", "cityContext": "Tokyo, Japan"}',
+    'Example (transit with less walking for mobility needs): {"tool": "estimate_route", "originPlaceName": "Burnham Park", "destinationPlaceName": "SM City Baguio", "cityContext": "Baguio City, Philippines", "travelMode": "TRANSIT", "transitRoutingPreference": "LESS_WALKING"}',
     'Example: {"tool": "weather_forecast", "placeName": "Baguio City", "cityContext": "Benguet, Philippines", "startDate": "2026-10-10", "endDate": "2026-10-12"}',
     'Example: {"tool": "create_itinerary", "destination": "Paris, France", "duration_days": 3, "activity_type": "luxury shopping", "highlights": ["Eiffel Tower & Seine Cruise", "Louvre Museum & Tuileries Garden", "Champs-Élysées Shopping"]}',
     'Example new draft skeleton: {"tool": "plan_itinerary", "trip": {"title": "3-Day Tokyo Trip", "destinationSummary": "Tokyo, Japan"}, "itinerary": {"title": "3-Day Tokyo Itinerary", "summary": "...", "days": [{"dayNumber": 1, "title": "Arrival and Shibuya", "items": []}, {"dayNumber": 2, "title": "Asakusa and Ueno", "items": []}, {"dayNumber": 3, "title": "Harajuku and Shinjuku", "items": []}]}}',

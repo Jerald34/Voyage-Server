@@ -366,6 +366,11 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         body.routingPreference = input.routingPreference;
       }
 
+      // The Routes API has no wheelchair option; for transit this is the closest control.
+      if (input.travelMode === "TRANSIT" && input.transitRoutingPreference) {
+        body.transitPreferences = { routingPreference: input.transitRoutingPreference };
+      }
+
       const response = await readJsonResponse<unknown>(
         fetchImpl,
         "https://routes.googleapis.com/directions/v2:computeRoutes",

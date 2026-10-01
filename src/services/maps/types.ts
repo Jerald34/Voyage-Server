@@ -90,6 +90,7 @@ export type MapsProvider = {
     destination: GeoPoint;
     travelMode?: "DRIVE" | "BICYCLE" | "WALK" | "TWO_WHEELER" | "TRANSIT";
     routingPreference?: "TRAFFIC_UNAWARE" | "TRAFFIC_AWARE" | "TRAFFIC_AWARE_OPTIMAL";
+    transitRoutingPreference?: "LESS_WALKING" | "FEWER_TRANSFERS";
   }): Promise<RouteEstimateResult>;
   /**
    * Inexpensive status-only lookup for an existing provider place ID: requests only
