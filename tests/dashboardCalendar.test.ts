@@ -7,6 +7,7 @@ import {
   type CalendarTripRef,
   type RawCalendarData
 } from "../src/modules/dashboard/calendar";
+import { calendarPayloadSchema } from "../src/modules/dashboard/dashboardSchemas";
 
 describe("calendarWindow", () => {
   it("pads the requested local dates to cover every timezone", () => {
@@ -172,5 +173,178 @@ describe("buildCalendar staff scoping", () => {
       trips: [],
       events: []
     });
+  });
+});
+
+describe("buildCalendar events", () => {
+  const lisbon = tripRef("t1", { title: "Lisbon Getaway", clientName: "Tanaka" });
+
+  function share(overrides: Partial<RawCalendarData["shares"][number]> = {}): RawCalendarData["shares"][number] {
+    return {
+      id: "s1",
+      clientName: null,
+      createdAt: new Date("2026-09-01T00:00:00.000Z"), // before the window
+      expiresAt: null,
+      revokedAt: null,
+      lastViewedAt: null,
+      viewCount: 0,
+      proposalRating: null,
+      proposalRatedAt: null,
+      trip: lisbon,
+      ...overrides
+    };
+  }
+
+  function expected(kind: string, occurredAt: string, detail: Record<string, unknown> = {}) {
+    return {
+      id: `${kind}:s1`,
+      kind,
+      tripId: "t1",
+      tripTitle: "Lisbon Getaway",
+      clientName: "Tanaka",
+      occurredAt,
+      detail
+    };
+  }
+
+  it("turns share timestamps inside the window into events, in time order", () => {
+    const raw = emptyRaw();
+    raw.shares = [
+      share({
+        createdAt: new Date("2026-09-28T09:00:00.000Z"),
+        expiresAt: new Date("2026-10-05T09:00:00.000Z"),
+        lastViewedAt: new Date("2026-10-03T02:00:00.000Z"),
+        viewCount: 4,
+        proposalRating: 5,
+        proposalRatedAt: new Date("2026-10-02T08:00:00.000Z")
+      })
+    ];
+    expect(build(raw).events).toEqual([
+      expected("share_sent", "2026-09-28T09:00:00.000Z"),
+      expected("proposal_rated", "2026-10-02T08:00:00.000Z", { rating: 5 }),
+      expected("client_viewed", "2026-10-03T02:00:00.000Z", { viewCount: 4 }),
+      expected("share_expires", "2026-10-05T09:00:00.000Z")
+    ]);
+  });
+
+  it("names the client the link was shared with", () => {
+    const raw = emptyRaw();
+    raw.shares = [share({ clientName: "Ken Tanaka", createdAt: new Date("2026-09-28T09:00:00.000Z") })];
+    expect(build(raw).events[0].clientName).toBe("Ken Tanaka");
+  });
+
+  it("skips the expiry of a revoked link", () => {
+    const raw = emptyRaw();
+    raw.shares = [
+      share({ expiresAt: new Date("2026-10-05T09:00:00.000Z"), revokedAt: new Date("2026-10-01T00:00:00.000Z") })
+    ];
+    expect(build(raw).events).toEqual([]);
+  });
+
+  it("skips shares that are not linked to a trip", () => {
+    const raw = emptyRaw();
+    raw.shares = [share({ trip: null, createdAt: new Date("2026-09-28T09:00:00.000Z") })];
+    expect(build(raw).events).toEqual([]);
+  });
+
+  it("adds client comments with a short excerpt", () => {
+    const raw = emptyRaw();
+    raw.comments = [
+      {
+        id: "c1",
+        content: `Can we swap the day 2 lunch spot? ${"x".repeat(100)}`,
+        authorName: "Ken",
+        createdAt: new Date("2026-10-02T10:00:00.000Z"),
+        share: { clientName: null, trip: lisbon }
+      }
+    ];
+    const [event] = build(raw).events;
+    expect(event).toMatchObject({ id: "client_commented:c1", kind: "client_commented", clientName: "Tanaka" });
+    expect(event.detail.excerpt).toHaveLength(80);
+    expect(event.detail.excerpt?.startsWith("Can we swap the day 2 lunch spot?")).toBe(true);
+    expect(event.detail.excerpt?.endsWith("…")).toBe(true);
+  });
+
+  it("falls back to the comment author when the trip has no client name", () => {
+    const raw = emptyRaw();
+    raw.comments = [
+      {
+        id: "c2",
+        content: "Looks great",
+        authorName: "Ken",
+        createdAt: new Date("2026-10-02T10:00:00.000Z"),
+        share: { clientName: null, trip: tripRef("t9", { clientName: null }) }
+      }
+    ];
+    expect(build(raw).events[0]).toMatchObject({ clientName: "Ken", detail: { excerpt: "Looks great" } });
+  });
+
+  it("adds submitted reviews with their rating", () => {
+    const raw = emptyRaw();
+    raw.reviews = [
+      {
+        id: "r1",
+        rating: 5,
+        reviewText: "Seamless trip, every detail handled.",
+        respondentName: "Maria Cruz",
+        submittedAt: new Date("2026-09-30T12:00:00.000Z"),
+        trip: tripRef("t2", { title: "Bali Honeymoon", clientName: null })
+      }
+    ];
+    expect(build(raw).events).toEqual([
+      {
+        id: "review_submitted:r1",
+        kind: "review_submitted",
+        tripId: "t2",
+        tripTitle: "Bali Honeymoon",
+        clientName: "Maria Cruz",
+        occurredAt: "2026-09-30T12:00:00.000Z",
+        detail: { rating: 5, excerpt: "Seamless trip, every detail handled." }
+      }
+    ]);
+  });
+
+  it("keeps events that could fall on the first day in any timezone", () => {
+    const raw = emptyRaw();
+    raw.shares = [
+      share({ id: "edge", createdAt: new Date("2026-09-26T10:00:00.000Z") }),
+      share({ id: "early", createdAt: new Date("2026-09-26T09:59:59.999Z") })
+    ];
+    expect(build(raw).events.map((event) => event.id)).toEqual(["share_sent:edge"]);
+  });
+
+  it("leaves out events on other people's trips for staff", () => {
+    const raw = emptyRaw();
+    raw.shares = [
+      share({
+        createdAt: new Date("2026-09-28T09:00:00.000Z"),
+        trip: tripRef("theirs", { createdByUserId: "someone-else" })
+      })
+    ];
+    expect(build(raw, "STAFF", STAFF).events).toEqual([]);
+    expect(build(raw, "OWNER", OWNER).events).toHaveLength(1);
+  });
+
+  it("produces a payload the response schema accepts", () => {
+    const raw = emptyRaw();
+    raw.trips = [datedTrip("kyoto", "2026-10-08", "2026-10-14")];
+    raw.undatedTrips = [{ createdByUserId: OWNER, assignedOrganizerUserId: null }];
+    raw.shares = [
+      share({
+        createdAt: new Date("2026-09-28T09:00:00.000Z"),
+        lastViewedAt: new Date("2026-10-03T02:00:00.000Z"),
+        viewCount: 2
+      })
+    ];
+    raw.comments = [
+      {
+        id: "c1",
+        content: "Hi",
+        authorName: "Ken",
+        createdAt: new Date("2026-10-02T10:00:00.000Z"),
+        share: { clientName: null, trip: lisbon }
+      }
+    ];
+    expect(calendarPayloadSchema.safeParse(build(raw)).success).toBe(true);
   });
 });

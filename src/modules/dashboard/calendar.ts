@@ -1,6 +1,12 @@
 import { ApiError } from "../../http/errors";
 import { daysBetween } from "../../services/weather/dates";
-import type { CalendarPayload, CalendarTrip, DashboardRole } from "./dashboardTypes";
+import type {
+  CalendarEvent,
+  CalendarEventKind,
+  CalendarPayload,
+  CalendarTrip,
+  DashboardRole
+} from "./dashboardTypes";
 
 /**
  * Pure composition for the dashboard calendar: the request window and the
@@ -18,6 +24,8 @@ const HOUR_MS = 60 * 60 * 1000;
  * whatever lands outside its grid.
  */
 const TIMEZONE_SLACK_MS = 14 * HOUR_MS;
+/** Longest comment or review excerpt the calendar shows. */
+const EXCERPT_LENGTH = 80;
 
 export type CalendarWindow = {
   /** First requested local date, inclusive (YYYY-MM-DD). */
@@ -128,6 +136,12 @@ function toDateKey(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
+/** One line of text, cut to EXCERPT_LENGTH with an ellipsis. */
+function excerpt(text: string): string {
+  const flat = text.replace(/\s+/g, " ").trim();
+  return flat.length > EXCERPT_LENGTH ? `${flat.slice(0, EXCERPT_LENGTH - 1)}…` : flat;
+}
+
 /**
  * Builds the calendar payload. STAFF see only trips they created or organize
  * (the staff worklist's rule); OWNER and ADMIN see the whole agency.
@@ -136,6 +150,8 @@ export function buildCalendar(raw: RawCalendarData, opts: BuildCalendarOptions):
   const { role, userId, window } = opts;
   const inScope = (trip: Pick<CalendarTripRef, "createdByUserId" | "assignedOrganizerUserId">): boolean =>
     role !== "STAFF" || trip.createdByUserId === userId || trip.assignedOrganizerUserId === userId;
+  const inWindow = (at: Date | null): at is Date =>
+    at !== null && at >= window.fromInstant && at <= window.toInstant;
 
   const trips: CalendarTrip[] = [];
   for (const trip of raw.trips) {
@@ -158,12 +174,78 @@ export function buildCalendar(raw: RawCalendarData, opts: BuildCalendarOptions):
   }
   trips.sort((a, b) => a.startDate.localeCompare(b.startDate) || a.tripTitle.localeCompare(b.tripTitle));
 
+  const events: CalendarEvent[] = [];
+  const addEvent = (
+    kind: CalendarEventKind,
+    sourceId: string,
+    trip: CalendarTripRef,
+    clientName: string | null,
+    occurredAt: Date,
+    detail: CalendarEvent["detail"] = {}
+  ) => {
+    events.push({
+      id: `${kind}:${sourceId}`,
+      kind,
+      tripId: trip.id,
+      tripTitle: trip.title,
+      clientName,
+      occurredAt: occurredAt.toISOString(),
+      detail
+    });
+  };
+
+  for (const share of raw.shares) {
+    const trip = share.trip;
+    if (trip === null || !inScope(trip)) continue;
+    const clientName = share.clientName ?? trip.clientName;
+    if (inWindow(share.createdAt)) {
+      addEvent("share_sent", share.id, trip, clientName, share.createdAt);
+    }
+    if (share.revokedAt === null && inWindow(share.expiresAt)) {
+      addEvent("share_expires", share.id, trip, clientName, share.expiresAt);
+    }
+    if (inWindow(share.lastViewedAt)) {
+      addEvent("client_viewed", share.id, trip, clientName, share.lastViewedAt, { viewCount: share.viewCount });
+    }
+    if (share.proposalRating !== null && inWindow(share.proposalRatedAt)) {
+      addEvent("proposal_rated", share.id, trip, clientName, share.proposalRatedAt, {
+        rating: share.proposalRating
+      });
+    }
+  }
+
+  for (const comment of raw.comments) {
+    const trip = comment.share.trip;
+    if (trip === null || !inScope(trip) || !inWindow(comment.createdAt)) continue;
+    const clientName = comment.share.clientName ?? trip.clientName ?? comment.authorName;
+    addEvent("client_commented", comment.id, trip, clientName, comment.createdAt, {
+      excerpt: excerpt(comment.content)
+    });
+  }
+
+  for (const review of raw.reviews) {
+    if (!inScope(review.trip) || !inWindow(review.submittedAt)) continue;
+    addEvent(
+      "review_submitted",
+      review.id,
+      review.trip,
+      review.trip.clientName ?? review.respondentName,
+      review.submittedAt,
+      {
+        rating: review.rating,
+        ...(review.reviewText ? { excerpt: excerpt(review.reviewText) } : {})
+      }
+    );
+  }
+
+  events.sort((a, b) => a.occurredAt.localeCompare(b.occurredAt) || a.id.localeCompare(b.id));
+
   return {
     from: window.from,
     to: window.to,
     generatedAt: opts.now.toISOString(),
     tripsWithoutDates: raw.undatedTrips.filter(inScope).length,
     trips,
-    events: []
+    events
   };
 }
