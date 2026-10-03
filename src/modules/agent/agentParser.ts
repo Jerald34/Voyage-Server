@@ -46,6 +46,11 @@ export function canonicalToolName(name: string) {
     placeinsights: "place_insights",
     searchnearbygoogleplaces: "search_nearby_google_places",
     getgoogleplacephotos: "get_google_place_photos",
+    weatherforecast: "weather_forecast",
+    get_weather: "weather_forecast",
+    getweather: "weather_forecast",
+    get_weather_forecast: "weather_forecast",
+    getweatherforecast: "weather_forecast",
     map_pinpoint_tool: "map_pinpoint",
     route_logistics_tool: "route_logistics",
     place_insights_tool: "place_insights"

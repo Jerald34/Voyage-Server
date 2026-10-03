@@ -55,6 +55,13 @@ vi.mock("../src/modules/shares/publicShareService", () => ({
   buildShareResponse: vi.fn(() => ({ share: { token: "share-token" }, itinerary: {} }))
 }));
 
+vi.mock("../src/modules/weather/weatherService", () => ({
+  itineraryWeatherService: {
+    forAgencyItinerary: vi.fn(async () => ({ provider: null, attribution: null, days: [] })),
+    forShareToken: vi.fn(async () => ({ provider: null, attribution: null, days: [] }))
+  }
+}));
+
 vi.mock("../src/modules/reviews/reviewService", () => ({
   reviewService: {
     checkTripReviewToken: vi.fn(async () => ({ ok: true })),
@@ -299,6 +306,7 @@ const publicRateLimitRouteCases: RateLimitRouteCase[] = [
   { name: "invitation lookup", method: "get", path: "/invitations/lookup", limit: 30 },
   { name: "public share read", method: "get", path: "/shared/share-token", limit: 60 },
   { name: "public share comments read", method: "get", path: "/shared/share-token/comments", limit: 60 },
+  { name: "public share weather read", method: "get", path: "/shared/share-token/weather", limit: 60 },
   { name: "public share comment write", method: "post", path: "/shared/share-token/comments", limit: 10, body: {} },
   { name: "public share rating write", method: "post", path: "/shared/share-token/rate", limit: 10, body: {} },
   { name: "review check", method: "get", path: "/reviews/trip-token/check", limit: 30 },

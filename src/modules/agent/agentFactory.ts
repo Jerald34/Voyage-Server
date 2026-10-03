@@ -29,11 +29,13 @@ import {
   createUpdateItineraryDayTool,
   createUpdateItineraryItemTool,
   createUpdateItineraryTool,
+  createWeatherForecastTool,
   createWebSearchTool
 } from "./agentTools";
 import { createGoogleMapsProvider, createNominatimMapsProvider } from "../../services/maps";
 import type { MapsProvider } from "../../services/maps";
 import { createWebSearchProvider } from "../../services/webSearch";
+import { getWeatherProvider } from "../../services/weather";
 import { getModelProvider, getModelProviderInfo } from "../../services/modelProvider";
 import { backfillUnenrichedSnapshots, enrichResolvedPlaceForSnapshot } from "./tools/placeSnapshotEnrichment";
 import { createPlaceSession } from "../../services/places/placeServices";
@@ -51,6 +53,7 @@ const GOOGLE_MAPS_TOOL_NAMES = [
 ] as const;
 
 const WEB_SEARCH_TOOL_NAMES = ["web_search"] as const;
+const WEATHER_TOOL_NAMES = ["weather_forecast"] as const;
 
 function createAgencyAgentOrchestrator() {
   let mapsForBackfill: MapsProvider | null = null;
@@ -149,6 +152,23 @@ function createAgencyAgentOrchestrator() {
     // Keep the agent route import-safe when Search is not configured.
   }
 
+  try {
+    const weather = getWeatherProvider();
+    if (weather) {
+      // City-level geocoding is enough for weather, and Nominatim needs no paid key.
+      tools.push(
+        createWeatherForecastTool({
+          weather,
+          geocoder: createNominatimMapsProvider(),
+          agentService,
+          typicalYears: env.WEATHER_TYPICAL_YEARS
+        })
+      );
+    }
+  } catch {
+    // Keep the agent route import-safe when weather or geocoding is not configured.
+  }
+
   return createAgentOrchestrator({
     modelProvider: getModelProvider(),
     agentService,
@@ -158,11 +178,13 @@ function createAgencyAgentOrchestrator() {
     toolRegistry: createAgentToolRegistry(tools, {
       maxCallsByGroup: {
         google_maps: env.GOOGLE_MAPS_MAX_CALLS_PER_RUN,
-        web_search: env.WEB_SEARCH_MAX_CALLS_PER_RUN
+        web_search: env.WEB_SEARCH_MAX_CALLS_PER_RUN,
+        weather: env.WEATHER_MAX_CALLS_PER_RUN
       },
       toolGroups: {
         ...Object.fromEntries(GOOGLE_MAPS_TOOL_NAMES.map((toolName) => [toolName, "google_maps"])),
-        ...Object.fromEntries(WEB_SEARCH_TOOL_NAMES.map((toolName) => [toolName, "web_search"]))
+        ...Object.fromEntries(WEB_SEARCH_TOOL_NAMES.map((toolName) => [toolName, "web_search"])),
+        ...Object.fromEntries(WEATHER_TOOL_NAMES.map((toolName) => [toolName, "weather"]))
       }
     }),
     onBeforeRunComplete: mapsForBackfill

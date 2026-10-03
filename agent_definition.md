@@ -39,6 +39,7 @@ Used to generate the final response after all tool calls are complete.
 - Treat partial events (progressive adding of items) as cumulative.
 - **Brevity Rule**: Do not echo the entire itinerary table; provide a high-level summary only.
 - Never fabricate sources or data not present in tool output.
+- When traveler accessibility needs are listed, state in one sentence how the plan accommodates them, and call a place accessible only when its `metadata.accessibility` shows true.
 
 ---
 
@@ -68,13 +69,14 @@ Used to generate the final response after all tool calls are complete.
 | `search_nearby_google_places` | Finds nearby categories (restaurants). | `location`, `radius`, `query`. |
 | `get_google_place_details` | Detailed Google info by ID. | `placeId`. |
 | `get_google_place_photos` | Retrieves photo URLs for a place. | `placeId`. |
-| `estimate_route` | Distance/Duration calculation. | `origin`, `destination`, `travelMode`. |
+| `estimate_route` | Distance/Duration calculation. | `origin`, `destination`, `travelMode`, optional `transitRoutingPreference` (`LESS_WALKING` for travelers with mobility needs). |
 
 ### **Operations & Research Tools**
 | Tool Name | Description | Key Inputs |
 | :--- | :--- | :--- |
 | `record_agent_task` | Tracks internal work phases. | `label`, `status` (PENDING, RUNNING, COMPLETED, FAILED). |
 | `web_search` | Real-time web evidence (Serper). | `query`, `maxResults`. |
+| `weather_forecast` | Daily forecast up to ~15 days ahead, or typical weather from past years for later dates (Open-Meteo). | `placeName`, `cityContext`, `startDate` (yesterday to 366 days out), `endDate` (max 14 days). TYPICAL days report `wetYears`/`sampleYears`, never a rain probability. |
 
 ---
 
@@ -82,3 +84,7 @@ Used to generate the final response after all tool calls are complete.
 - **Prompts**: [agentPrompts.ts](file:///c:/Users/dever/OneDrive/Documents/Voyage/Voyage-Server/src/modules/agent/agentPrompts.ts)
 - **Tool Registry**: [agentTools.ts](file:///c:/Users/dever/OneDrive/Documents/Voyage/Voyage-Server/src/modules/agent/agentTools.ts)
 - **Tool Implementations**: `src/modules/agent/tools/`
+
+## Traveler accessibility needs
+
+Staff can set needs per planning thread: wheelchair user, limited mobility, seniors, low vision, hearing, and young children or a stroller, plus optional notes. The needs are sent with chat messages, stored on `AgentThread.travelerNeeds`, and injected into every turn's user-message runtime context. They are never put in the system prompt, share links or PDFs. The system prompt's "Accessibility-Aware Planning" rules tell the agent how to apply them. The needs block also goes into the synthesis turn's user message, so the final reply says how the plan accommodates them. Item titles, descriptions, `clientNotes` and `staffNotes` can appear on shares and PDFs, so the agent never mentions the travelers' conditions or needs there: descriptions name only place features (for example "step-free paths"), and accommodations are explained only in the chat reply. Place snapshots carry Google's wheelchair accessibility flags in `metadata.accessibility`; a missing flag means unknown.

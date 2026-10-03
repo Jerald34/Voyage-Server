@@ -1,5 +1,5 @@
 import { ApiError } from "../../http/errors";
-import type { GeoPoint, PlaceSearchResult, RouteEstimateResult, ResolvedPlace, MapsProvider } from "./types";
+import type { GeoPoint, PlaceAccessibilityOptions, PlaceSearchResult, RouteEstimateResult, ResolvedPlace, MapsProvider } from "./types";
 import { redactSecrets } from "../../utils/redaction";
 
 type GooglePlace = {
@@ -64,6 +64,24 @@ export function parseBusinessStatus(value: unknown) {
   return value === "OPERATIONAL" || value === "CLOSED_TEMPORARILY" || value === "CLOSED_PERMANENTLY"
     ? value
     : undefined;
+}
+
+const ACCESSIBILITY_KEYS = [
+  "wheelchairAccessibleEntrance",
+  "wheelchairAccessibleParking",
+  "wheelchairAccessibleRestroom",
+  "wheelchairAccessibleSeating"
+] as const;
+
+/** Keeps only real booleans. An absent field means unknown, never false. */
+export function parseAccessibilityOptions(value: unknown): PlaceAccessibilityOptions | undefined {
+  if (!isRecord(value)) return undefined;
+  const options: PlaceAccessibilityOptions = {};
+  for (const key of ACCESSIBILITY_KEYS) {
+    const flag = value[key];
+    if (typeof flag === "boolean") options[key] = flag;
+  }
+  return Object.keys(options).length > 0 ? options : undefined;
 }
 
 function parsePlace(place: unknown): PlaceSearchResult {

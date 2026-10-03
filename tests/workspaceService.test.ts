@@ -99,4 +99,30 @@ describe("workspaceService.getBootstrap", () => {
     expect(threadArgs?.select).not.toHaveProperty("messages");
     expect(threadArgs?.select).not.toHaveProperty("events");
   });
+
+  it("returns each thread's traveler needs so the composer can restore them", async () => {
+    resetMocks();
+    tripFindManyMock.mockResolvedValue([]);
+    threadFindManyMock.mockResolvedValue([
+      {
+        id: "t1",
+        agencyId: "a1",
+        tripId: null,
+        title: "Draft",
+        status: "ACTIVE",
+        createdByUserId: "u1",
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        travelerNeeds: { needs: ["WHEELCHAIR"], notes: null }
+      }
+    ]);
+    runEventFindManyMock.mockResolvedValue([]);
+    itineraryFindManyMock.mockResolvedValue([]);
+
+    const result = await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
+
+    const threadArgs = threadFindManyMock.mock.calls[0]?.[0] as { select?: Record<string, boolean> };
+    expect(threadArgs?.select).toHaveProperty("travelerNeeds", true);
+    expect(result.threads[0].travelerNeeds).toEqual({ needs: ["WHEELCHAIR"], notes: null });
+  });
 });

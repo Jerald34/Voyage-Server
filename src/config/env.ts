@@ -115,6 +115,13 @@ const envSchema = z.object({
   NOMINATIM_USER_AGENT: z.string().default("Voyage-Travel-Agent/1.0"),
   SERPER_API_KEY: z.string().default(""),
   WEB_SEARCH_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(5),
+  // --- Weather (Open-Meteo: free, no API key, non-commercial use) -------------
+  // "disabled" turns off the weather endpoints and the weather_forecast tool.
+  WEATHER_PROVIDER: z.enum(["open-meteo", "disabled"]).default("open-meteo"),
+  // Past years averaged for "typical weather" beyond the 16-day forecast.
+  WEATHER_TYPICAL_YEARS: z.coerce.number().int().min(1).max(10).default(5),
+  // weather_forecast tool calls one agent run may make.
+  WEATHER_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(4),
   CLOUDINARY_CLOUD_NAME: z.string().default(""),
   CLOUDINARY_API_KEY: z.string().default(""),
   CLOUDINARY_API_SECRET: z.string().default(""),

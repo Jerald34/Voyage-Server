@@ -79,3 +79,5 @@ Google Custom Search powers the `web_search` tool. Configure both:
 - `GOOGLE_SEARCH_ENGINE_ID`
 
 Google Maps and Google Search are optional for local development. When they are not configured, the related provider calls return clear unavailable errors while the rest of the agent workflow remains testable with fake providers.
+
+Open-Meteo powers the per-day weather on itineraries, share links and PDFs, and the `weather_forecast` agent tool. It needs no API key. Set `WEATHER_PROVIDER=disabled` to turn weather off. The free Open-Meteo API is for non-commercial use and requires the credit "Weather data by Open-Meteo.com", which the client shows wherever weather appears.

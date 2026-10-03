@@ -6,6 +6,13 @@ import type { AgentEvent } from "./agentSchemas";
 import type { AgentToolContext, AgentToolRegistry } from "./agentTools";
 import type { PlaceSelectionSession } from "../../services/places/placeTypes";
 import { buildPlaceAdvisoryBlock, savedItemAdvisories } from "./placeAdvisoryBlock";
+import { buildTravelerNeedsBlock, parseStoredTravelerNeeds } from "./travelerNeeds";
+import {
+  buildWeatherContextBlocks,
+  isUsableWeatherOutput,
+  MAX_WEATHER_PLACES,
+  weatherLocationKey
+} from "./weatherContextBlock";
 import { overlayPlaceAdvisories } from "../itineraries/savedPlaceAdvisories";
 import type {
   AgentOrchestrator,
@@ -45,7 +52,9 @@ import {
   availableToolSet,
   buildRuntimeContextBlock,
   buildTaskListBlock,
+  buildRunDateBlock,
   injectRuntimeContextIntoLastUser,
+  attachImagePartsToLastUser,
   makeCompactToolOutput
 } from "./agentContextBuilder";
 
@@ -89,6 +98,8 @@ async function streamModelCompletion(options: {
 // still passed via activeItineraryContext.itinerary, so trimming history does not lose truth.
 const CONTINUATION_TOOL_RESULTS_TAIL = 3;
 const SYNTHESIS_TOOL_RESULTS_TAIL = 5;
+// The first failures get "unavailable" feedback; this one ends the tool loop.
+const MAX_UNKNOWN_TOOL_FAILURES = 3;
 
 export function createAgentOrchestrator(options: {
   modelProvider: ModelProvider;
@@ -165,6 +176,8 @@ export function createAgentOrchestrator(options: {
 
         let conversationHistory: ModelMessage[] = [];
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
+        // Per-thread traveler needs, formatted once per run for the runtime context.
+        let travelerNeedsBlock = "";
         // One session per run, created after the run's agency is established. A
         // failure here must not fail the run: without a session, tools simply
         // perform no place checks, which is the pre-feature behavior.
@@ -216,6 +229,7 @@ export function createAgentOrchestrator(options: {
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
           activeItineraryContext = buildActiveItineraryContext(thread);
+          travelerNeedsBlock = buildTravelerNeedsBlock(parseStoredTravelerNeeds(thread.travelerNeeds));
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
           conversationHistory = recentMessages
             .map((message: any) => {
@@ -275,29 +289,18 @@ export function createAgentOrchestrator(options: {
                 }
               ];
 
-          // Attach image parts to the last user message in the conversation.
-          if (userImageParts.length > 0) {
-            let lastUserIdx = -1;
-            for (let i = historyOrCurrent.length - 1; i >= 0; i--) {
-              if (historyOrCurrent[i].role === "user") { lastUserIdx = i; break; }
-            }
-            if (lastUserIdx >= 0) {
-              const lastUserMsg = historyOrCurrent[lastUserIdx];
-              historyOrCurrent[lastUserIdx] = {
-                ...lastUserMsg,
-                parts: [{ text: lastUserMsg.content }, ...userImageParts]
-              };
-            }
-          }
-
           const taskBlock = buildTaskListBlock(openTasks);
           const initialRuntimeContext = [
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
+            travelerNeedsBlock,
+            buildRunDateBlock(now()),
             taskBlock
           ].filter(Boolean).join("\n\n---\n\n");
-          const historyWithContext = injectRuntimeContextIntoLastUser(
-            historyOrCurrent,
-            initialRuntimeContext
+          // Inject first, then attach images, so an image message's text part
+          // carries the runtime context (Vertex sends only `parts`).
+          const historyWithContext = attachImagePartsToLastUser(
+            injectRuntimeContextIntoLastUser(historyOrCurrent, initialRuntimeContext),
+            userImageParts
           );
 
           const initialMessages = [
@@ -423,7 +426,17 @@ export function createAgentOrchestrator(options: {
 
         let toolCallsExecuted = 0;
         let hadRecoverableFailure = false;
+        // Calls to tools that are not registered in this run. A model that keeps
+        // calling one would otherwise loop until the continuation cap.
+        let unknownToolFailures = 0;
+        // Set when the tool loop must end now and go straight to synthesis.
+        let stopToolLoop = false;
         const toolResults: Array<{ name: string; output: unknown }> = [];
+        // Recent usable weather_forecast results, one per place (oldest first), rendered
+        // compactly. The raw results scroll out of the continuation tail after a plan and
+        // a couple of adds, and a multi-city trip needs every city's weather.
+        const weatherByPlace = new Map<string, unknown>();
+        let weatherBlock = "";
 
         // Track how many times each item is touched by editing tools to detect cascade loops
         // where the agent repeatedly adjusts times/positions without converging.
@@ -510,6 +523,18 @@ export function createAgentOrchestrator(options: {
                 toolCall.name,
                 output
               );
+              if (toolCall.name === "weather_forecast" && isUsableWeatherOutput(output)) {
+                const key = weatherLocationKey(output);
+                // Re-inserting moves a refreshed place to the newest position.
+                weatherByPlace.delete(key);
+                weatherByPlace.set(key, output);
+                while (weatherByPlace.size > MAX_WEATHER_PLACES) {
+                  const oldest = weatherByPlace.keys().next().value;
+                  if (oldest === undefined) break;
+                  weatherByPlace.delete(oldest);
+                }
+                weatherBlock = buildWeatherContextBlocks([...weatherByPlace.values()]);
+              }
               const compactOutput = makeCompactToolOutput(toolCall.name, output);
               toolResults.push({ name: toolCall.name, output: compactOutput });
               await Promise.all([
@@ -532,6 +557,8 @@ export function createAgentOrchestrator(options: {
 
               const isRecoverableToolFailure =
                 (toolCall.name === "web_search" && details.code === "WEB_SEARCH_PROVIDER_UNAVAILABLE") ||
+                (toolCall.name === "weather_forecast" &&
+                  ["WEATHER_PROVIDER_UNAVAILABLE", "MAPS_PROVIDER_UNAVAILABLE", "AGENT_TOOL_LIMIT_REACHED"].includes(details.code)) ||
                 ([
                   "search_google_places",
                   "get_google_place_details",
@@ -556,6 +583,30 @@ export function createAgentOrchestrator(options: {
               // Any 400-class tool input error is recoverable: feed the error message back as a tool
               // result so the next continuation turn can self-correct rather than failing the whole run.
               // Also covers granular itinerary tools rejecting malformed UUIDs / missing itineraries.
+              // The static prompt advertises tools that may be unregistered in this deployment
+              // (e.g. weather_forecast with WEATHER_PROVIDER=disabled), and models sometimes
+              // invent tool names. Tell the model and let it carry on rather than failing the run.
+              // After MAX_UNKNOWN_TOOL_FAILURES the model is not listening: end the tool
+              // loop and summarize what exists. The run still completes.
+              if (details.code === "AGENT_TOOL_NOT_FOUND") {
+                unknownToolFailures += 1;
+                toolResults.push({
+                  name: toolCall.name,
+                  output: {
+                    unavailable: true,
+                    code: details.code,
+                    message: `The tool ${toolCall.name} is unavailable in this run; continue without it. Do not call ${toolCall.name} again.`
+                  }
+                });
+                if (unknownToolFailures >= MAX_UNKNOWN_TOOL_FAILURES) {
+                  agentLogger.debug(input.runId, "Stopping the tool loop: repeated calls to an unavailable tool");
+                  stopToolLoop = true;
+                  return;
+                }
+                hadRecoverableFailure = true;
+                continue;
+              }
+
               const isCorrectableInputFailure =
                 details.code === "AGENT_TOOL_INPUT_INVALID" ||
                 (GRANULAR_ITINERARY_TOOL_NAMES.has(toolCall.name) && details.code === "ITINERARY_NOT_FOUND");
@@ -621,7 +672,12 @@ export function createAgentOrchestrator(options: {
           historyPrefix = historyPrefix.slice(0, -1);
         }
 
-        while (shouldContinueLoop && continuationsRun < maxContinuations && toolCallsExecuted < maxToolCallsPerRun) {
+        while (
+          shouldContinueLoop &&
+          !stopToolLoop &&
+          continuationsRun < maxContinuations &&
+          toolCallsExecuted < maxToolCallsPerRun
+        ) {
           checkCancelled();
           continuationsRun += 1;
           hadRecoverableFailure = false;
@@ -631,6 +687,9 @@ export function createAgentOrchestrator(options: {
           const continuationTaskBlock = buildTaskListBlock(openTasks);
           const continuationRuntimeContext = [
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
+            travelerNeedsBlock,
+            buildRunDateBlock(now()),
+            weatherBlock,
             continuationTaskBlock
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
@@ -748,7 +807,7 @@ export function createAgentOrchestrator(options: {
           const continuationTool = nextParsed.toolCalls.some((c: { name: string }) =>
             CONTINUATION_TRIGGER_TOOL_NAMES.has(c.name)
           );
-          shouldContinueLoop = lastInvokedItineraryTool || continuationTool || hadRecoverableFailure;
+          shouldContinueLoop = (lastInvokedItineraryTool || continuationTool || hadRecoverableFailure) && !stopToolLoop;
         }
 
         // Update the assistantMessage seed used by synthesis to the last continuation if we ran one.
@@ -791,7 +850,10 @@ export function createAgentOrchestrator(options: {
                 synthesisOmittedCount > 0
                   ? `Recent tool results JSON (last ${synthesisToolResults.length} of ${toolResults.length}; ${synthesisOmittedCount} older itinerary-streaming result(s) omitted because the cumulative state is above):`
                   : "Tool results JSON:",
-                stringifyToolResults(synthesisToolResults)
+                stringifyToolResults(synthesisToolResults),
+                weatherBlock,
+                // User content, not the system prompt: the synthesis prompt stays byte-identical.
+                travelerNeedsBlock
               ].filter(Boolean).join("\n\n")
             }
           ];

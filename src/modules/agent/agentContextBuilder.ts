@@ -1,3 +1,4 @@
+import type { ModelMessage, ModelMessagePart } from "../../services/modelProvider";
 import { canonicalToolName } from "./agentParser";
 
 // ---------------------------------------------------------------------------
@@ -74,7 +75,8 @@ export const CONTINUATION_TRIGGER_TOOL_NAMES = new Set([
   "route_logistics",
   "place_insights",
   "search_nearby_google_places",
-  "get_google_place_photos"
+  "get_google_place_photos",
+  "weather_forecast"
 ]);
 
 // ---------------------------------------------------------------------------
@@ -356,6 +358,33 @@ export function injectRuntimeContextIntoLastUser(
         ...messages[i],
         content: `${runtimeContext}\n\n---\n\n${messages[i].content}`
       };
+      return next;
+    }
+  }
+  return messages;
+}
+
+/**
+ * The model has no clock. Without today's date it resolves "next Friday" or a
+ * year-less "Dec 5" against its training data, which breaks forecast windows.
+ * User-message content, so the cached system instruction stays byte-identical.
+ */
+export function buildRunDateBlock(now: Date): string {
+  const today = now.toISOString().slice(0, 10);
+  return `Today's date (UTC): ${today}. Resolve relative or year-less dates (for example "next Friday" or "Dec 5") against it.`;
+}
+
+/**
+ * Attach image parts to the LAST user message, building its text part from the
+ * message's CURRENT content. Call this after runtime-context injection: Vertex
+ * sends `parts` instead of `content`, so parts built earlier drop the context.
+ */
+export function attachImagePartsToLastUser(messages: ModelMessage[], imageParts: ModelMessagePart[]): ModelMessage[] {
+  if (imageParts.length === 0) return messages;
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    if (messages[i].role === "user") {
+      const next = messages.slice();
+      next[i] = { ...messages[i], parts: [{ text: messages[i].content }, ...imageParts] };
       return next;
     }
   }
