@@ -29,8 +29,19 @@ describe("calendar repository", () => {
       expect(args.where.agencyId).toBe("agency-1");
     }
     expect(client.itineraryShare.findMany.mock.calls[0][0].where.agencyId).toBe("agency-1");
-    expect(client.itineraryComment.findMany.mock.calls[0][0].where.share).toEqual({ agencyId: "agency-1" });
+    expect(client.itineraryComment.findMany.mock.calls[0][0].where.share).toEqual({
+      agencyId: "agency-1",
+      trip: { agencyId: "agency-1" }
+    });
     expect(client.tripReview.findMany.mock.calls[0][0].where.agencyId).toBe("agency-1");
+  });
+
+  it("also requires the related trip to belong to the agency", async () => {
+    const client = fakeClient();
+    await fetchWith(client);
+
+    expect(client.itineraryShare.findMany.mock.calls[0][0].where.trip).toEqual({ agencyId: "agency-1" });
+    expect(client.tripReview.findMany.mock.calls[0][0].where.trip).toEqual({ agencyId: "agency-1" });
   });
 
   it("asks only for non-archived trips that can overlap the window", async () => {

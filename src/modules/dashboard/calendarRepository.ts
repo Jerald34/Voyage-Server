@@ -4,8 +4,9 @@ import type { CalendarWindow, RawCalendarData } from "./calendar";
 
 /**
  * Reads the rows the dashboard calendar needs for one agency and one window.
- * Every query is scoped to the agency; role scoping (staff see their own
- * trips) happens in `buildCalendar`, so the rules stay unit-testable.
+ * Every query is scoped to the agency, and the related trip must belong to it
+ * as well. Role scoping (staff see their own trips) happens in
+ * `buildCalendar`, so the rules stay unit-testable.
  */
 export interface CalendarRepository {
   fetchCalendarWindow(agencyId: string, window: CalendarWindow): Promise<RawCalendarData>;
@@ -53,6 +54,8 @@ export function createPrismaCalendarRepository(client: PrismaClient = prisma): C
           where: {
             agencyId,
             tripId: { not: null },
+            // Defence in depth: the trip must be this agency's too.
+            trip: { agencyId },
             OR: [
               { createdAt: instantRange },
               { expiresAt: instantRange },
@@ -74,7 +77,7 @@ export function createPrismaCalendarRepository(client: PrismaClient = prisma): C
           }
         }),
         client.itineraryComment.findMany({
-          where: { createdAt: instantRange, share: { agencyId } },
+          where: { createdAt: instantRange, share: { agencyId, trip: { agencyId } } },
           select: {
             id: true,
             content: true,
@@ -84,7 +87,7 @@ export function createPrismaCalendarRepository(client: PrismaClient = prisma): C
           }
         }),
         client.tripReview.findMany({
-          where: { agencyId, submittedAt: instantRange },
+          where: { agencyId, trip: { agencyId }, submittedAt: instantRange },
           select: {
             id: true,
             rating: true,
