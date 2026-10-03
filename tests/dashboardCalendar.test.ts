@@ -271,6 +271,31 @@ describe("buildCalendar events", () => {
     expect(event.detail.excerpt?.endsWith("…")).toBe(true);
   });
 
+  it("never splits an emoji when it cuts the excerpt", () => {
+    const raw = emptyRaw();
+    const comment = (id: string, content: string) => ({
+      id,
+      content,
+      authorName: "Ken",
+      createdAt: new Date("2026-10-02T10:00:00.000Z"),
+      share: { clientName: null, trip: lisbon }
+    });
+    // The emoji is the 79th character, so a cut after 79 UTF-16 units lands inside it.
+    raw.comments = [
+      comment("straddle", `${"a".repeat(78)}😀${"b".repeat(20)}`),
+      // 60 emoji are 60 characters (120 UTF-16 units), so they fit without a cut.
+      comment("fits", "😀".repeat(60))
+    ];
+    const events = build(raw).events;
+    const straddle = events.find((event) => event.id === "client_commented:straddle")!;
+    const fits = events.find((event) => event.id === "client_commented:fits")!;
+
+    expect(straddle.detail.excerpt).toBe(`${"a".repeat(78)}😀…`);
+    expect(Array.from(straddle.detail.excerpt!)).toHaveLength(80);
+    expect(straddle.detail.excerpt!.isWellFormed()).toBe(true);
+    expect(fits.detail.excerpt).toBe("😀".repeat(60));
+  });
+
   it("falls back to the comment author when the trip has no client name", () => {
     const raw = emptyRaw();
     raw.comments = [

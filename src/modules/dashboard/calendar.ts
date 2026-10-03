@@ -139,10 +139,14 @@ function toDateKey(value: Date): string {
   return value.toISOString().slice(0, 10);
 }
 
-/** One line of text, cut to EXCERPT_LENGTH with an ellipsis. */
+/**
+ * One line of text, cut to EXCERPT_LENGTH characters with an ellipsis. Counts
+ * code points, not UTF-16 units, so an emoji is never split in half.
+ */
 function excerpt(text: string): string {
   const flat = text.replace(/\s+/g, " ").trim();
-  return flat.length > EXCERPT_LENGTH ? `${flat.slice(0, EXCERPT_LENGTH - 1)}…` : flat;
+  const chars = Array.from(flat);
+  return chars.length > EXCERPT_LENGTH ? `${chars.slice(0, EXCERPT_LENGTH - 1).join("")}…` : flat;
 }
 
 /**
