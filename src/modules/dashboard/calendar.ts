@@ -36,6 +36,8 @@ export type CalendarWindow = {
   fromDayStart: Date;
   /** `to` at 00:00Z. */
   toDayStart: Date;
+  /** The day after `to` at 00:00Z (exclusive): a date-only trip field on `to` is below it at any time of day. */
+  toDayEnd: Date;
   /** Earliest instant that falls on `from` in any timezone. */
   fromInstant: Date;
   /** Latest instant that falls on `to` in any timezone. */
@@ -126,6 +128,7 @@ export function calendarWindow(from: string, to: string): CalendarWindow {
     to,
     fromDayStart,
     toDayStart,
+    toDayEnd: new Date(toDayStart.getTime() + 24 * HOUR_MS),
     fromInstant: new Date(fromDayStart.getTime() - TIMEZONE_SLACK_MS),
     toInstant: new Date(toDayStart.getTime() + 24 * HOUR_MS + TIMEZONE_SLACK_MS - 1)
   };

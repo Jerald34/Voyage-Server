@@ -16,8 +16,14 @@ describe("calendarWindow", () => {
     expect(window.to).toBe("2026-11-07");
     expect(window.fromDayStart.toISOString()).toBe("2026-09-27T00:00:00.000Z");
     expect(window.toDayStart.toISOString()).toBe("2026-11-07T00:00:00.000Z");
+    expect(window.toDayEnd.toISOString()).toBe("2026-11-08T00:00:00.000Z");
     expect(window.fromInstant.toISOString()).toBe("2026-09-26T10:00:00.000Z");
     expect(window.toInstant.toISOString()).toBe("2026-11-08T13:59:59.999Z");
+  });
+
+  it("ends the day window at the start of the next UTC day, across month and year ends", () => {
+    expect(calendarWindow("2026-12-01", "2026-12-31").toDayEnd.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    expect(calendarWindow("2026-10-03", "2026-10-03").toDayEnd.toISOString()).toBe("2026-10-04T00:00:00.000Z");
   });
 
   it("allows a single day", () => {

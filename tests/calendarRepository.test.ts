@@ -39,7 +39,8 @@ describe("calendar repository", () => {
 
     const dated = client.clientTrip.findMany.mock.calls[0][0].where;
     expect(dated.status).toEqual({ not: "ARCHIVED" });
-    expect(dated.startDate).toEqual({ not: null, lte: new Date("2026-11-07T00:00:00.000Z") });
+    // Strictly before the day after `to`, so a trip stored at 2026-11-07T09:00Z still counts.
+    expect(dated.startDate).toEqual({ not: null, lt: new Date("2026-11-08T00:00:00.000Z") });
     expect(dated.OR).toEqual([
       { endDate: { gte: new Date("2026-09-27T00:00:00.000Z") } },
       { startDate: { gte: new Date("2026-09-27T00:00:00.000Z") } }

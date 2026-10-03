@@ -29,7 +29,9 @@ export function createPrismaCalendarRepository(client: PrismaClient = prisma): C
           where: {
             agencyId,
             status: { not: "ARCHIVED" },
-            startDate: { not: null, lte: window.toDayStart },
+            // Before the day after `to`, the same cut `buildCalendar` makes on
+            // dates, so a trip stored mid-day on `to` is not dropped here.
+            startDate: { not: null, lt: window.toDayEnd },
             // Ends inside or after the window, or starts inside it (covers
             // trips with no end date and end dates before the start).
             OR: [{ endDate: { gte: window.fromDayStart } }, { startDate: { gte: window.fromDayStart } }]
