@@ -195,3 +195,49 @@ export type StaffDashboardPayload = {
 };
 
 export type DashboardPayload = OwnerDashboardPayload | StaffDashboardPayload;
+
+// ---------- Calendar ----------
+
+export type CalendarEventKind =
+  | "share_sent"
+  | "share_expires"
+  | "client_viewed"
+  | "client_commented"
+  | "proposal_rated"
+  | "review_submitted";
+
+export type CalendarTrip = {
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  /** destinationSummary, or the title when there is none; shown on the calendar tile. */
+  placeLabel: string;
+  /** Calendar date, YYYY-MM-DD. */
+  startDate: string;
+  /** Calendar date, YYYY-MM-DD; equals startDate for one-day or undated-end trips. */
+  endDate: string;
+  status: "DRAFT" | "IN_REVIEW" | "APPROVED_INTERNAL";
+  travelerCount: number | null;
+};
+
+export type CalendarEvent = {
+  /** "{kind}:{source row id}" — unique within a payload. */
+  id: string;
+  kind: CalendarEventKind;
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  /** ISO instant; the client places it on the viewer's local day. */
+  occurredAt: string;
+  detail: { viewCount?: number; rating?: number; excerpt?: string };
+};
+
+export type CalendarPayload = {
+  from: string;
+  to: string;
+  generatedAt: string;
+  /** In-scope, non-archived trips with no start date. */
+  tripsWithoutDates: number;
+  trips: CalendarTrip[];
+  events: CalendarEvent[];
+};
