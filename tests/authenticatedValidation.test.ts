@@ -827,8 +827,13 @@ describe("authenticated route validation", () => {
     const response = await request(app).get(
       `/agencies/${VALID_AGENCY_ID}/shares/${VALID_ITINERARY_ID}/comments`
     );
+    // Starts with "c" like a cuid, but the hyphens still rule it out.
+    const cPrefixedUuidResponse = await request(app).get(
+      `/agencies/${VALID_AGENCY_ID}/shares/c2222222-2222-4222-8222-222222222222/comments`
+    );
 
     expectValidationError(response);
+    expectValidationError(cPrefixedUuidResponse);
     expect(mockListComments).not.toHaveBeenCalled();
   });
 
