@@ -54,6 +54,7 @@ The Command Center stays exactly as it is.
 8. **Popovers and the account menu use a solid surface (`frame-popover`), not blur,** for maximum text contrast.
 9. **The rail logo is `/icon.svg`,** the Hops symbol already in `public/`.
 10. **The Team panel embeds `TeamPage` through a new `embedded` prop.** The Invite button also moves to the strong terracotta, a critique fix.
+11. **Calendar day buttons are labelled with the date and item count only** ("Thursday, October 8, 1 item"); the items are read from the day's popover. This keeps tile names short and stable.
 
 ## File structure
 
@@ -6066,10 +6067,12 @@ with
     });
 ```
 
-with
+with (staff keep the old heading until Task 24 rebuilds their dashboard)
 
 ```jsx
-    const firstSection = screen.getByRole("heading", { name: "Needs you today" });
+    const firstSection = screen.getByRole("heading", {
+      name: role === "STAFF" ? "Clients waiting on you" : "Needs you today",
+    });
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -6250,7 +6253,7 @@ with:
 - [ ] **Step 6: Run the tests to verify they pass**
 
 Run: `npx vitest run --pool=threads tests/dashboard-server-contract.test.jsx tests/home-page-dashboard-tab.test.jsx`
-Expected: the owner tests and the OWNER cases pass. The STAFF joined-notice case still fails until Task 24.
+Expected: PASS. The staff tests still check the old staff layout and pass unchanged.
 
 - [ ] **Step 7: Commit**
 
@@ -6270,9 +6273,9 @@ git commit -m "feat(dashboard): rebuild the owner dashboard around the calendar"
 - Modify: `app/agency/[agencyId]/components/dashboard/widgets/HeroContinueCard.jsx`
 - Modify: `app/agency/[agencyId]/components/dashboard/StaffMyWork.jsx` (replace the whole file)
 - Modify: `app/components/trip-dashboard/HomePage.jsx` (one prop)
-- Test: `tests/dashboard-server-contract.test.jsx` (one edit)
+- Test: `tests/dashboard-server-contract.test.jsx`, `tests/home-page-dashboard-tab.test.jsx` (one edit each)
 
-- [ ] **Step 1: Update the staff test**
+- [ ] **Step 1: Update the staff tests**
 
 In `tests/dashboard-server-contract.test.jsx`, inside `it("says why each client is waiting", …)`, replace
 
@@ -6284,6 +6287,20 @@ with
 
 ```jsx
     const worklist = screen.getByRole("region", { name: "Needs you today" });
+```
+
+In `tests/home-page-dashboard-tab.test.jsx`, in the joined-notice test, replace
+
+```jsx
+    const firstSection = screen.getByRole("heading", {
+      name: role === "STAFF" ? "Clients waiting on you" : "Needs you today",
+    });
+```
+
+with
+
+```jsx
+    const firstSection = screen.getByRole("heading", { name: "Needs you today" });
 ```
 
 - [ ] **Step 2: Run the tests to verify they fail**
@@ -6639,7 +6656,7 @@ Expected: PASS.
 - [ ] **Step 8: Commit**
 
 ```bash
-git add "app/agency/[agencyId]/components/dashboard/widgets/MyWorkColumn.jsx" "app/agency/[agencyId]/components/dashboard/widgets/HeroContinueCard.jsx" "app/agency/[agencyId]/components/dashboard/StaffMyWork.jsx" app/components/trip-dashboard/HomePage.jsx tests/dashboard-server-contract.test.jsx
+git add "app/agency/[agencyId]/components/dashboard/widgets/MyWorkColumn.jsx" "app/agency/[agencyId]/components/dashboard/widgets/HeroContinueCard.jsx" "app/agency/[agencyId]/components/dashboard/StaffMyWork.jsx" app/components/trip-dashboard/HomePage.jsx tests/dashboard-server-contract.test.jsx tests/home-page-dashboard-tab.test.jsx
 git commit -m "feat(dashboard): rebuild the staff dashboard around the calendar"
 ```
 
@@ -6780,6 +6797,7 @@ Implemented on `feat/dashboard-calendar` (both repos) from `docs/superpowers/pla
 - Empty to-do copy stays "All caught up."
 - KPI sparklines, the activity ribbon and the staff "Starting soon" cards are removed.
 - Popovers and the account menu use a solid surface. The rail logo is `/icon.svg`.
+- Calendar day buttons are labelled with the date and item count; the items are read from the day's popover.
 ```
 
 - [ ] **Step 6: Commit**
