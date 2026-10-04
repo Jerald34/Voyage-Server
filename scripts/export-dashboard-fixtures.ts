@@ -48,6 +48,7 @@ function share(id: string, tripId: string, fields: Partial<Share> & Pick<Share, 
   return {
     id,
     tripId,
+    clientName: null,
     viewCount: 0,
     lastViewedAt: null,
     expiresAt: null,
@@ -144,7 +145,9 @@ const boracay = trip("trip-boracay", {
 const trips = [kyoto, bali, palawan, seoul, cebu, batanes, siargao, vigan, boracay];
 
 // Current shares are unrated, so the rating KPI has no signal this period.
+// Shared with one family member by name: Recently viewed shows the link's name, not the trip's.
 const kyotoShare = share("share-kyoto", kyoto.id, {
+  clientName: "Maria Santos",
   createdAt: after(kyoto.createdAt, DAY + 7 * HOUR + 13 * MINUTE),
   viewCount: 4,
   lastViewedAt: at(-5 * HOUR),
