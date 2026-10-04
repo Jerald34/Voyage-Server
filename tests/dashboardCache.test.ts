@@ -112,6 +112,79 @@ describe("TtlCache", () => {
     expect(cache.get("a")).toBe(2);
   });
 
+  describe("generation", () => {
+    it("starts at a number and bumps on invalidate, invalidatePrefix and clear", () => {
+      const cache = new TtlCache<number>(1000);
+      const start = cache.generation;
+
+      cache.invalidate("a");
+      expect(cache.generation).toBe(start + 1);
+
+      cache.invalidatePrefix("agency-1:");
+      expect(cache.generation).toBe(start + 2);
+
+      cache.clear();
+      expect(cache.generation).toBe(start + 3);
+    });
+
+    it("does not move on get or set", () => {
+      const cache = new TtlCache<number>(1000);
+      const start = cache.generation;
+      cache.set("a", 1);
+      cache.get("a");
+      cache.get("missing");
+      expect(cache.generation).toBe(start);
+    });
+
+    it("setIfCurrent stores the value when nothing was invalidated since the read", () => {
+      const cache = new TtlCache<number>(1000);
+      const generation = cache.generation;
+
+      cache.setIfCurrent("a", 1, generation);
+
+      expect(cache.get("a")).toBe(1);
+    });
+
+    it("setIfCurrent skips the write after invalidate()", () => {
+      const cache = new TtlCache<number>(1000);
+      const generation = cache.generation;
+      cache.invalidate("other");
+
+      cache.setIfCurrent("a", 1, generation);
+
+      expect(cache.get("a")).toBeNull();
+    });
+
+    it("setIfCurrent skips the write after invalidatePrefix()", () => {
+      const cache = new TtlCache<number>(1000);
+      const generation = cache.generation;
+      cache.invalidatePrefix("agency-1:");
+
+      cache.setIfCurrent("agency-1:owner:30d", 1, generation);
+
+      expect(cache.get("agency-1:owner:30d")).toBeNull();
+    });
+
+    it("setIfCurrent skips the write after clear()", () => {
+      const cache = new TtlCache<number>(1000);
+      const generation = cache.generation;
+      cache.clear();
+
+      cache.setIfCurrent("a", 1, generation);
+
+      expect(cache.get("a")).toBeNull();
+    });
+
+    it("setIfCurrent works again with a generation read after the invalidation", () => {
+      const cache = new TtlCache<number>(1000);
+      cache.invalidate("a");
+
+      cache.setIfCurrent("a", 1, cache.generation);
+
+      expect(cache.get("a")).toBe(1);
+    });
+  });
+
   it("defaults to a cap of 1000 entries", () => {
     const cache = new TtlCache<number>(60_000);
     for (let index = 0; index < 1005; index += 1) {

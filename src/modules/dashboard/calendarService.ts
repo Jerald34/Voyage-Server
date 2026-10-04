@@ -32,6 +32,8 @@ export function createCalendarService(deps: {
     const cached = deps.cache.get(cacheKey);
     if (cached) return cached;
 
+    // Read before the await: an invalidate() while we fetch must stop us caching stale rows.
+    const generation = deps.cache.generation;
     const raw = await deps.repository.fetchCalendarWindow(opts.agencyId, window);
     const payload = buildCalendar(raw, {
       role: opts.role,
@@ -39,7 +41,7 @@ export function createCalendarService(deps: {
       window,
       now: opts.now ?? new Date()
     });
-    deps.cache.set(cacheKey, payload);
+    deps.cache.setIfCurrent(cacheKey, payload, generation);
     return payload;
   }
 

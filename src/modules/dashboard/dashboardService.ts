@@ -82,13 +82,15 @@ export function createDashboardService(deps: {
       return cached;
     }
 
+    // Read before the await: an invalidate() while we fetch must stop us caching stale rows.
+    const generation = deps.cache.generation;
     const raw = await deps.repository.fetchAgencyDashboardData(opts.agencyId);
     const payload =
       view === "owner"
         ? composeOwnerPayload({ raw, period, now })
         : composeStaffPayload({ raw, period, now, userId: opts.userId });
 
-    deps.cache.set(cacheKey, payload);
+    deps.cache.setIfCurrent(cacheKey, payload, generation);
     logFetch({ agencyId: opts.agencyId, view, period, durationMs: Date.now() - startedAt, cacheHit: false });
     return payload;
   }

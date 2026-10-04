@@ -72,6 +72,32 @@ describe("calendar service", () => {
     expect(fetchCalendarWindow).toHaveBeenCalledTimes(5);
   });
 
+  it("does not cache the stale result of a fetch that started before invalidate()", async () => {
+    const raw: RawCalendarData = { trips: [], undatedTrips: [], shares: [], comments: [], reviews: [] };
+    let finishFirstFetch!: (data: RawCalendarData) => void;
+    const fetchCalendarWindow = vi
+      .fn()
+      .mockImplementationOnce(
+        () =>
+          new Promise<RawCalendarData>((resolve) => {
+            finishFirstFetch = resolve;
+          })
+      )
+      .mockResolvedValue(raw);
+    const service = createCalendarService({
+      repository: { fetchCalendarWindow },
+      cache: new TtlCache<CalendarPayload>(60_000)
+    });
+
+    const inFlight = service.getCalendar({ ...BASE, userId: "owner", role: "OWNER" });
+    service.invalidate("agency-1"); // a reply lands while the first fetch is still reading
+    finishFirstFetch(raw);
+    await inFlight;
+
+    await service.getCalendar({ ...BASE, userId: "owner", role: "OWNER" });
+    expect(fetchCalendarWindow).toHaveBeenCalledTimes(2); // the pre-reply result was not cached
+  });
+
   it("rejects an invalid range before touching the database", async () => {
     const { service, fetchCalendarWindow } = setup();
     await expect(

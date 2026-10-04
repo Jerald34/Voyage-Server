@@ -508,6 +508,33 @@ describe("getDashboard – cache behaviour", () => {
   });
 });
 
+describe("getDashboard – invalidation while a fetch is in flight", () => {
+  it("does not cache the stale result of a fetch that started before invalidate()", async () => {
+    let calls = 0;
+    let finishFirstFetch!: (data: RawDashboardData) => void;
+    const repo = {
+      fetchAgencyDashboardData(_agencyId: string): Promise<RawDashboardData> {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<RawDashboardData>((resolve) => {
+            finishFirstFetch = resolve;
+          });
+        }
+        return Promise.resolve(emptyData());
+      }
+    } as DashboardRepository;
+    const svc = createDashboardService({ repository: repo, cache: new TtlCache<DashboardPayload>(60_000) });
+
+    const inFlight = svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    svc.invalidate(AGENCY); // a reply lands while the first fetch is still reading
+    finishFirstFetch(emptyData());
+    await inFlight;
+
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    expect(calls).toBe(2); // the pre-reply result was not cached, so this read went back to the repository
+  });
+});
+
 // ---------------------------------------------------------------------------
 // 6. `now` injection for deterministic results
 // ---------------------------------------------------------------------------
