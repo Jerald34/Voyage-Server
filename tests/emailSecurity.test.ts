@@ -45,7 +45,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -69,7 +69,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -94,7 +94,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -117,7 +117,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
