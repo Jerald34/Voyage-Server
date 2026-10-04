@@ -57,6 +57,21 @@ describe("calendar service", () => {
     expect(fetchCalendarWindow).toHaveBeenCalledTimes(2);
   });
 
+  it("invalidate() forgets every cached range for that agency only", async () => {
+    const { service, fetchCalendarWindow } = setup();
+    await service.getCalendar({ ...BASE, userId: "owner", role: "OWNER" });
+    await service.getCalendar({ ...BASE, userId: "staff-a", role: "STAFF" });
+    await service.getCalendar({ ...BASE, agencyId: "agency-2", userId: "owner", role: "OWNER" });
+    expect(fetchCalendarWindow).toHaveBeenCalledTimes(3);
+
+    service.invalidate("agency-1");
+
+    await service.getCalendar({ ...BASE, userId: "owner", role: "OWNER" });
+    await service.getCalendar({ ...BASE, userId: "staff-a", role: "STAFF" });
+    await service.getCalendar({ ...BASE, agencyId: "agency-2", userId: "owner", role: "OWNER" });
+    expect(fetchCalendarWindow).toHaveBeenCalledTimes(5);
+  });
+
   it("rejects an invalid range before touching the database", async () => {
     const { service, fetchCalendarWindow } = setup();
     await expect(

@@ -483,6 +483,29 @@ describe("getDashboard – cache behaviour", () => {
     await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "OWNER", view: "owner", period: "30d", now: NOW });
     expect(repo.calls).toBe(1); // same owner cache key → second is a cache hit
   });
+
+  it("invalidate() forgets the agency's owner and staff entries, so the next reads hit the repository", async () => {
+    const { svc, repo } = makeService(emptyData());
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+    expect(repo.calls).toBe(2);
+
+    svc.invalidate(AGENCY);
+
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+    expect(repo.calls).toBe(4);
+  });
+
+  it("invalidate() leaves other agencies' entries cached", async () => {
+    const { svc, repo } = makeService(emptyData());
+    await svc.getDashboard({ agencyId: "agency-2", userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+
+    svc.invalidate(AGENCY);
+
+    await svc.getDashboard({ agencyId: "agency-2", userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    expect(repo.calls).toBe(1);
+  });
 });
 
 // ---------------------------------------------------------------------------

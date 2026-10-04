@@ -43,7 +43,12 @@ export function createCalendarService(deps: {
     return payload;
   }
 
-  return { getCalendar };
+  /** Forgets every cached range for the agency, owner and staff alike. */
+  function invalidate(agencyId: string) {
+    deps.cache.invalidatePrefix(`${agencyId}:`);
+  }
+
+  return { getCalendar, invalidate };
 }
 
 export const calendarService = createCalendarService({

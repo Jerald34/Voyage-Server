@@ -43,6 +43,14 @@ export class TtlCache<V> {
     this.store.delete(key);
   }
 
+  /** Drops every entry whose key starts with `prefix`, e.g. all of one agency's keys. */
+  invalidatePrefix(prefix: string): void {
+    // Deleting while iterating a Map is safe: removed keys are simply not visited.
+    for (const key of this.store.keys()) {
+      if (key.startsWith(prefix)) this.store.delete(key);
+    }
+  }
+
   clear(): void {
     this.store.clear();
   }

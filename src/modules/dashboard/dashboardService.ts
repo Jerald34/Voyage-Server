@@ -92,16 +92,13 @@ export function createDashboardService(deps: {
     return payload;
   }
 
+  /**
+   * Forgets every cached payload for the agency: the owner entries and each
+   * staff member's (`${agencyId}:staff:${period}:${userId}`). Agency ids are
+   * UUIDs followed by ":", so the prefix can't match another agency.
+   */
   function invalidate(agencyId: string) {
-    // Best-effort: nuke every cached entry for the agency. The cache is per-process
-    // and small, so a full clear is acceptable when in doubt; for now we just
-    // forget keys we know how to derive. Callers can fall back to clear() if
-    // they want a hard wipe.
-    for (const view of ["owner", "staff"] as const) {
-      for (const period of ["7d", "30d", "90d"] as const) {
-        deps.cache.invalidate(`${agencyId}:${view}:${period}`);
-      }
-    }
+    deps.cache.invalidatePrefix(`${agencyId}:`);
   }
 
   return { getDashboard, invalidate };

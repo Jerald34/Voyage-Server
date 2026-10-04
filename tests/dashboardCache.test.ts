@@ -40,6 +40,21 @@ describe("TtlCache", () => {
     expect(cache.get("b")).toBeNull();
   });
 
+  it("invalidates every key that starts with a prefix, and only those", () => {
+    const cache = new TtlCache<number>(1000);
+    cache.set("agency-1:owner:30d", 1);
+    cache.set("agency-1:staff:30d:user-a", 2);
+    cache.set("agency-10:owner:30d", 3);
+    cache.set("agency-2:owner:30d", 4);
+
+    cache.invalidatePrefix("agency-1:");
+
+    expect(cache.get("agency-1:owner:30d")).toBeNull();
+    expect(cache.get("agency-1:staff:30d:user-a")).toBeNull();
+    expect(cache.get("agency-10:owner:30d")).toBe(3);
+    expect(cache.get("agency-2:owner:30d")).toBe(4);
+  });
+
   it("never holds more than the cap, however many keys are set", () => {
     const cache = new TtlCache<number>(60_000, 3);
     const keys = Array.from({ length: 50 }, (_, index) => `key-${index}`);
