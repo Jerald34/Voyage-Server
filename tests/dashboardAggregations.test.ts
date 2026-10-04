@@ -8,6 +8,7 @@ import {
   periodWindow,
   priorPeriodWindow,
   selectOwnerWorklistRows,
+  selectRecentViews,
   selectStaffWorklistRows
 } from "../src/modules/dashboard/aggregations";
 
@@ -302,5 +303,102 @@ describe("selectStaffWorklistRows", () => {
       userId: "me"
     });
     expect(r.startingSoon.map((s) => s.tripId)).toEqual(["soon"]);
+  });
+});
+
+describe("selectRecentViews", () => {
+  const viewed = (id: string, overrides: Parameters<typeof trip>[0] = {}) => trip({ id, title: `Trip ${id}`, ...overrides });
+  const daysAgo = (days: number) => new Date(NOW.getTime() - days * 24 * 60 * 60 * 1000);
+
+  it("sums views over a trip's links, revoked ones included, and keeps the latest view", () => {
+    const rows = selectRecentViews({
+      trips: [viewed("t1", { clientName: "Santos" })],
+      shares: [
+        share({ id: "s1", tripId: "t1", viewCount: 3, lastViewedAt: daysAgo(4) }),
+        share({ id: "s2", tripId: "t1", viewCount: 2, lastViewedAt: daysAgo(1), revokedAt: daysAgo(0.5) }),
+        share({ id: "s3", tripId: "t1", viewCount: 0, lastViewedAt: null })
+      ],
+      now: NOW
+    });
+
+    expect(rows).toEqual([
+      { tripId: "t1", tripTitle: "Trip t1", clientName: "Santos", viewCount: 5, lastViewedAt: daysAgo(1).toISOString() }
+    ]);
+  });
+
+  it("names the client on the most recently viewed link, else the trip's client", () => {
+    const rows = selectRecentViews({
+      trips: [viewed("t1", { clientName: "Santos" }), viewed("t2", { clientName: "Lim" })],
+      shares: [
+        { ...share({ id: "s1", tripId: "t1", viewCount: 1, lastViewedAt: daysAgo(3) }), clientName: "Old Contact" },
+        { ...share({ id: "s2", tripId: "t1", viewCount: 1, lastViewedAt: daysAgo(1) }), clientName: "Maria Santos" },
+        { ...share({ id: "s3", tripId: "t2", viewCount: 1, lastViewedAt: daysAgo(2) }), clientName: null }
+      ],
+      now: NOW
+    });
+
+    expect(rows.map((row) => [row.tripId, row.clientName])).toEqual([
+      ["t1", "Maria Santos"],
+      ["t2", "Lim"]
+    ]);
+  });
+
+  it("draws the line at 30 days", () => {
+    const rows = selectRecentViews({
+      trips: [viewed("in"), viewed("out")],
+      shares: [
+        share({ id: "s-in", tripId: "in", viewCount: 1, lastViewedAt: daysAgo(29) }),
+        share({ id: "s-out", tripId: "out", viewCount: 1, lastViewedAt: daysAgo(31) })
+      ],
+      now: NOW
+    });
+
+    expect(rows.map((row) => row.tripId)).toEqual(["in"]);
+  });
+
+  it("lists at most five trips, newest view first", () => {
+    const ages: Record<string, number> = { t1: 1, t2: 9, t3: 29, t4: 5, t5: 2, t6: 10, t7: 3 };
+    const ids = Object.keys(ages);
+    const rows = selectRecentViews({
+      trips: ids.map((id) => viewed(id)),
+      shares: ids.map((id) => share({ id: `s-${id}`, tripId: id, viewCount: 1, lastViewedAt: daysAgo(ages[id]) })),
+      now: NOW
+    });
+
+    expect(rows.map((row) => row.tripId)).toEqual(["t1", "t5", "t7", "t4", "t2"]);
+  });
+
+  it("leaves out archived trips, links without a trip and trips nobody viewed", () => {
+    const rows = selectRecentViews({
+      trips: [viewed("archived", { status: "ARCHIVED" }), viewed("unviewed"), viewed("viewed")],
+      shares: [
+        share({ id: "s1", tripId: "archived", viewCount: 2, lastViewedAt: daysAgo(1) }),
+        share({ id: "s2", tripId: null, viewCount: 2, lastViewedAt: daysAgo(1) }),
+        share({ id: "s3", tripId: "unviewed", viewCount: 0, lastViewedAt: null }),
+        share({ id: "s4", tripId: "viewed", viewCount: 1, lastViewedAt: daysAgo(2) })
+      ],
+      now: NOW
+    });
+
+    expect(rows.map((row) => row.tripId)).toEqual(["viewed"]);
+  });
+
+  it("shows a staff member only the trips they created or organize", () => {
+    const rows = selectRecentViews({
+      trips: [
+        viewed("mine", { createdByUserId: "u-staff" }),
+        viewed("organized", { createdByUserId: "u-other", assignedOrganizerUserId: "u-staff" }),
+        viewed("theirs", { createdByUserId: "u-other" })
+      ],
+      shares: [
+        share({ id: "s1", tripId: "mine", viewCount: 1, lastViewedAt: daysAgo(1) }),
+        share({ id: "s2", tripId: "organized", viewCount: 1, lastViewedAt: daysAgo(2) }),
+        share({ id: "s3", tripId: "theirs", viewCount: 1, lastViewedAt: daysAgo(3) })
+      ],
+      now: NOW,
+      userId: "u-staff"
+    });
+
+    expect(rows.map((row) => row.tripId)).toEqual(["mine", "organized"]);
   });
 });

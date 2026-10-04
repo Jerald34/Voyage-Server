@@ -7,6 +7,7 @@ import {
   periodWindow,
   priorPeriodWindow,
   selectOwnerWorklistRows,
+  selectRecentViews,
   selectStaffWorklistRows,
   type DashboardPeriod
 } from "./aggregations";
@@ -220,6 +221,7 @@ function composeOwnerPayload(args: {
     },
     funnel: { stages: funnelStages },
     recentReviews,
+    recentViews: selectRecentViews({ trips: raw.trips, shares: raw.shares, now }),
     activityRibbon
   };
 }
@@ -307,7 +309,8 @@ function composeStaffPayload(args: {
     secondaryRecent,
     worklist,
     pipeline,
-    startingSoon
+    startingSoon,
+    recentViews: selectRecentViews({ trips: raw.trips, shares: raw.shares, now, userId })
   };
 }
 

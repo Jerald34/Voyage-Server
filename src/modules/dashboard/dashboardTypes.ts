@@ -101,6 +101,17 @@ export type OwnerRecentReview = {
   submittedAt: string;
 };
 
+/** A trip clients opened recently, for the Recently viewed card. */
+export type RecentView = {
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  /** All-time views, summed over the trip's share links. */
+  viewCount: number;
+  /** The latest view over those links (ISO). */
+  lastViewedAt: string;
+};
+
 export type ActivityRibbonItem = {
   kind: "share_sent" | "trip_status_changed" | "itinerary_approved";
   tripId: string;
@@ -116,6 +127,7 @@ export type OwnerDashboardPayload = {
   kpis: OwnerKpis;
   funnel: OwnerFunnel;
   recentReviews: OwnerRecentReview[];
+  recentViews: RecentView[];
   activityRibbon: ActivityRibbonItem[];
 };
 
@@ -192,6 +204,7 @@ export type StaffDashboardPayload = {
   worklist: StaffWorklist;
   pipeline: StaffPipeline;
   startingSoon: StaffStartingSoonCard[];
+  recentViews: RecentView[];
 };
 
 export type DashboardPayload = OwnerDashboardPayload | StaffDashboardPayload;

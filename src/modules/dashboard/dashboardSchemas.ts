@@ -29,6 +29,14 @@ const funnelStageSchema = z.object({
   dropOffPct: z.number().nullable()
 });
 
+const recentViewSchema = z.object({
+  tripId: z.string(),
+  tripTitle: z.string(),
+  clientName: z.string().nullable(),
+  viewCount: z.number().int().nonnegative(),
+  lastViewedAt: z.string()
+});
+
 const ownerWorklistSchema = z.object({
   unreadComments: z.array(
     z.object({
@@ -97,6 +105,7 @@ export const ownerDashboardPayloadSchema = z.object({
       submittedAt: z.string()
     })
   ),
+  recentViews: z.array(recentViewSchema),
   activityRibbon: z.array(
     z.object({
       kind: z.enum(["share_sent", "trip_status_changed", "itinerary_approved"]),
@@ -181,7 +190,8 @@ export const staffDashboardPayloadSchema = z.object({
       daysToStart: z.number().int(),
       travelerCount: z.number().int().nullable()
     })
-  )
+  ),
+  recentViews: z.array(recentViewSchema)
 });
 
 export const dashboardPayloadSchema = z.union([

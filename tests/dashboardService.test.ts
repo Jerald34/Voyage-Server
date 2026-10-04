@@ -20,7 +20,7 @@ import {
   selectViewForRole
 } from "../src/modules/dashboard/dashboardService";
 import { TtlCache } from "../src/modules/dashboard/cache";
-import { ownerDashboardPayloadSchema } from "../src/modules/dashboard/dashboardSchemas";
+import { ownerDashboardPayloadSchema, staffDashboardPayloadSchema } from "../src/modules/dashboard/dashboardSchemas";
 import type {
   DashboardRepository,
   RawDashboardData
@@ -640,5 +640,51 @@ describe("getDashboard – KPI units and no-signal values", () => {
 
     expect(payload.kpis.winRate.value).toBe(100);
     expect(payload.kpis.winRate.deltaVsPrior).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recently viewed
+// ---------------------------------------------------------------------------
+
+describe("getDashboard – recently viewed", () => {
+  function viewedData(): RawDashboardData {
+    return {
+      ...emptyData(),
+      trips: [
+        makeTrip("t1", { title: "Kyoto", clientName: "Santos" }),
+        makeTrip("t2", { title: "Palawan", createdByUserId: USER_B })
+      ],
+      shares: [
+        makeShare("s1", "t1", { viewCount: 3, lastViewedAt: new Date("2026-05-26T07:00:00Z") }),
+        makeShare("s2", "t2", { viewCount: 1, lastViewedAt: new Date("2026-05-20T12:00:00Z") })
+      ]
+    };
+  }
+
+  it("lists the agency's recently viewed trips on the owner view", async () => {
+    const { svc } = makeService(viewedData());
+    const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+
+    expect(payload.recentViews).toEqual([
+      { tripId: "t1", tripTitle: "Kyoto", clientName: "Santos", viewCount: 3, lastViewedAt: "2026-05-26T07:00:00.000Z" },
+      { tripId: "t2", tripTitle: "Palawan", clientName: null, viewCount: 1, lastViewedAt: "2026-05-20T12:00:00.000Z" }
+    ]);
+  });
+
+  it("shows a staff member only their own trips", async () => {
+    const { svc } = makeService(viewedData());
+    const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+
+    expect(payload.recentViews.map((row) => row.tripId)).toEqual(["t2"]);
+  });
+
+  it("keeps recentViews through both payload schemas", async () => {
+    const { svc } = makeService(viewedData());
+    const owner = await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    const staff = await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+
+    expect(ownerDashboardPayloadSchema.parse(owner).recentViews).toHaveLength(2);
+    expect(staffDashboardPayloadSchema.parse(staff).recentViews).toHaveLength(1);
   });
 });

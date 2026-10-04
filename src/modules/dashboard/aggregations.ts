@@ -9,7 +9,7 @@
  * for the contracts these helpers serve.
  */
 
-import type { FunnelStage, FunnelStageKey } from "./dashboardTypes";
+import type { FunnelStage, FunnelStageKey, RecentView } from "./dashboardTypes";
 
 // ---------- Win rate ----------
 
@@ -381,4 +381,75 @@ export function priorPeriodWindow(period: DashboardPeriod, now: Date): { start: 
   const end = new Date(now.getTime() - days * MS_PER_DAY);
   const start = new Date(end.getTime() - days * MS_PER_DAY);
   return { start, end };
+}
+
+// ---------- Recently viewed ----------
+
+/** How far back the Recently viewed card looks, by each trip's latest view. */
+export const RECENT_VIEWS_WINDOW_DAYS = 30;
+/** The most trips the card lists. */
+export const RECENT_VIEWS_LIMIT = 5;
+
+export type RecentViewInputs = {
+  trips: Array<{
+    id: string;
+    title: string;
+    status: TripStatusOnly["status"];
+    clientName: string | null;
+    createdByUserId: string;
+    assignedOrganizerUserId: string | null;
+  }>;
+  shares: Array<{
+    tripId: string | null;
+    clientName?: string | null;
+    viewCount: number;
+    lastViewedAt: Date | null;
+  }>;
+  now: Date;
+  /** A staff member sees only trips they created or organize; omit for the whole agency. */
+  userId?: string;
+};
+
+/**
+ * Trips clients opened most recently: one row per trip, views summed over all
+ * of its links (revoked and expired links included, since those views
+ * happened), and the latest view deciding the order and the 30-day cutoff.
+ * Only a total and a last-view time are stored per link, so the count is
+ * all-time. Archived trips and links without a trip are left out.
+ */
+export function selectRecentViews(inputs: RecentViewInputs): RecentView[] {
+  const { trips, shares, now, userId } = inputs;
+  const cutoff = now.getTime() - RECENT_VIEWS_WINDOW_DAYS * MS_PER_DAY;
+  const tripIndex = new Map(trips.map((trip) => [trip.id, trip]));
+  const byTrip = new Map<string, { viewCount: number; lastViewedAt: Date | null; clientName: string | null }>();
+
+  for (const share of shares) {
+    if (share.tripId === null) continue;
+    const trip = tripIndex.get(share.tripId);
+    if (!trip || trip.status === "ARCHIVED") continue;
+    if (userId !== undefined && trip.createdByUserId !== userId && trip.assignedOrganizerUserId !== userId) continue;
+
+    const entry = byTrip.get(trip.id) ?? { viewCount: 0, lastViewedAt: null, clientName: null };
+    entry.viewCount += share.viewCount;
+    if (share.lastViewedAt !== null && (entry.lastViewedAt === null || share.lastViewedAt > entry.lastViewedAt)) {
+      entry.lastViewedAt = share.lastViewedAt;
+      entry.clientName = share.clientName ?? null;
+    }
+    byTrip.set(trip.id, entry);
+  }
+
+  const rows: RecentView[] = [];
+  for (const [tripId, entry] of byTrip) {
+    if (entry.lastViewedAt === null || entry.lastViewedAt.getTime() < cutoff) continue;
+    const trip = tripIndex.get(tripId)!;
+    rows.push({
+      tripId,
+      tripTitle: trip.title,
+      clientName: entry.clientName ?? trip.clientName,
+      viewCount: entry.viewCount,
+      lastViewedAt: entry.lastViewedAt.toISOString()
+    });
+  }
+  rows.sort((a, b) => b.lastViewedAt.localeCompare(a.lastViewedAt));
+  return rows.slice(0, RECENT_VIEWS_LIMIT);
 }
