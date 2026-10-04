@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make the public share link (`/itinerary/view/[token]`) follow light/dark mode on its map, look like the current in-app design, and download its PDF on mobile web and installed PWAs. The in-app itinerary PDF gets the same download fix.
+**Goal:** Make the public share link (`/itinerary/view/[token]`) follow light/dark mode on its map, look like the current in-app design, and download its PDF on mobile web and installed PWAs. The in-app itinerary PDF gets the same download fix. The in-app Itineraries tab loses its empty top bar, gets one roomier header, and follows the dashboard's type rule.
 
-**Architecture:** The map reads the app theme from `ThemeProvider` when a page doesn't pass one, and keeps the one cloud map ID in both themes. PDF export splits into three parts. `lib/pdfDelivery.js` picks how a device should receive a file: share sheet, download link, or new tab. `hooks/useItineraryPdf.js` builds the PDF before the tap, so the click handler can hand the file over synchronously. The share page and the in-app page both use that hook. The share page's header, stop cards, mobile switcher, map frame and colours move onto existing app pieces: `VoyageLogo`, `SegmentedControl`, the `--frame-*` glass tokens, the `ItineraryDayView` card look, and the contrast-safe colour tokens.
+**Architecture:** The map reads the app theme from `ThemeProvider` when a page doesn't pass one, and keeps the one cloud map ID in both themes. PDF export splits into three parts. `lib/pdfDelivery.js` picks how a device should receive a file: share sheet, download link, or new tab. `hooks/useItineraryPdf.js` builds the PDF before the tap, so the click handler can hand the file over synchronously. The share page and the in-app page both use that hook. The share page's header, stop cards, mobile switcher, map frame and colours move onto existing app pieces: `VoyageLogo`, `SegmentedControl`, the `--frame-*` glass tokens, the `ItineraryDayView` card look, and the contrast-safe colour tokens. On the Itineraries tab, the app bar uses the Dashboard tab's compact variant, and the workspace header absorbs the separate Approve row. Headings follow the dashboard's type rule (serif only for a page's main title), and a source guard keeps it that way.
 
 **Tech Stack:** Next.js 16 (App Router, client components), React 19, Tailwind v4 (`@theme` tokens in `app/globals.css`), `@vis.gl/react-google-maps` 1.8.3, jsPDF 4.2.1, Vitest 4 + Testing Library (jsdom).
 
@@ -29,14 +29,14 @@ Checked in the built-in browser against the running dev servers. The share page 
 - The delivery mechanism is the problem. `doc.save()` (jsPDF's bundled FileSaver) creates a detached `<a download href="blob:…">` and fires a synthetic click from `setTimeout(…, 0)` after an `await`. iOS home-screen web apps don't support that kind of download, Safari only honours it inside the tap's activation, and in-app browsers (Messenger, Instagram, Gmail) don't support blob downloads at all. Desktop and Android Chrome generally work.
 - `handleDownloadPdf` swallows failures (`console.error` only), so users get no feedback.
 - `ClientItineraryPage.jsx:359-377` (the in-app staff PDF, used from the installed PWA) has the same `doc.save()` path.
-- **Not verified on a real device:** there is no WebKit or phone here. The device checks in Task 9 close this gap.
+- **Not verified on a real device:** there is no WebKit or phone here. The device checks in Task 12 close this gap.
 
 ### 3. The share page doesn't match the current design (confirmed)
 
 | Finding | Where | Current app pattern |
 |---|---|---|
 | Trip title wraps to 3 lines ("Kyoto / Autumn / Escape"): the global `h1 { max-width: 12ch }` (`globals.css:317-320`) caps it at ~168px in a ~505px column | `page.jsx:678` | headings sized per component |
-| Stop titles are faux-bold: `h3` inherits DM Serif Display (400 only), and `font-semibold` makes the browser synthesise bold (computed `font-synthesis: weight`) | `page.jsx:808` | `ItineraryDayView` uses `font-serif` at normal weight |
+| Stop titles are faux-bold: `h3` inherits DM Serif Display (400 only), and `font-semibold` makes the browser synthesise bold (computed `font-synthesis: weight`) | `page.jsx:808` | dashboard card titles: Plus Jakarta Sans semibold (`font-sans font-semibold`); serif only for a page's main title (Design decision 6) |
 | Solid navy `bg-sidebar text-white` header with a serif text wordmark | `page.jsx:641-645` | glass frame (`--frame-panel`, `--frame-border`) + `VoyageLogo` ("Hops") |
 | Full-strength `border-border` (100% navy in light mode) on dividers, buttons and the timeline | many | hairlines `border-border/10`–`/20` |
 | White text on light terracotta (`bg-secondary text-white`, ~2.8:1) on the day pill, Continue, Send and Submit rating | `page.jsx:187,264,730`, `ProposalRating.jsx:315` | `bg-secondary-strong text-on-secondary-strong` |
@@ -46,13 +46,38 @@ Checked in the built-in browser against the running dev servers. The share page 
 | Edge-to-edge map with a hard left border | `page.jsx:931-945` | `ItineraryDayView.jsx:181-196`: inset, rounded, hairline, `shadow-soft` |
 | The shared PDF says "VOYAGE" even when the page shows the agency's brand | `page.jsx:587` | agency-branded share/PDF |
 
-## Design decisions (lead developer; confirm or redirect before Task 6)
+### 4. The in-app Itineraries tab wastes its top bar and fakes bold titles (confirmed)
+
+From the user's dark-mode screenshot of the Itineraries tab, checked against the code:
+
+| Finding | Where | Fix |
+|---|---|---|
+| The 84px top bar is empty. The Itineraries tab gets the `full` bar, but `showCenterActions` is false there, so the bar holds only the agent's "Ready" pill. No agent runs on this tab. | `HomePage.jsx:678`, `DashboardHeader.jsx:47` | the compact variant, as on the Dashboard tab (Task 9) |
+| The workspace header is crowded. The name is cut to "Dana…", the "Saved itineraries" badge wraps to two lines, and "New trip for Da…" truncates. The status shows twice: an uppercase badge, plus a separate "Status: In review" row that only holds Approve. | `ItineraryHeader.jsx:49-139`, `ClientItineraryPage.jsx:739-765` | one header with Approve inside it (Task 10) |
+| The day title fakes bold: the `h4` inherits DM Serif Display and asks for `font-extrabold` | `ItineraryDayView.jsx:80` | Plus Jakarta Sans semibold (Task 11) |
+| Stop titles and the "Client Directory" heading are serif, while the dashboard uses sans | `ItineraryDayView.jsx:141`, `ClientList.jsx:35` | sans semibold (Task 11) |
+| The same fake bold elsewhere: photo-placeholder initials, the share dialog's section heading, the trip slide-over and funnel stage titles | `ItineraryDayView.jsx:136`, `CompactPlaceCard.jsx:39`, `ShareDialog.jsx:182`, `TripSlideOver.jsx:571`, `FunnelStageDetailPanel.jsx:137` | sans semibold (Task 11) |
+| "1 saved itineraries" | `ClientList.jsx:92`, `ClientItineraryPage.jsx:472` | singular/plural helper (Task 10) |
+
+## Design decisions (1–5 lead developer; 6–8 confirmed with the user on 2026-10-05)
 
 1. **Reference = the in-app itinerary view + dashboard glass frame**, not a new visual direction. The page reuses `VoyageLogo`, `SegmentedControl`, `--frame-*`, the `ItineraryDayView` card anatomy, and the contrast-safe tokens.
 2. **The agency brand leads.** The page is client-facing, so the agency name/logo stays the header's main element. The Voyage logo appears only as the no-brand fallback and in "Powered by".
 3. **All days stay on one scrolling page** (no in-app day strip). A client reads the whole proposal top to bottom and comments inline; a day picker would hide the other days' comments.
 4. **The PDF on iPhone/iPad opens the share sheet** ("Save to Files", "Print", "Books"…). That is the only path that works both in Safari and from the home-screen app. Android and desktop keep a normal download. If the device refuses, an "Open the PDF" link appears.
 5. **The shared PDF carries the agency's brand name** when the share has one, matching the page header.
+6. **Type follows the dashboard (the user picked option A from mockups).**
+   - DM Serif Display, at its only weight (400), is reserved for a page's main title: the client name in the Itineraries workspace, the trip title on the share page, dialog titles, and the empty-state title shown when nothing is selected.
+   - Every other heading uses Plus Jakarta Sans semibold (`font-sans font-semibold tracking-normal`): 15px for panel, section and card titles, 22px for day titles.
+   - Nothing asks the serif for a bold weight again.
+7. **The Itineraries tab has no top bar on desktop, like the Dashboard tab (the user picked option A).** Its bar held only the agent's "Ready" pill. Phones keep the 48px bar with the menu button and the logo.
+8. **The workspace header is the page header (the user approved the mockup).**
+   - Line 1 is the client name in the serif, at 28px.
+   - Line 2 holds a status dot with its label, the saved count ("1 saved itinerary"), and a "New trip" text button.
+   - On the right: Reuse, Comments, Share and PDF, then Approve. Approve is the only filled button and shows only while the trip is in review.
+   - The "Saved itineraries" badge, the uppercase status badge and the separate "Status: In review" row are removed.
+   - When the header is under 720px wide, the actions drop their labels (container query) and keep icons, tooltips and aria-labels.
+   - Open Comments uses `bg-secondary-strong text-on-secondary-strong`.
 
 ## Execution and model routing (lead-developer-orchestrator)
 
@@ -68,13 +93,16 @@ Checked in the built-in browser against the running dev servers. The share page 
 | 6 Share header + Powered by | 4 | — | sonnet + frontend skills | edits `page.jsx` |
 | 7 Stop cards, switcher, map frame, title | 6 | — | sonnet + frontend skills | edits `page.jsx` |
 | 8 Colour tokens + guard | 7 | — | haiku | mechanical find/replace with a guard test |
-| 9 Verify, review, QA | all | — | opus (review) + lead (QA) | whole-change review |
+| 9 Itineraries tab hides the empty bar | — | 1–8 | haiku | one helper and two small edits, test given |
+| 10 Itineraries workspace header | 5 | 9 | sonnet + frontend skills | 5 source files, layout and behaviour |
+| 11 Heading type rule + guard | 8, 10 | 9 | haiku (escalate to sonnet if the guard lists a file outside its table) | class swaps driven by a guard test |
+| 12 Verify, review, QA | all | — | opus (review) + lead (QA) | whole-change review |
 
-Tasks 4, 6, 7 and 8 all edit `app/itinerary/view/[token]/page.jsx`. Run them strictly in order and never in parallel.
+Tasks 4, 6, 7, 8 and 11 all edit `app/itinerary/view/[token]/page.jsx`. Tasks 5, 10 and 11 all edit `app/components/trip-dashboard/pages/ClientItineraryPage.jsx`. Run each group strictly in order and never in parallel. Line numbers in Tasks 10 and 11 are from `staging`; earlier tasks shift them, so find each edit by its quoted text.
 
-**Frontend skills for Tasks 6–8:** the implementer must use `ui-ux-pro-max`, `frontend-design` and `emil-design-eng` (per lead-developer-orchestrator), but within the decisions above. These tasks align the page with the existing design; they don't invent a new one.
+**Frontend skills for Tasks 6–8, 10 and 11:** the implementer must use `ui-ux-pro-max`, `frontend-design` and `emil-design-eng` (per lead-developer-orchestrator), but within the decisions above. These tasks align the pages with the existing design; they don't invent a new one.
 
-**Known baseline (not regressions):** 8 client test files fail on `staging`. 7 can't load because `app/components/icons/index.js` has JSX in a `.js` file (e.g. `tests/client-itinerary-page.test.jsx`), and `agent-command-center-places` has 1 stale test. Any test that renders a component importing `icons/index.js` must `vi.mock` that module, as the existing share-page tests do.
+**Known baseline (not regressions):** 8 client test files fail on `staging`. 7 can't load because `app/components/icons/index.js` has JSX in a `.js` file (e.g. `tests/client-itinerary-page.test.jsx`), and `agent-command-center-places` has 1 stale test. Any test that renders a component importing `icons/index.js` must `vi.mock` that module, as the existing share-page tests do. A Proxy-based icon mock needs a `has` trap as well as `get`: vitest checks `name in module` before it reads an export. (The Proxy in `tests/accessibility-integrations.test.jsx` lacks it and only passes because that suite never renders an icon.)
 
 ## File structure
 
@@ -84,11 +112,22 @@ Tasks 4, 6, 7 and 8 all edit `app/itinerary/view/[token]/page.jsx`. Run them str
 | `app/lib/pdfDelivery.js` | create | choose and run the hand-off (share sheet / download link / new tab); env injected for tests |
 | `app/hooks/useItineraryPdf.js` | create | build the PDF `File` ahead of the tap; synchronous `download()`; fallback link URL |
 | `app/itinerary/view/[token]/components/PdfDownloadButton.jsx` | create | share-page PDF button, preparing/error states, fallback link |
-| `app/itinerary/view/[token]/components/ShareHeader.jsx` | create | glass header with agency/personal/Voyage brand; `PoweredByVoyage` footer |
-| `app/itinerary/view/[token]/components/ShareStopCard.jsx` | create | in-app-style stop card for the share page |
-| `app/itinerary/view/[token]/page.jsx` | modify | use the pieces above; title/day/map-frame layout; colour tokens |
-| `app/itinerary/view/[token]/components/ProposalRating.jsx` | modify | colour tokens |
-| `app/components/trip-dashboard/pages/ClientItineraryPage.jsx` | modify | in-app PDF via `useItineraryPdf` |
+| `app/itinerary/view/[token]/components/ShareHeader.jsx` | create | glass header with agency/personal/Voyage brand (sans brand name); `PoweredByVoyage` footer |
+| `app/itinerary/view/[token]/components/ShareStopCard.jsx` | create | in-app-style stop card for the share page (sans title) |
+| `app/itinerary/view/[token]/page.jsx` | modify | use the pieces above; title/day/map-frame layout; sans day and section titles; colour tokens |
+| `app/itinerary/view/[token]/components/ProposalRating.jsx` | modify | colour tokens; sans heading |
+| `app/components/trip-dashboard/pages/ClientItineraryPage.jsx` | modify | in-app PDF via `useItineraryPdf`; Approve handler passed to the header; status row removed; count wording; sans mobile heading |
+| `app/components/trip-dashboard/layout/DashboardHeader.jsx` | modify | `headerVariantForTab(tab)`: compact for the Dashboard and Itineraries tabs |
+| `app/components/trip-dashboard/HomePage.jsx` | modify | picks the bar with `headerVariantForTab`; drops the itineraries-only switcher filter |
+| `app/components/trip-dashboard/pages/ItineraryHeader.jsx` | modify | name line, status/count/New trip line, actions + Approve, container-query labels |
+| `app/components/ratedHistory/entryPoints/ReuseButton.jsx` | modify | label follows the header's width in `clientItinerary` mode |
+| `app/lib/trip-dashboard/savedItineraries.js` | modify | `formatSavedItineraryCount(count)` |
+| `app/components/trip-dashboard/pages/ClientList.jsx` | modify | count wording; sans panel heading |
+| `app/components/trip-dashboard/pages/ItineraryDayView.jsx` | modify | sans day and stop titles; placeholder initial |
+| `app/components/trip-dashboard/mobile/CompactPlaceCard.jsx` | modify | placeholder initial |
+| `app/components/trip-dashboard/itinerary/ShareDialog.jsx` | modify | sans section heading |
+| `app/agency/[agencyId]/components/dashboard/TripSlideOver.jsx` | modify | sans title |
+| `app/agency/[agencyId]/components/dashboard/widgets/FunnelStageDetailPanel.jsx` | modify | sans title |
 | `tests/itinerary-live-map-theme.test.jsx` | create | map theme tests |
 | `tests/pdf-delivery.test.js` | create | delivery strategy tests |
 | `tests/use-itinerary-pdf.test.jsx` | create | hook tests |
@@ -99,6 +138,13 @@ Tasks 4, 6, 7 and 8 all edit `app/itinerary/view/[token]/page.jsx`. Run them str
 | `tests/share-page-layout.test.jsx` | create | title cap, mobile switcher |
 | `tests/share-page-design-tokens.test.js` | create | colour guard for the share route folder |
 | `tests/share-page-weather.test.jsx`, `tests/share-page-accessibility.test.jsx` | modify | PDF mock returns a fake doc |
+| `tests/dashboard-rail.test.jsx` | modify | bar variant per tab |
+| `tests/saved-itinerary-count.test.js` | create | count wording |
+| `tests/client-list.test.jsx` | create | count wording in the client list |
+| `tests/itinerary-header.test.jsx` | create | header layout, status dot, Approve, Comments state, label collapse |
+| `tests/reuseButton.smoke.test.jsx` | modify | label rule per mode |
+| `tests/client-itinerary-approve.test.jsx` | modify | Approve lives in the header |
+| `tests/heading-typography.test.js` | create | no bold serif; per-heading font table |
 
 All commands below run from `Voyage-Client/`.
 
@@ -1144,6 +1190,14 @@ describe("ShareHeader", () => {
     expect(screen.queryByRole("img", { name: "Voyage" })).toBeNull();
   });
 
+  it("sets the agency name like a personal name, in the dashboard's sans (Design decision 6)", () => {
+    render(<ShareHeader brand={{ type: "agency", name: "Island Hops Travel", logoUrl: null }} />);
+    const name = screen.getByText("Island Hops Travel");
+
+    expect(name.className).toContain("font-semibold");
+    expect(name.className).not.toContain("font-serif");
+  });
+
   it("names who shared a personal itinerary", () => {
     render(<ShareHeader brand={{ type: "personal", displayName: "Ana Reyes" }} />);
 
@@ -1228,7 +1282,7 @@ function ShareBrand({ brand }) {
           <img src={brand.logoUrl} alt={brand.name || "Agency logo"} className="h-7 w-auto flex-shrink-0 object-contain" />
         ) : null}
         {brand.name ? (
-          <span className="truncate font-serif text-[20px] tracking-[0.01em] max-sm:text-[18px]">{brand.name}</span>
+          <span className="truncate text-[16px] font-semibold max-sm:text-[14px]">{brand.name}</span>
         ) : null}
       </div>
     );
@@ -1377,12 +1431,13 @@ describe("ShareStopCard", () => {
     expect(screen.getByText("type icon")).toBeInTheDocument();
   });
 
-  it("sets the serif title at its real weight (DM Serif Display has no bold)", () => {
+  it("sets the title in the dashboard's sans, never a faked serif bold (Design decision 6)", () => {
     render(<ShareStopCard item={item} />);
     const title = screen.getByRole("heading", { level: 3, name: "Kiyomizu-dera" });
 
-    expect(title.className).toContain("font-normal");
-    expect(title.className).not.toMatch(/font-(semibold|bold)/);
+    expect(title.className).toContain("font-sans");
+    expect(title.className).toContain("font-semibold");
+    expect(title.className).not.toContain("font-serif");
   });
 
   it("marks the stop the map is pointing at and renders its actions and comments", () => {
@@ -1484,13 +1539,22 @@ describe("public share layout", () => {
     expect(await screen.findByRole("article")).toHaveTextContent("Kiyomizu-dera");
     expect(screen.getByText("8:00 AM – 10:00 AM")).toBeInTheDocument();
   });
+
+  it("sets day titles in the dashboard's sans, not a serif (Design decision 6)", async () => {
+    render(<PublicItineraryPage />);
+
+    const dayTitle = await screen.findByRole("heading", { level: 2, name: "Eastern Higashiyama" });
+    expect(dayTitle.className).toContain("font-sans");
+    expect(dayTitle.className).toContain("font-semibold");
+    expect(dayTitle.className).not.toContain("font-serif");
+  });
 });
 ```
 
 - [ ] **Step 3: Run both tests and check that they fail**
 
 Run: `npx vitest run tests/share-stop-card.test.jsx tests/share-page-layout.test.jsx --pool=threads`
-Expected: FAIL. The stop card file doesn't resolve. In the layout test, the title lacks `max-w-none`, there is no `tablist` named "Itinerary view", and there is no `article`.
+Expected: FAIL. The stop card file doesn't resolve. In the layout test, the title lacks `max-w-none`, there is no `tablist` named "Itinerary view", there is no `article`, and the day title is still `font-serif`.
 
 - [ ] **Step 4: Create the stop card**
 
@@ -1505,8 +1569,8 @@ import { getReadablePlaceType, getSnapshotPhotoUrl } from "../../../../lib/trip-
 
 /**
  * One stop on the public share page, in the same anatomy as the in-app day view
- * (ItineraryDayView): time pill + place type, photo or type tile, serif title,
- * rating, then details. `actions` sit beside the title; `children` holds the
+ * (ItineraryDayView): time pill + place type, photo or type tile, title (sans,
+ * like the dashboard's card titles), rating, then details. `actions` sit beside the title; `children` holds the
  * stop's comment form and comments.
  */
 export default function ShareStopCard({ item, isActive = false, timeLabel = "", icon = null, actions = null, onHoverChange, children }) {
@@ -1546,7 +1610,7 @@ export default function ShareStopCard({ item, isActive = false, timeLabel = "", 
           </div>
         )}
         <div className="grid min-w-0 flex-1 gap-1">
-          <h3 className="m-0 font-serif text-[1.05rem] font-normal leading-tight text-text-primary">{item.title}</h3>
+          <h3 className="m-0 font-sans text-[15px] font-semibold leading-snug tracking-normal text-text-primary">{item.title}</h3>
           {rating ? <span className="text-[0.75rem] font-semibold text-text-muted">★ {rating}</span> : null}
         </div>
         {actions ? <div className="flex flex-shrink-0 items-center gap-1.5">{actions}</div> : null}
@@ -1679,7 +1743,7 @@ with:
                         <span className="font-semibold normal-case tracking-normal text-text-muted"> · {formatDate(day.date)}</span>
                       ) : null}
                     </span>
-                    <h2 className="m-0 font-serif text-[1.35rem] font-normal leading-tight text-text-primary max-[400px]:text-[1.2rem]">{day.title}</h2>
+                    <h2 className="m-0 font-sans text-[22px] font-semibold leading-snug tracking-[-0.015em] text-text-primary max-[400px]:text-[19px]">{day.title}</h2>
                     <WeatherChip entry={shareWeather.byDayId.get(day.id)} className="mt-1 self-start" />
                   </div>
                   <CommentTriggerBtn
@@ -1912,7 +1976,897 @@ git commit -m "style(share): theme tokens for comments and rating, with a colour
 
 ---
 
-### Task 9: Verify, review and QA
+### Task 9: The Itineraries tab hides its empty top bar
+
+This is Design decision 7. The Dashboard tab already uses the compact bar, which is hidden at 900px and wider and holds only the menu button and logo on phones. The Itineraries tab gets the same bar.
+
+**Files:**
+- Modify: `app/components/trip-dashboard/layout/DashboardHeader.jsx` (doc comment and props at 5-47, centre actions at 70)
+- Modify: `app/components/trip-dashboard/HomePage.jsx` (import at 38; `<DashboardHeader` props at 677-704)
+- Test: `tests/dashboard-rail.test.jsx`
+
+- [ ] **Step 1: Write the failing test**
+
+In `tests/dashboard-rail.test.jsx`, replace `import DashboardHeader from "../app/components/trip-dashboard/layout/DashboardHeader.jsx";` with:
+
+```js
+import DashboardHeader, { headerVariantForTab } from "../app/components/trip-dashboard/layout/DashboardHeader.jsx";
+```
+
+Then add these tests at the end of `describe("DashboardHeader", () => { … })`:
+
+```jsx
+  it.each([
+    ["dashboard", "compact"],
+    ["itineraries", "compact"],
+    ["command-center", "full"],
+    ["settings", "full"],
+    ["admin", "full"],
+  ])("gives the %s tab the %s bar", (tab, variant) => {
+    expect(headerVariantForTab(tab)).toBe(variant);
+  });
+
+  it("keeps only the phone menu button and the logo in the compact bar, and hides it on desktop", () => {
+    render(<DashboardHeader variant="compact" isSidebarOpen={false} setIsSidebarOpen={() => {}} liveStatus="Ready" />);
+
+    expect(screen.getByRole("banner").className).toContain("min-[900px]:hidden");
+    expect(screen.getByRole("button", { name: "Toggle menu" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Voyage" })).toBeInTheDocument();
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+```
+
+- [ ] **Step 2: Run the test and check that it fails**
+
+Run: `npx vitest run tests/dashboard-rail.test.jsx --pool=threads`
+Expected: FAIL. The five `headerVariantForTab` cases throw `TypeError: headerVariantForTab is not a function`. The compact-bar test already passes; it pins the behaviour the Itineraries tab now relies on.
+
+- [ ] **Step 3: Add the helper and drop the itineraries special case**
+
+In `app/components/trip-dashboard/layout/DashboardHeader.jsx`, replace the doc comment above `export default function DashboardHeader(`:
+
+```jsx
+/**
+ * Top bar for the Command Center, Itineraries, Settings and Admin tabs:
+ * New Itinerary, the client/trip switcher, "Save to Client" and the agent's
+ * live status. The brand and the account live in the rail.
+ *
+ * `variant="compact"` (Dashboard tab) keeps only the menu button and the
+ * logo. It is always rendered and hidden on desktop with CSS, so phones never
+ * wait on JS to show the menu button (no pop-in); the Dashboard has its own
+ * greeting row there.
+ */
+```
+
+with:
+
+```jsx
+// Tabs whose page draws its own title row. Their bar only shows on phones,
+// where it holds the menu button and the logo.
+const COMPACT_TABS = new Set(["dashboard", "itineraries"]);
+
+export function headerVariantForTab(tab) {
+  return COMPACT_TABS.has(tab) ? "compact" : "full";
+}
+
+/**
+ * Top bar for the Command Center, Settings and Admin tabs: New Itinerary, the
+ * client/trip switcher, "Save to Client" and the agent's live status. The brand
+ * and the account live in the rail.
+ *
+ * `variant="compact"` (the Dashboard and Itineraries tabs, see
+ * `headerVariantForTab`) keeps only the menu button and the logo. It is always
+ * rendered and hidden on desktop with CSS, so phones never wait on JS to show
+ * the menu button (no pop-in); those pages have their own title row there.
+ */
+```
+
+In the same file:
+1. Delete the `  activeTab,` line from the props.
+2. Replace:
+
+```jsx
+  const isFull = variant === "full";
+  const showCenterActions = isFull && activeTab !== "itineraries";
+```
+
+with:
+
+```jsx
+  const isFull = variant === "full";
+```
+
+3. Replace `{showCenterActions && (` with `{isFull && (`.
+
+- [ ] **Step 4: Use the helper in HomePage**
+
+In `app/components/trip-dashboard/HomePage.jsx`:
+
+1. Replace `import DashboardHeader from "./layout/DashboardHeader.jsx";` with:
+
+```js
+import DashboardHeader, { headerVariantForTab } from "./layout/DashboardHeader.jsx";
+```
+
+2. Replace `variant={currentTab === "dashboard" ? "compact" : "full"}` with:
+
+```jsx
+              variant={headerVariantForTab(currentTab)}
+```
+
+3. In the same `<DashboardHeader` element, delete the line `activeTab={currentTab}`, the one right after `getInitials={getInitials}`. Leave `DashboardSidebar`'s `activeTab` alone.
+4. Replace `safeOptions={currentTab === "itineraries" ? effectivePlanningOptions.filter(o => o.type !== "draft") : effectivePlanningOptions}` with:
+
+```jsx
+              safeOptions={effectivePlanningOptions}
+```
+
+The filter only ran on the Itineraries tab, which no longer renders the switcher.
+
+- [ ] **Step 5: Run the test**
+
+Run: `npx vitest run tests/dashboard-rail.test.jsx --pool=threads`
+Expected: PASS.
+
+- [ ] **Step 6: Commit**
+
+```bash
+git add app/components/trip-dashboard/layout/DashboardHeader.jsx app/components/trip-dashboard/HomePage.jsx tests/dashboard-rail.test.jsx
+git commit -m "feat(itineraries): hide the empty top bar on desktop, like the Dashboard tab"
+```
+
+---
+
+### Task 10: One header for the Itineraries workspace
+
+**Required skills:** `ui-ux-pro-max`, `frontend-design`, `emil-design-eng`, applied within Design decision 8 (the user approved its mockup).
+
+**Files:**
+- Modify: `app/lib/trip-dashboard/savedItineraries.js` (after `getStableItineraryId`, line 30-33)
+- Modify: `app/components/ratedHistory/entryPoints/ReuseButton.jsx`
+- Modify: `app/components/trip-dashboard/pages/ItineraryHeader.jsx` (whole file)
+- Modify: `app/components/trip-dashboard/pages/ClientItineraryPage.jsx` (`savedItineraries.js` import at 12-18; new `handleApproveTrip` after `handleDeleteClient`; mobile client count at 472; `<ItineraryHeader` props at 682-710; status row at 739-765)
+- Modify: `app/components/trip-dashboard/pages/ClientList.jsx` (imports at 3-5; count at 92)
+- Test: `tests/saved-itinerary-count.test.js`, `tests/client-list.test.jsx`, `tests/itinerary-header.test.jsx` (create); `tests/reuseButton.smoke.test.jsx`, `tests/client-itinerary-approve.test.jsx` (modify)
+
+- [ ] **Step 1: Write the failing count tests**
+
+Create `tests/saved-itinerary-count.test.js`:
+
+```js
+import { describe, expect, it } from "vitest";
+import { formatSavedItineraryCount } from "../app/lib/trip-dashboard/savedItineraries.js";
+
+describe("formatSavedItineraryCount", () => {
+  it.each([
+    [0, "0 saved itineraries"],
+    [1, "1 saved itinerary"],
+    [2, "2 saved itineraries"],
+  ])("counts %i", (count, text) => {
+    expect(formatSavedItineraryCount(count)).toBe(text);
+  });
+});
+```
+
+Create `tests/client-list.test.jsx`:
+
+```jsx
+import { render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+// components/icons/index.js contains JSX in a .js file, which vitest cannot parse.
+vi.mock("../app/components/icons/index.js", () => ({ SearchIcon: () => null, TrashIcon: () => null, UsersIcon: () => null }));
+
+import ClientList from "../app/components/trip-dashboard/pages/ClientList.jsx";
+
+describe("ClientList", () => {
+  it("counts saved itineraries in the singular and the plural", () => {
+    const clients = [
+      { id: "c1", name: "Elen Cruz", trips: [{ id: "t1" }] },
+      { id: "c2", name: "Leo Tan", trips: [{ id: "t2" }, { id: "t3" }] },
+    ];
+    render(
+      <ClientList
+        clients={clients}
+        filteredClients={clients}
+        searchQuery=""
+        setSearchQuery={() => {}}
+        selectedClientId="c1"
+        onSelectClient={() => {}}
+        onRequestDeleteClient={() => {}}
+      />,
+    );
+
+    expect(screen.getByText("1 saved itinerary")).toBeInTheDocument();
+    expect(screen.getByText("2 saved itineraries")).toBeInTheDocument();
+  });
+});
+```
+
+- [ ] **Step 2: Write the failing header test**
+
+Create `tests/itinerary-header.test.jsx`:
+
+```jsx
+import { fireEvent, render, screen } from "@testing-library/react";
+import { describe, expect, it, vi } from "vitest";
+
+// components/icons/index.js contains JSX in a .js file, which vitest cannot parse.
+// A Proxy stubs whichever icon the header imports.
+vi.mock("../app/components/icons/index.js", () => {
+  const Icon = () => null;
+  const isIcon = (name) => typeof name === "string" && name !== "then";
+  // vitest checks `name in module` before reading an export, so answer `has` too.
+  return new Proxy(
+    { __esModule: true },
+    {
+      get: (target, name) => (name in target ? target[name] : isIcon(name) ? Icon : undefined),
+      has: (target, name) => name in target || isIcon(name),
+    },
+  );
+});
+// The launcher fetches rated trips; its button has its own test (reuseButton.smoke.test.jsx).
+vi.mock("../app/components/ratedHistory/entryPoints/ReuseLauncher.jsx", () => ({ default: () => null }));
+
+import ItineraryHeader from "../app/components/trip-dashboard/pages/ItineraryHeader.jsx";
+
+const inReview = { id: "t1", approvalStatus: "In review" };
+const client = { id: "danang", name: "Danang", trips: [inReview] };
+
+function renderHeader(props = {}) {
+  const handlers = {
+    onBackToList: vi.fn(),
+    onAddTripForClient: vi.fn(),
+    onToggleComments: vi.fn(),
+    onShare: vi.fn(),
+    onDownloadPdf: vi.fn(),
+  };
+  const utils = render(
+    <ItineraryHeader
+      selectedClient={client}
+      selectedTrip={inReview}
+      selectedItineraryId="iter-1"
+      fullItinerary={{ id: "iter-1", days: [] }}
+      unreadCommentCount={0}
+      pdfLoading={false}
+      showCommentsPanel={false}
+      {...handlers}
+      {...props}
+    />,
+  );
+  return { ...utils, handlers };
+}
+
+describe("ItineraryHeader", () => {
+  it("shows the client's full name as the page's serif title, at the font's real weight", () => {
+    renderHeader();
+    const title = screen.getByRole("heading", { level: 2, name: "Danang" });
+
+    expect(title).toHaveAttribute("title", "Danang");
+    expect(title.className).toContain("font-serif");
+    expect(title.className).not.toMatch(/font-(semibold|bold|extrabold|black)/);
+  });
+
+  it("puts the status, the saved count and New trip on one line under the name", () => {
+    const { handlers } = renderHeader();
+
+    expect(screen.getByText("In review")).toBeInTheDocument();
+    expect(screen.getByText("1 saved itinerary")).toBeInTheDocument();
+    fireEvent.click(screen.getByRole("button", { name: "New trip for Danang" }));
+    expect(handlers.onAddTripForClient).toHaveBeenCalledWith("Danang");
+  });
+
+  it("drops the Saved itineraries badge and the old count", () => {
+    renderHeader();
+
+    expect(screen.queryByText("Saved itineraries")).toBeNull();
+    expect(screen.queryByText("1 saved")).toBeNull();
+  });
+
+  it.each([
+    ["In review", "bg-status-warning"],
+    ["Approved", "bg-status-success"],
+  ])("colours the dot for %s", (approvalStatus, dotClass) => {
+    renderHeader({ selectedTrip: { id: "t1", approvalStatus } });
+
+    const dot = screen.getByText(approvalStatus).querySelector('[aria-hidden="true"]');
+    expect(dot.className).toContain(dotClass);
+  });
+
+  it("offers Approve as the one filled action, inside the actions group", () => {
+    const onApprove = vi.fn();
+    const { container } = renderHeader({ onApprove });
+    const approve = screen.getByRole("button", { name: "Approve" });
+
+    expect(container.querySelector('[data-tour-target="cip-actions"]')).toContainElement(approve);
+    expect(approve.className).toContain("bg-secondary-strong");
+    expect(approve.className).toContain("text-on-secondary-strong");
+    fireEvent.click(approve);
+    expect(onApprove).toHaveBeenCalledTimes(1);
+  });
+
+  it("disables Approve while the request runs", () => {
+    renderHeader({ onApprove: vi.fn(), isApproving: true });
+
+    expect(screen.getByRole("button", { name: "Approving…" })).toBeDisabled();
+  });
+
+  it("shows no Approve without a handler", () => {
+    renderHeader({ selectedTrip: { id: "t1", approvalStatus: "Approved" } });
+
+    expect(screen.queryByRole("button", { name: /approv/i })).toBeNull();
+  });
+
+  it("marks open Comments with the contrast-safe terracotta", () => {
+    renderHeader({ showCommentsPanel: true });
+    const comments = screen.getByRole("button", { name: "Comments" });
+
+    expect(comments).toHaveAttribute("aria-pressed", "true");
+    expect(comments.className).toContain("bg-secondary-strong");
+    expect(comments.className).toContain("text-on-secondary-strong");
+    expect(comments.className).not.toMatch(/(^|\s)text-white(\s|$)/);
+  });
+
+  it("drops action labels when the header itself is narrow (container query)", () => {
+    const { container } = renderHeader();
+
+    expect(container.querySelector("header").className).toContain("@container");
+    for (const label of ["Comments", "Share", "PDF"]) {
+      const span = screen.getByText(label);
+      expect(span.className).toContain("hidden");
+      expect(span.className).toContain("@min-[720px]:inline");
+    }
+  });
+});
+```
+
+- [ ] **Step 3: Extend the Reuse button and Approve tests**
+
+Add at the end of `describe("ReuseButton", () => { … })` in `tests/reuseButton.smoke.test.jsx`:
+
+```jsx
+  it("lets the itinerary header's width decide whether the label shows", () => {
+    render(<ReuseButton onClick={vi.fn()} count={4} mode="clientItinerary" />);
+    const label = screen.getByText("Reuse");
+
+    expect(label.className).toContain("hidden");
+    expect(label.className).toContain("@min-[720px]:inline");
+  });
+
+  it("keeps the viewport rule in the editor", () => {
+    render(<ReuseButton onClick={vi.fn()} count={4} mode="editor" />);
+
+    expect(screen.getByText("Reuse").className).toContain("sm:inline");
+  });
+```
+
+Add at the end of `describe("Approve button on ClientItineraryPage", () => { … })` in `tests/client-itinerary-approve.test.jsx`:
+
+```jsx
+  it("puts Approve in the header's actions instead of a separate status row", async () => {
+    const { container } = render(
+      <ClientItineraryPage agencyTrips={[inReviewTrip]} agencyId="agency-1" onTripStatusChange={vi.fn()} />
+    );
+
+    const approve = await screen.findByRole("button", { name: /^approve$/i });
+    expect(container.querySelector('[data-tour-target="cip-actions"]')).toContainElement(approve);
+    expect(screen.queryByText("Status: In review")).toBeNull();
+  });
+```
+
+- [ ] **Step 4: Run the tests and check that they fail**
+
+Run: `npx vitest run tests/saved-itinerary-count.test.js tests/client-list.test.jsx tests/itinerary-header.test.jsx tests/reuseButton.smoke.test.jsx tests/client-itinerary-approve.test.jsx --pool=threads`
+
+Expected: FAIL, and the existing cases keep passing, as does "shows no Approve without a handler" (it guards the new behaviour from the start). The new failures:
+- `formatSavedItineraryCount is not a function`;
+- the client list still says "1 saved itineraries";
+- the header is missing several things: a `title` on the name, the "1 saved itinerary" text, `onApprove` support and `@container`. It also still uses `bg-secondary text-white` for open Comments;
+- the Reuse label has no `@min-[720px]:inline`;
+- Approve still sits in the status row, outside `cip-actions`.
+
+- [ ] **Step 5: Add the count helper**
+
+In `app/lib/trip-dashboard/savedItineraries.js`, directly after the `getStableItineraryId` function, add:
+
+```js
+
+/** "1 saved itinerary", "2 saved itineraries". */
+export function formatSavedItineraryCount(count) {
+  return `${count} saved ${count === 1 ? "itinerary" : "itineraries"}`;
+}
+```
+
+It lives here, not in `lib/formatters.js`: the `ClientItineraryPage` tests mock `formatters.js` with a fixed list of exports, and a new export there would be missing from those mocks.
+
+- [ ] **Step 6: Let the Reuse label follow the header**
+
+In `app/components/ratedHistory/entryPoints/ReuseButton.jsx`:
+
+1. After `const badgeLabel = count > 99 ? "99+" : count;` add:
+
+```jsx
+  // In the itinerary header the label follows the header's own width, like the
+  // buttons beside it (ItineraryHeader is the size container); elsewhere it
+  // follows the viewport.
+  const inHeader = mode === "clientItinerary";
+```
+
+2. In the button's `className`, replace `min-w-[40px] min-h-[40px] px-2 sm:px-3.5 rounded-lg` with:
+
+```jsx
+min-w-[40px] min-h-[40px] ${inHeader ? "px-2 @min-[720px]:px-3.5" : "px-2 sm:px-3.5"} rounded-lg
+```
+
+3. Replace `<span className="hidden sm:inline">Reuse</span>` with:
+
+```jsx
+      <span className={inHeader ? "hidden @min-[720px]:inline" : "hidden sm:inline"}>Reuse</span>
+```
+
+- [ ] **Step 7: Rewrite the header**
+
+Replace the whole of `app/components/trip-dashboard/pages/ItineraryHeader.jsx` with:
+
+```jsx
+// ItineraryHeader — the workspace's page header: client name, a status and count line, and the trip's actions. Extracted from ClientItineraryPage.jsx.
+
+import { Spinner } from "../../ui/index.js";
+import {
+  ArrowLeftIcon,
+  PlusIcon,
+  ChatIcon,
+  ShareIcon,
+  DownloadIcon,
+} from "../../icons/index.js";
+import { formatSavedItineraryCount, getSavedStatusLabel } from "../../../lib/trip-dashboard/savedItineraries.js";
+import { getSavedStatusClass } from "../../../lib/formatters.js";
+import ReuseLauncher from "../../ratedHistory/entryPoints/ReuseLauncher.jsx";
+
+// The header is a size container (`@container`). Under 720px of its own width the
+// actions drop their visible label but keep the icon, tooltip and aria-label, so the
+// row never wraps or cuts the client's name off. ReuseButton follows the same rule
+// in its "clientItinerary" mode.
+const ACTION_BUTTON =
+  "inline-flex items-center justify-center gap-2 min-w-[40px] min-h-[40px] px-2 @min-[720px]:px-3.5 rounded-lg border text-[0.85rem] font-bold cursor-pointer transition-[background-color,border-color,color,scale] duration-150 ease-out active:scale-[0.97] motion-reduce:transition-none";
+const ACTION_IDLE = "bg-surface-elevated text-text-primary border-border/20 hover:bg-surface hover:border-border/40";
+const ACTION_LABEL = "hidden @min-[720px]:inline";
+
+// In review waits on the agent, approved is done, anything else is neutral.
+function statusDotClass(label) {
+  if (/review/i.test(label)) return "bg-status-warning";
+  return getSavedStatusClass(label) === "approved" ? "bg-status-success" : "bg-text-soft";
+}
+
+export default function ItineraryHeader({
+  selectedClient,
+  selectedTrip,
+  selectedItineraryId,
+  fullItinerary,
+  unreadCommentCount,
+  pdfLoading,
+  showCommentsPanel,
+  onBackToList,
+  onAddTripForClient,
+  onToggleComments,
+  onShare,
+  onDownloadPdf,
+  // Approve shows only when the page passes a handler (the trip is in review).
+  onApprove = null,
+  isApproving = false,
+  // Reuse launcher props (optional for Stage 6A)
+  agencyId = null,
+  currentTrip = null,
+  targetItineraryId = null,
+  currentVersion = null,
+  onReuseInserted = null,
+}) {
+  const rawStatus = selectedTrip ? getSavedStatusLabel(selectedTrip) : "";
+  // Tutorial data stores lowercase labels ("client approved").
+  const statusLabel = rawStatus ? rawStatus.charAt(0).toUpperCase() + rawStatus.slice(1) : "";
+
+  return (
+    <>
+      {/* Back to the client list (single-column layout below lg) */}
+      <button
+        type="button"
+        onClick={onBackToList}
+        className="lg:hidden flex items-center gap-2 px-4 py-3 text-sm font-semibold text-text-muted border-b border-border/10 bg-transparent cursor-pointer hover:text-text-primary transition-colors"
+      >
+        <ArrowLeftIcon width={16} height={16} />
+        All clients
+      </button>
+      <header className="@container flex-shrink-0 border-b border-border/10 px-6 py-4">
+        <div className="flex items-center justify-between gap-4">
+          <div className="min-w-0">
+            <h2 className="m-0 truncate font-serif text-[28px] leading-tight" title={selectedClient.name}>
+              {selectedClient.name}
+            </h2>
+            <div className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[13px] text-text-muted">
+              {statusLabel ? (
+                <>
+                  <span className="inline-flex items-center gap-1.5 font-semibold text-text-primary">
+                    <span aria-hidden="true" className={`h-1.5 w-1.5 flex-shrink-0 rounded-full ${statusDotClass(statusLabel)}`} />
+                    {statusLabel}
+                  </span>
+                  <span aria-hidden="true">·</span>
+                </>
+              ) : null}
+              <span>{formatSavedItineraryCount(selectedClient.trips.length)}</span>
+              {onAddTripForClient ? (
+                <>
+                  <span aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    onClick={() => onAddTripForClient(selectedClient.name)}
+                    aria-label={`New trip for ${selectedClient.name}`}
+                    title={`Start a new trip for ${selectedClient.name}`}
+                    className="inline-flex min-h-[28px] items-center gap-1 rounded-md bg-transparent font-semibold text-secondary-strong underline-offset-2 hover:underline"
+                  >
+                    <PlusIcon width={12} height={12} strokeWidth={2.5} aria-hidden="true" />
+                    New trip
+                  </button>
+                </>
+              ) : null}
+            </div>
+          </div>
+
+          <div data-tour-target="cip-actions" className="flex flex-shrink-0 items-center gap-2">
+            {selectedItineraryId && (
+              <>
+                {/* Reuse from rated trips — optional launcher for Stage 6A */}
+                {agencyId && currentTrip && targetItineraryId && currentVersion !== null && (
+                  <ReuseLauncher
+                    agencyId={agencyId}
+                    currentTrip={currentTrip}
+                    targetTripId={currentTrip.tripId}
+                    targetItineraryId={targetItineraryId}
+                    currentVersion={currentVersion}
+                    mode="clientItinerary"
+                    onInserted={onReuseInserted || (() => {})}
+                  />
+                )}
+
+                <button
+                  type="button"
+                  className={`${ACTION_BUTTON} ${showCommentsPanel ? "bg-secondary-strong text-on-secondary-strong border-secondary-strong" : ACTION_IDLE}`}
+                  onClick={onToggleComments}
+                  title="View client comments"
+                  aria-label="Comments"
+                  aria-pressed={showCommentsPanel}
+                >
+                  <ChatIcon width={14} height={14} aria-hidden="true" />
+                  <span className={ACTION_LABEL}>Comments</span>
+                  {unreadCommentCount > 0 && (
+                    <span className="inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-pill bg-[#dc2626] text-white text-[0.65rem] font-extrabold leading-none flex-shrink-0">
+                      {unreadCommentCount > 99 ? "99+" : unreadCommentCount}
+                    </span>
+                  )}
+                </button>
+
+                <button
+                  type="button"
+                  className={`${ACTION_BUTTON} ${ACTION_IDLE}`}
+                  onClick={onShare}
+                  title="Share itinerary"
+                  aria-label="Share"
+                >
+                  <ShareIcon width={14} height={14} aria-hidden="true" />
+                  <span className={ACTION_LABEL}>Share</span>
+                </button>
+
+                <button
+                  type="button"
+                  className={`${ACTION_BUTTON} ${ACTION_IDLE} ${pdfLoading ? "opacity-60 cursor-not-allowed pointer-events-none" : ""}`}
+                  onClick={onDownloadPdf}
+                  disabled={pdfLoading || !fullItinerary}
+                  title="Download itinerary as PDF"
+                  aria-label="Download PDF"
+                >
+                  {pdfLoading ? <Spinner size="sm" /> : <DownloadIcon width={14} height={14} aria-hidden="true" />}
+                  <span className={ACTION_LABEL}>{pdfLoading ? "Generating..." : "PDF"}</span>
+                </button>
+              </>
+            )}
+
+            {onApprove ? (
+              <button
+                type="button"
+                onClick={onApprove}
+                disabled={isApproving}
+                className="inline-flex min-h-[40px] items-center justify-center rounded-lg bg-secondary-strong px-4 text-[0.85rem] font-semibold text-on-secondary-strong transition-[opacity,scale] duration-150 ease-out hover:opacity-90 active:scale-[0.97] disabled:cursor-wait disabled:opacity-60 motion-reduce:transition-none"
+              >
+                {isApproving ? "Approving…" : "Approve"}
+              </button>
+            ) : null}
+          </div>
+        </div>
+      </header>
+    </>
+  );
+}
+```
+
+The header uses only icons and helpers that the existing `ClientItineraryPage` test mocks already export. That's `ArrowLeftIcon`, `PlusIcon`, `ChatIcon`, `ShareIcon` and `DownloadIcon`, plus `getSavedStatusClass` from `formatters.js`. Keep it that way.
+
+- [ ] **Step 8: Wire the page**
+
+In `app/components/trip-dashboard/pages/ClientItineraryPage.jsx`:
+
+1. Add `formatSavedItineraryCount,` as the first name in the `savedItineraries.js` import:
+
+```js
+import {
+  formatSavedItineraryCount,
+  getSavedItineraryTrips,
+  getStableItineraryId,
+  groupSavedTripsByClient,
+  normalizeItineraryResponse,
+  resolveSavedPortfolioSelection,
+} from "../../../lib/trip-dashboard/savedItineraries.js";
+```
+
+2. Directly after the `handleDeleteClient` function, add:
+
+```js
+  // Optimistic: the trip shows as approved at once and rolls back if the request fails.
+  const handleApproveTrip = async () => {
+    if (!selectedTrip) return;
+    const trip = selectedTrip;
+    const previous = trip.approvalStatus;
+    setApprovingTripId(trip.id);
+    onTripStatusChange?.(trip.id, "Approved");
+    try {
+      await approveClientTrip(agencyId, trip.id);
+    } catch (err) {
+      onTripStatusChange?.(trip.id, previous);
+      console.error(err);
+    } finally {
+      setApprovingTripId(null);
+    }
+  };
+```
+
+3. In the `<ItineraryHeader` element, add these two props directly after `onDownloadPdf={handleDownloadPdf}`:
+
+```jsx
+              onApprove={selectedTrip?.approvalStatus === "In review" ? handleApproveTrip : null}
+              isApproving={Boolean(selectedTrip) && approvingTripId === selectedTrip.id}
+```
+
+4. Delete the whole status row, from `{/* Approve button — shown when selected trip is In review */}` through its closing `)}`:
+
+```jsx
+              {/* Approve button — shown when selected trip is In review */}
+              {selectedTrip?.approvalStatus === "In review" && (
+                <div className="flex items-center gap-3 px-6 py-2 border-b border-border/10 flex-shrink-0">
+                  <span className="text-[0.75rem] font-bold text-text-soft uppercase tracking-wide">Status: In review</span>
+                  <button
+                    type="button"
+                    className="inline-flex items-center justify-center rounded-pill bg-secondary text-white text-xs font-bold h-8 px-3 hover:-translate-y-px transition-transform disabled:opacity-50"
+                    disabled={approvingTripId === selectedTrip.id}
+                    onClick={async (e) => {
+                      e.stopPropagation();
+                      setApprovingTripId(selectedTrip.id);
+                      const previous = selectedTrip.approvalStatus;
+                      onTripStatusChange?.(selectedTrip.id, "Approved");
+                      try {
+                        await approveClientTrip(agencyId, selectedTrip.id);
+                      } catch (err) {
+                        onTripStatusChange?.(selectedTrip.id, previous);
+                        console.error(err);
+                      } finally {
+                        setApprovingTripId(null);
+                      }
+                    }}
+                  >
+                    {approvingTripId === selectedTrip.id ? "Approving..." : "Approve"}
+                  </button>
+                </div>
+              )}
+```
+
+5. In the mobile client list, replace `<span className="text-[0.75rem] text-text-soft font-semibold">{c.trips.length} saved itineraries</span>` with:
+
+```jsx
+                          <span className="text-[0.75rem] text-text-soft font-semibold">{formatSavedItineraryCount(c.trips.length)}</span>
+```
+
+- [ ] **Step 9: Use the helper in the client list**
+
+In `app/components/trip-dashboard/pages/ClientList.jsx`:
+
+1. Add below `import { SearchIcon, TrashIcon, UsersIcon } from "../../icons/index.js";`:
+
+```js
+import { formatSavedItineraryCount } from "../../../lib/trip-dashboard/savedItineraries.js";
+```
+
+2. Replace `{c.trips.length} saved itineraries` with `{formatSavedItineraryCount(c.trips.length)}`.
+
+- [ ] **Step 10: Run the tests**
+
+Run: `npx vitest run tests/saved-itinerary-count.test.js tests/client-list.test.jsx tests/itinerary-header.test.jsx tests/reuseButton.smoke.test.jsx tests/client-itinerary-approve.test.jsx tests/client-itinerary-weather.test.jsx tests/client-itinerary-pdf.test.jsx tests/client-list-contrast.test.jsx --pool=threads`
+Expected: PASS (all eight files).
+
+- [ ] **Step 11: Commit**
+
+```bash
+git add app/lib/trip-dashboard/savedItineraries.js app/components/ratedHistory/entryPoints/ReuseButton.jsx app/components/trip-dashboard/pages/ItineraryHeader.jsx app/components/trip-dashboard/pages/ClientItineraryPage.jsx app/components/trip-dashboard/pages/ClientList.jsx tests/saved-itinerary-count.test.js tests/client-list.test.jsx tests/itinerary-header.test.jsx tests/reuseButton.smoke.test.jsx tests/client-itinerary-approve.test.jsx
+git commit -m "feat(itineraries): one roomier workspace header with Approve inside it"
+```
+
+---
+
+### Task 11: Headings follow the dashboard's type rule
+
+**Required skills:** `frontend-design`, `emil-design-eng`. Check the result against Design decision 6.
+
+**Files:**
+- Modify: `app/components/trip-dashboard/pages/ClientList.jsx:35`
+- Modify: `app/components/trip-dashboard/pages/ClientItineraryPage.jsx:422` (mobile "Client Directory")
+- Modify: `app/components/trip-dashboard/pages/ItineraryDayView.jsx:80,136,141`
+- Modify: `app/components/trip-dashboard/mobile/CompactPlaceCard.jsx:39`
+- Modify: `app/components/trip-dashboard/itinerary/ShareDialog.jsx:182`
+- Modify: `app/agency/[agencyId]/components/dashboard/TripSlideOver.jsx:571`
+- Modify: `app/agency/[agencyId]/components/dashboard/widgets/FunnelStageDetailPanel.jsx:137`
+- Modify: `app/itinerary/view/[token]/page.jsx` (the "General Feedback" heading)
+- Modify: `app/itinerary/view/[token]/components/ProposalRating.jsx:213`
+- Test: `tests/heading-typography.test.js`
+
+- [ ] **Step 1: Write the failing guard**
+
+Create `tests/heading-typography.test.js`:
+
+```js
+import { readdirSync, readFileSync, statSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { describe, expect, it } from "vitest";
+
+// jsdom replaces the global URL, so resolve from import.meta.dirname (see theme-safe-classes.test.js).
+const ROOT = resolve(import.meta.dirname, "..");
+
+// globals.css sets h1–h4 in DM Serif Display, which ships one weight (400); asking it
+// for semibold or heavier makes the browser fake the bold. The dashboard's rule
+// (Design decision 6): the serif, at 400, only for a page's main title; Plus Jakarta
+// Sans semibold for every other heading.
+const SHARE_DIR = "app/itinerary/view/[token]";
+const SCOPED_FILES = [
+  "app/components/trip-dashboard/pages/ClientList.jsx",
+  "app/components/trip-dashboard/pages/ClientItineraryPage.jsx",
+  "app/components/trip-dashboard/pages/ItineraryHeader.jsx",
+  "app/components/trip-dashboard/pages/ItineraryDayView.jsx",
+  "app/components/trip-dashboard/mobile/CompactPlaceCard.jsx",
+  "app/components/trip-dashboard/itinerary/ShareDialog.jsx",
+  "app/agency/[agencyId]/components/dashboard/TripSlideOver.jsx",
+  "app/agency/[agencyId]/components/dashboard/widgets/FunnelStageDetailPanel.jsx",
+  ...sourceFiles(SHARE_DIR),
+];
+
+// [file, heading content as written in the JSX, expected font]
+const EXPECTED = [
+  ["app/components/trip-dashboard/pages/ClientList.jsx", "Client Directory", "sans"],
+  ["app/components/trip-dashboard/pages/ClientItineraryPage.jsx", "Client Directory", "sans"],
+  ["app/components/trip-dashboard/pages/ClientItineraryPage.jsx", "{selectedClient.name}", "serif"],
+  ["app/components/trip-dashboard/pages/ClientItineraryPage.jsx", "No saved itineraries yet.", "serif"],
+  ["app/components/trip-dashboard/pages/ItineraryHeader.jsx", "{selectedClient.name}", "serif"],
+  ["app/components/trip-dashboard/pages/ItineraryDayView.jsx", "{selectedDay.title}", "sans"],
+  ["app/components/trip-dashboard/pages/ItineraryDayView.jsx", "{item.title || placeName}", "sans"],
+  ["app/components/trip-dashboard/itinerary/ShareDialog.jsx", "{tripTitle || \"Itinerary\"}", "serif"],
+  ["app/components/trip-dashboard/itinerary/ShareDialog.jsx", "Existing Share Links", "sans"],
+  ["app/agency/[agencyId]/components/dashboard/TripSlideOver.jsx", "{tripTitle}", "sans"],
+  ["app/agency/[agencyId]/components/dashboard/widgets/FunnelStageDetailPanel.jsx", "{label}", "sans"],
+  [`${SHARE_DIR}/page.jsx`, "{trip.title || itinerary.title}", "serif"],
+  [`${SHARE_DIR}/page.jsx`, "{day.title}", "sans"],
+  [`${SHARE_DIR}/page.jsx`, "General Feedback", "sans"],
+  [`${SHARE_DIR}/components/ShareStopCard.jsx`, "{item.title}", "sans"],
+  [`${SHARE_DIR}/components/ProposalRating.jsx`, "Rate this proposal", "sans"],
+];
+
+const BOLD = /\bfont-(semibold|bold|extrabold|black)\b/;
+
+function sourceFiles(dir) {
+  return readdirSync(join(ROOT, dir)).flatMap((name) => {
+    const rel = `${dir}/${name}`;
+    if (statSync(join(ROOT, rel)).isDirectory()) return sourceFiles(rel);
+    return /\.(jsx?|tsx?)$/.test(name) ? [rel] : [];
+  });
+}
+
+const read = (rel) => readFileSync(join(ROOT, rel), "utf8");
+
+// Every <h1>–<h6> element: its tag, its attribute text, and its content on one line.
+function headings(rel) {
+  return [...read(rel).matchAll(/<(h[1-6])\b([^>]*)>([\s\S]*?)<\/\1>/g)].map(([, tag, attrs, inner]) => ({
+    tag,
+    attrs,
+    text: inner.replace(/\s+/g, " ").trim(),
+  }));
+}
+
+describe("heading typography", () => {
+  it("never asks DM Serif Display for a bold weight", () => {
+    const offenders = SCOPED_FILES.flatMap((rel) =>
+      read(rel)
+        .split("\n")
+        .flatMap((line, index) => (/\bfont-serif\b/.test(line) && BOLD.test(line) ? [`${rel}:${index + 1}  ${line.trim()}`] : [])),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it("gives every bold h1–h4 the sans font, since globals.css makes them serif", () => {
+    const offenders = SCOPED_FILES.flatMap((rel) =>
+      headings(rel)
+        .filter(({ tag, attrs }) => /^h[1-4]$/.test(tag) && BOLD.test(attrs) && !/\bfont-sans\b/.test(attrs))
+        .map(({ tag, text }) => `${rel} <${tag}> ${text}`),
+    );
+    expect(offenders).toEqual([]);
+  });
+
+  it.each(EXPECTED)("%s: %s is %s", (rel, text, font) => {
+    const matches = headings(rel).filter((heading) => heading.text === text);
+    expect(matches.length).toBeGreaterThan(0);
+    for (const { attrs } of matches) {
+      if (font === "sans") {
+        expect(attrs).toMatch(/\bfont-sans\b/);
+        expect(attrs).toMatch(/\bfont-semibold\b/);
+      } else {
+        expect(attrs).toMatch(/\bfont-serif\b/);
+        expect(attrs).not.toMatch(BOLD);
+      }
+    }
+  });
+});
+```
+
+- [ ] **Step 2: Run the guard and check that it fails**
+
+Run: `npx vitest run tests/heading-typography.test.js --pool=threads`
+
+Expected: FAIL in three ways:
+- "never asks DM Serif Display for a bold weight" lists the photo placeholder in `ItineraryDayView.jsx` and the one in `CompactPlaceCard.jsx`.
+- "gives every bold h1–h4 the sans font" lists four headings:
+  - `ItineraryDayView.jsx <h4> {selectedDay.title}`
+  - `ShareDialog.jsx <h3> Existing Share Links`
+  - `TripSlideOver.jsx <h2> {tripTitle}`
+  - `FunnelStageDetailPanel.jsx <h2> {label}`
+- Nine rows of the font table fail: both "Client Directory" rows, `{selectedDay.title}`, `{item.title || placeName}`, "Existing Share Links", `{tripTitle}`, `{label}`, "General Feedback" and "Rate this proposal". Tasks 7 and 10 already satisfy the other seven rows.
+
+- [ ] **Step 3: Apply the type rule**
+
+Make each replacement exactly (search for the old string):
+
+| # | File | Old | New |
+|---|---|---|---|
+| 1 | `ClientList.jsx` | `<h3 className="font-serif text-[1.6rem] text-text-primary m-0 tracking-tight">Client Directory</h3>` | `<h3 className="m-0 font-sans text-[15px] font-semibold tracking-normal text-text-primary">Client Directory</h3>` |
+| 2 | `ClientItineraryPage.jsx` | `<h3 className="font-serif text-[1.3rem] text-text-primary m-0 tracking-tight mb-2">Client Directory</h3>` | `<h3 className="m-0 mb-2 font-sans text-[15px] font-semibold tracking-normal text-text-primary">Client Directory</h3>` |
+| 3 | `ItineraryDayView.jsx` | `<h4 className="text-[1.5rem] font-extrabold m-0 text-text-primary tracking-tight">{selectedDay.title}</h4>` | `<h4 className="m-0 font-sans text-[22px] font-semibold leading-snug tracking-[-0.015em] text-text-primary">{selectedDay.title}</h4>` |
+| 4 | `ItineraryDayView.jsx` | `bg-background text-text-soft text-2xl font-serif font-bold border border-border/10 shadow-inner` | `bg-background text-text-soft text-2xl font-semibold border border-border/10 shadow-inner` |
+| 5 | `ItineraryDayView.jsx` | `<h5 className="m-0 text-text-primary text-[1rem] font-serif leading-tight tracking-tight">` | `<h5 className="m-0 font-sans text-[15px] font-semibold leading-snug tracking-normal text-text-primary">` |
+| 6 | `CompactPlaceCard.jsx` | `text-text-soft text-lg font-serif font-bold border border-white/10` | `text-text-soft text-lg font-semibold border border-white/10` |
+| 7 | `ShareDialog.jsx` | `<h3 className="m-0 mb-3.5 text-[13px] font-bold tracking-[0.01em] text-text-primary">` | `<h3 className="m-0 mb-3.5 font-sans text-[13px] font-semibold tracking-normal text-text-primary">` |
+| 8 | `TripSlideOver.jsx` | `<h2 className="text-base font-extrabold text-text-primary truncate">` | `<h2 className="font-sans text-base font-semibold tracking-normal text-text-primary truncate">` |
+| 9 | `FunnelStageDetailPanel.jsx` | `className="text-base font-extrabold text-text-primary"` (the `h2` with `id={headingId}`) | `className="font-sans text-base font-semibold tracking-normal text-text-primary"` |
+| 10 | `page.jsx` (share) | `<h3 className="font-serif text-[17px] font-normal m-0 text-primary">General Feedback</h3>` | `<h3 className="m-0 font-sans text-[15px] font-semibold tracking-normal text-primary">General Feedback</h3>` |
+| 11 | `ProposalRating.jsx` | `<h3 className="font-serif text-[17px] font-normal m-0 text-primary">` | `<h3 className="m-0 font-sans text-[15px] font-semibold tracking-normal text-primary">` |
+
+The photo placeholders (rows 4 and 6) aren't headings, so dropping `font-serif` lets them inherit the body's Plus Jakarta Sans.
+
+- [ ] **Step 4: Run the guard and the tests that render these components**
+
+Run: `npx vitest run tests/heading-typography.test.js tests/client-list.test.jsx tests/client-list-contrast.test.jsx tests/accessibility-integrations.test.jsx tests/dashboard-polish.test.jsx tests/trip-slide-over-comments.test.jsx tests/trip-slide-over-focus.test.jsx tests/itinerary-header.test.jsx tests/share-page-layout.test.jsx tests/share-page-accessibility.test.jsx tests/share-page-weather.test.jsx --pool=threads`
+Expected: PASS (all eleven files). If the guard lists a line that isn't in the table, fix it the same way: sans semibold for a section or card title, and the serif at 400 only for a page's main title. Don't add an exemption.
+
+- [ ] **Step 5: Commit**
+
+```bash
+git add app/components/trip-dashboard/pages/ClientList.jsx app/components/trip-dashboard/pages/ClientItineraryPage.jsx app/components/trip-dashboard/pages/ItineraryDayView.jsx app/components/trip-dashboard/mobile/CompactPlaceCard.jsx app/components/trip-dashboard/itinerary/ShareDialog.jsx "app/agency/[agencyId]/components/dashboard/TripSlideOver.jsx" "app/agency/[agencyId]/components/dashboard/widgets/FunnelStageDetailPanel.jsx" "app/itinerary/view/[token]/page.jsx" "app/itinerary/view/[token]/components/ProposalRating.jsx" tests/heading-typography.test.js
+git commit -m "style(type): dashboard heading rule on the itinerary pages, with a fake-bold guard"
+```
+
+---
+
+### Task 12: Verify, review and QA
 
 **Required sub-skills:** `superpowers:verification-before-completion`, `superpowers:requesting-code-review`.
 
@@ -1932,6 +2886,11 @@ Dispatch a reviewer on `git diff staging...fix/share-link-theme-pdf` with this p
 - the hand-off order (no `await` between tap and `deliverPdf`), blob URL lifetimes, and the iPadOS detection;
 - that a rebuild never offers the previous trip's PDF;
 - that the share page and comments still work for personal shares (`trip` is `null`);
+- on the Itineraries tab:
+  - Approve's optimistic update and rollback;
+  - the tour's `cip-actions` step;
+  - the Reuse label in both modes;
+  - that only the Dashboard and Itineraries tabs get the compact bar;
 - the Before/After/Why table (`emil-design-eng`) for the UI changes.
 
 Fix every Critical and Important finding, then re-review.
@@ -1947,6 +2906,18 @@ Restart `npm run dev` (OneDrive: hot reload is unreliable). Use a real share lin
 | 375×812 | light | segmented Itinerary/Map switcher; header shows no "Shared itinerary" text and doesn't crowd; cards fit with no horizontal scroll; PDF button is ≥44px tall |
 | 375×812 | dark | map tab is dark; comment form, chips and rating are readable |
 | any | any | console has no errors; no `dark_map_id_placeholder` in the DOM |
+
+Then check the Itineraries tab. It needs a signed-in agency session. Ask the user to sign in inside the browser pane, and never type their password. Use a client with an In review trip, or ask the user which one to use:
+
+| Viewport | Theme | Check |
+|---|---|---|
+| 1280×800 | light | no top bar; the Client Directory and the workspace start at the top of the frame; the full client name; the status dot, "1 saved itinerary" and New trip on one line; labelled Reuse, Comments, Share and PDF; Approve as the only filled button |
+| 1280×800 | dark | open Comments uses the strong terracotta; the day title and stop titles are in Plus Jakarta Sans; no fake-bold serif anywhere on the page |
+| 1100×800 | dark | the actions are icon-only with tooltips; nothing wraps; the name isn't cut off |
+| 375×812 | light | 48px bar with the menu button and the logo; the glass sheet is unchanged apart from the sans "Client Directory" and "1 saved itinerary" |
+| any | any | the Dashboard tab is unchanged; the Command Center still shows its full bar with New Itinerary and the client switcher |
+
+Don't press Approve on a real trip unless the user says so. It changes the trip's status for the whole agency.
 
 Then reset the viewport to desktop and restore the theme you found.
 
@@ -1975,3 +2946,7 @@ Summarise files changed, test results, QA screenshots, the device results, and t
 3. **In-app browsers (Messenger, Instagram, Gmail) can't download blob PDFs.** The fallback link helps where a new tab can open. A complete fix is a server-rendered PDF URL (Next route handler with `Content-Disposition: attachment`), which needs proxy-signed IP forwarding and must not count as a share view.
 4. **First-time visitors don't follow the system dark mode.** `ThemeProvider` defaults to light and ignores `prefers-color-scheme`.
 5. **`ItineraryDraftPanel` doesn't pass `theme` to the map.** Task 1's fallback fixes it with no change there; listed so the reviewer knows it is covered.
+6. **The dashboard `EmptyState` default variant still fakes bold** (`text-sm font-extrabold` on an `h3`). `tests/dashboard-polish.test.jsx` pins it on purpose ("leaves the default unchanged"), and the dashboard itself only uses the compact variant. Changing it means updating that test.
+7. **Unread-count badges use raw `#dc2626`** in `ItineraryHeader`, `ClientList` and the mobile client list. It reads fine in both themes, but swapping in `bg-status-danger` would drop to about 2.8:1 with white text in dark mode (`#f87171`). It needs its own contrast decision.
+8. **Phones have no Approve button on the Itineraries tab.** Approval was desktop-only before this plan and stays that way.
+9. **A global guard against fake bold** (`font-synthesis-weight: none` on headings in `globals.css`) would stop this whole class of bug. It changes every remaining serif heading in the app, so do it with a full visual pass.
