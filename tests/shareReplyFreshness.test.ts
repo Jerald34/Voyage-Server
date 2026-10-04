@@ -22,7 +22,10 @@ vi.mock("../src/modules/dashboard/dashboardFreshness", () => ({
 import { errorHandler, notFoundHandler } from "../src/http/errors";
 import { shareRoutes } from "../src/modules/shares/shareRoutes";
 
-const AGENCY_ID = "11111111-1111-4111-8111-111111111111";
+// The id the access check resolves to (lowercase); the URL spells the same UUID in uppercase,
+// so a handler that used the raw URL param instead of the resolved id would be caught.
+const AGENCY_ID = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d";
+const AGENCY_ID_IN_URL = AGENCY_ID.toUpperCase();
 // ItineraryComment ids are Prisma cuid()s.
 const COMMENT_ID = "cmpt0a1b20003eohoq8r7s6tu";
 
@@ -47,7 +50,7 @@ function createApp() {
 
 function reply() {
   return request(createApp())
-    .post(`/agencies/${AGENCY_ID}/shares/comments/${COMMENT_ID}/reply`)
+    .post(`/agencies/${AGENCY_ID_IN_URL}/shares/comments/${COMMENT_ID}/reply`)
     .send({ content: "Yes, we can swap it." });
 }
 
@@ -67,6 +70,9 @@ describe("POST /agencies/:agencyId/shares/comments/:commentId/reply", () => {
     const response = await reply();
 
     expect(response.status).toBe(200);
+    expect(mocks.requireVerifiedAgencyMember).toHaveBeenCalledWith(expect.anything(), AGENCY_ID_IN_URL);
+    // Both the reply and the invalidation use the id the access check resolved, not the URL's spelling.
+    expect(mocks.replyToComment).toHaveBeenCalledWith(AGENCY_ID, COMMENT_ID, "Yes, we can swap it.");
     expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledOnce();
     expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledWith(AGENCY_ID);
   });
