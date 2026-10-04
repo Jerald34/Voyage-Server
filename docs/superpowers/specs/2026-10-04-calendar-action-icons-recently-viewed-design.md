@@ -2,7 +2,7 @@
 
 **Date:** 2026-10-04
 **Author:** brainstormed with Claude (Voyage)
-**Status:** Draft — pending review
+**Status:** Implemented 2026-10-04 (see §12 As built)
 **Scope:** Voyage-Client (calendar day tiles, day popover, legend, a new Recently viewed card, refresh after a reply) + Voyage-Server (calendar `needsReply`, dashboard `recentViews`, cache clearing on reply)
 **Builds on:** `2026-10-03-dashboard-calendar-glass-redesign-design.md` (the calendar, the day popover, the Insights and Your work columns)
 
@@ -338,3 +338,16 @@ Both payloads are cached for 60 seconds per agency, and nothing clears them earl
 - A views line in the trip slide-over, and view counts on the Itineraries page.
 - The Itineraries header overlap at 1280px, which is tracked as a separate task.
 - Hover previews on tiles.
+
+## 12. As built (2026-10-04)
+
+- Tile tiers: container queries measure the tile's content box (tile width minus 12px padding and 2px border), so the thresholds are written as `@min-[46px]` and `@min-[70px]`, which equal the spec's 60px and 84px outer tile widths. Measured on real data: 113px tile at 1280 (wide), 82px at 1024 (medium), 39px at 375 (narrow).
+- The hook is `useNowMinute()` (in `app/hooks/useLocalClock.js`), not `useNow`; time helpers live in `app/lib/relativeTime.js` (`timeAgo`, `timeAgoSpoken`).
+- `TripSlideOver`'s callback is `onReplied(commentId)`; it runs only after a saved reply and is guarded so a throwing handler is logged instead of breaking the panel.
+- Server cache freshness: besides invalidating on reply, `TtlCache` has a `generation` counter and `setIfCurrent`, so a dashboard or calendar load that was already in flight when a reply landed can't put stale data back in the cache. The counter is global per cache, so an unrelated agency's in-flight load may skip caching once.
+- `selectRecentViews` breaks ties deterministically (newest view, then trip id; on equal view times a named link beats an unnamed one).
+- Unknown calendar event kinds are skipped consistently: `KNOWN_EVENT_KINDS` (client `app/lib/calendarActions.js`) must match `EVENT_COPY` (`app/lib/calendarDays.js`), and a test enforces it.
+- The day popover adds screen-reader text naming each item's action (e.g. "Needs reply:"), so urgency isn't conveyed by colour alone (WCAG 1.4.1). `ACTION_STYLE` in `DayMarks.jsx` is the single source for tile, legend and popover colours.
+- The Recently viewed card caps at 5 rows on the client too (`MAX_ROWS`), shows a title tooltip on truncated trip names, and keeps the client-name line's height with a non-breaking space so rows don't jump after hydration.
+- Reduced motion: `app/globals.css` now also resets the `scale` property app-wide (`:where(*), ::before, ::after { scale: none !important; }`) in its own rule, because Tailwind 4's `active:scale-*` uses `scale`, not `transform`, and Lightning CSS folds a shared rule into `transform`. A test guards the separate rule.
+- Open items (not built): light-mode count digits on the OPEN (selected) day tile measure about 4.2–4.5:1, just under 4.5:1 — needs an owner decision (darker warning/success tokens, or keep the resting tile background on the selected tile and show selection with the border); `useDashboardPoll.refetch` reuses an in-flight request, so after a reply a to-do row can survive until the next poll in rare timing; other cached months refresh on navigation rather than immediately; caches are per server process; "Departs soon" counts draft trips and same-day departures, unlike the staff "Starting soon" list — product decision pending.
