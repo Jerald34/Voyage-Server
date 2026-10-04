@@ -27,6 +27,8 @@ export type RawDashboardData = {
   shares: Array<{
     id: string;
     tripId: string | null;
+    /** Who the link was shared with; the Recently viewed card prefers it to the trip's client. */
+    clientName: string | null;
     viewCount: number;
     lastViewedAt: Date | null;
     expiresAt: Date | null;
@@ -90,6 +92,7 @@ export function createPrismaDashboardRepository(client: PrismaClient = prisma): 
           select: {
             id: true,
             tripId: true,
+            clientName: true,
             viewCount: true,
             lastViewedAt: true,
             expiresAt: true,

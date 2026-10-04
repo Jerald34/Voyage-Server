@@ -7,6 +7,7 @@ import {
   periodWindow,
   priorPeriodWindow,
   selectOwnerWorklistRows,
+  selectRecentViews,
   selectStaffWorklistRows,
   type DashboardPeriod
 } from "./aggregations";
@@ -81,27 +82,26 @@ export function createDashboardService(deps: {
       return cached;
     }
 
+    // Read before the await: an invalidate() while we fetch must stop us caching stale rows.
+    const generation = deps.cache.generation;
     const raw = await deps.repository.fetchAgencyDashboardData(opts.agencyId);
     const payload =
       view === "owner"
         ? composeOwnerPayload({ raw, period, now })
         : composeStaffPayload({ raw, period, now, userId: opts.userId });
 
-    deps.cache.set(cacheKey, payload);
+    deps.cache.setIfCurrent(cacheKey, payload, generation);
     logFetch({ agencyId: opts.agencyId, view, period, durationMs: Date.now() - startedAt, cacheHit: false });
     return payload;
   }
 
+  /**
+   * Forgets every cached payload for the agency: the owner entries and each
+   * staff member's (`${agencyId}:staff:${period}:${userId}`). Agency ids are
+   * UUIDs followed by ":", so the prefix can't match another agency.
+   */
   function invalidate(agencyId: string) {
-    // Best-effort: nuke every cached entry for the agency. The cache is per-process
-    // and small, so a full clear is acceptable when in doubt; for now we just
-    // forget keys we know how to derive. Callers can fall back to clear() if
-    // they want a hard wipe.
-    for (const view of ["owner", "staff"] as const) {
-      for (const period of ["7d", "30d", "90d"] as const) {
-        deps.cache.invalidate(`${agencyId}:${view}:${period}`);
-      }
-    }
+    deps.cache.invalidatePrefix(`${agencyId}:`);
   }
 
   return { getDashboard, invalidate };
@@ -223,6 +223,7 @@ function composeOwnerPayload(args: {
     },
     funnel: { stages: funnelStages },
     recentReviews,
+    recentViews: selectRecentViews({ trips: raw.trips, shares: raw.shares, now }),
     activityRibbon
   };
 }
@@ -310,7 +311,8 @@ function composeStaffPayload(args: {
     secondaryRecent,
     worklist,
     pipeline,
-    startingSoon
+    startingSoon,
+    recentViews: selectRecentViews({ trips: raw.trips, shares: raw.shares, now, userId })
   };
 }
 

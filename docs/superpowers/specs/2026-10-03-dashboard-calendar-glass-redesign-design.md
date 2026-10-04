@@ -378,3 +378,52 @@ type CalendarPayload = {
 **Voyage-Server**
 - `src/modules/dashboard/`: `dashboardRoutes.ts`, `dashboardSchemas.ts`, `dashboardTypes.ts`, `dashboardRepository.ts`, `dashboardService.ts`; new `calendar.ts`.
 - `tests/dashboardCalendar.test.ts`.
+
+## 15. As built
+
+Implemented on `feat/dashboard-calendar` (both repos) from `docs/superpowers/plans/2026-10-03-dashboard-calendar-glass-redesign.md`. Refinements made while planning:
+
+- New `frame-*` tokens and utilities instead of `--glass-panel`, `--glass-tile` and `--glass-border`, because `--glass-*` and `glass-panel` drive the Command Center chat.
+- Existing `--success`/`--danger`/`--color-status-warning`/`--color-text-muted` used for delta, expiry and activity colours. Only `--color-secondary-strong` and `--color-on-secondary-strong` are new.
+- Server code in `calendar.ts`, `calendarRepository.ts` and `calendarService.ts`. `dashboardRepository.ts` and `dashboardService.ts` are unchanged.
+- To-do rows keep their old actions and labels. Calendar popover actions open the trip slide-over: "Reply" for comments, "Open trip" otherwise.
+- Empty to-do copy stays "All caught up."
+- KPI sparklines, the activity ribbon and the staff "Starting soon" cards are removed.
+- Popovers and the account menu use a solid surface. The rail logo is `/icon.svg`.
+- Calendar day buttons are labelled with the date and item count; the items are read from the day's popover.
+
+Changes made after code review:
+
+- **Server:**
+  - `TtlCache` takes a `maxEntries` cap (default 1000), because the calendar cache key includes the requested range.
+  - The dated-trip query cuts at the day after `to` (`CalendarWindow.toDayEnd`), matching the builder's date comparison.
+  - Shares, comments and reviews also require their trip to belong to the agency.
+  - Excerpts are cut by code point, so emoji are never split.
+  - A route test runs the real service against a mocked repository.
+- **Frame and rail:**
+  - The header has no z-index. As a flex item, `z-[100]` had started painting it over modals and slide-overs.
+  - The phone/desktop boundary is 900px everywhere: `max-[900px]` with `min-[900px]`, and `useMobileViewport` uses `(max-width: 899.98px)`.
+  - On phones the Dashboard always renders the compact header and hides it on desktop with CSS, so first paint doesn't shift.
+  - The closed phone drawer is `inert`, and Escape closes it.
+  - The drawer gets the glass fallbacks, and its active item uses the strong terracotta.
+  - The account identity block sits outside `role="menu"`, and focus returns to the avatar.
+- **Calendar:**
+  - The day popover takes focus only once it is visible, and repositions on resize.
+  - "Today" rolls over at midnight.
+  - Requests are aborted when superseded.
+  - The month cache lasts for the session (module level), and data refetches when a tab hidden for over 60s becomes visible again.
+  - Tiles show placeholder bars on first load.
+- **KPI tiles:** changes under 0.05 read "No change", and the accessible label uses the visible wording.
+- **Dashboards (owner and staff):**
+  - The calendar mounts straight away and loads independently of the `/dashboard` payload.
+  - A failed first load shows a `DashboardStaleBanner` alert with Retry instead of empty states.
+  - A failed refresh, while data is still showing, shows a status banner.
+- **Contrast:** the period switcher's active pill and the status chips use the strong terracotta and muted tokens, at 12px.
+- **Focus:**
+  - A calendar popover action hands focus back to its day.
+  - `TripSlideOver` focuses its close button on open and returns focus to the opener on close.
+  - The closed slide-over is `inert`.
+  - The open slide-over traps Tab.
+  - If the slide-over's opener has left the page, focus falls back to "Needs you today".
+- **Status chips:** labels use body text with a coloured dot, so they stay at 4.5:1 or better on row hover.
+- **Server rendering:** the greeting and the calendar's "today" read the clock through `useSyncExternalStore` (`useLocalClock`), so a server-rendered page hydrates without a mismatch. `/agency/[agencyId]` passes `viewerName`.

@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { isIsoDate } from "../../services/weather/dates";
 
 export const dashboardViewSchema = z.enum(["owner", "staff"]);
 export const dashboardPeriodSchema = z.enum(["7d", "30d", "90d"]);
@@ -26,6 +27,14 @@ const funnelStageSchema = z.object({
   key: z.enum(["created", "drafted", "sent", "viewed", "approved"]),
   count: z.number().int().nonnegative(),
   dropOffPct: z.number().nullable()
+});
+
+const recentViewSchema = z.object({
+  tripId: z.string(),
+  tripTitle: z.string(),
+  clientName: z.string().nullable(),
+  viewCount: z.number().int().nonnegative(),
+  lastViewedAt: z.string()
 });
 
 const ownerWorklistSchema = z.object({
@@ -96,6 +105,7 @@ export const ownerDashboardPayloadSchema = z.object({
       submittedAt: z.string()
     })
   ),
+  recentViews: z.array(recentViewSchema),
   activityRibbon: z.array(
     z.object({
       kind: z.enum(["share_sent", "trip_status_changed", "itinerary_approved"]),
@@ -180,10 +190,64 @@ export const staffDashboardPayloadSchema = z.object({
       daysToStart: z.number().int(),
       travelerCount: z.number().int().nullable()
     })
-  )
+  ),
+  recentViews: z.array(recentViewSchema)
 });
 
 export const dashboardPayloadSchema = z.union([
   ownerDashboardPayloadSchema,
   staffDashboardPayloadSchema
 ]);
+
+// ---------- Calendar ----------
+
+const isoDateSchema = z.string().refine(isIsoDate, "Use a real date in YYYY-MM-DD format.");
+
+export const calendarQuerySchema = z.object({
+  from: isoDateSchema,
+  to: isoDateSchema
+});
+
+export const calendarEventKindSchema = z.enum([
+  "share_sent",
+  "share_expires",
+  "client_viewed",
+  "client_commented",
+  "proposal_rated",
+  "review_submitted"
+]);
+
+export const calendarPayloadSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  generatedAt: z.string(),
+  tripsWithoutDates: z.number().int().nonnegative(),
+  trips: z.array(
+    z.object({
+      tripId: z.string(),
+      tripTitle: z.string(),
+      clientName: z.string().nullable(),
+      placeLabel: z.string(),
+      startDate: z.string(),
+      endDate: z.string(),
+      status: z.enum(["DRAFT", "IN_REVIEW", "APPROVED_INTERNAL"]),
+      travelerCount: z.number().int().nullable()
+    })
+  ),
+  events: z.array(
+    z.object({
+      id: z.string(),
+      kind: calendarEventKindSchema,
+      tripId: z.string(),
+      tripTitle: z.string(),
+      clientName: z.string().nullable(),
+      occurredAt: z.string(),
+      detail: z.object({
+        viewCount: z.number().int().nonnegative().optional(),
+        rating: z.number().int().optional(),
+        excerpt: z.string().optional(),
+        needsReply: z.boolean().optional()
+      })
+    })
+  )
+});

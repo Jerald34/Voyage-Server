@@ -20,7 +20,7 @@ import {
   selectViewForRole
 } from "../src/modules/dashboard/dashboardService";
 import { TtlCache } from "../src/modules/dashboard/cache";
-import { ownerDashboardPayloadSchema } from "../src/modules/dashboard/dashboardSchemas";
+import { ownerDashboardPayloadSchema, staffDashboardPayloadSchema } from "../src/modules/dashboard/dashboardSchemas";
 import type {
   DashboardRepository,
   RawDashboardData
@@ -83,6 +83,7 @@ function makeShare(
   return {
     id,
     tripId,
+    clientName: null,
     viewCount: 0,
     lastViewedAt: null,
     expiresAt: null,
@@ -483,6 +484,56 @@ describe("getDashboard – cache behaviour", () => {
     await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "OWNER", view: "owner", period: "30d", now: NOW });
     expect(repo.calls).toBe(1); // same owner cache key → second is a cache hit
   });
+
+  it("invalidate() forgets the agency's owner and staff entries, so the next reads hit the repository", async () => {
+    const { svc, repo } = makeService(emptyData());
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+    expect(repo.calls).toBe(2);
+
+    svc.invalidate(AGENCY);
+
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+    expect(repo.calls).toBe(4);
+  });
+
+  it("invalidate() leaves other agencies' entries cached", async () => {
+    const { svc, repo } = makeService(emptyData());
+    await svc.getDashboard({ agencyId: "agency-2", userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+
+    svc.invalidate(AGENCY);
+
+    await svc.getDashboard({ agencyId: "agency-2", userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    expect(repo.calls).toBe(1);
+  });
+});
+
+describe("getDashboard – invalidation while a fetch is in flight", () => {
+  it("does not cache the stale result of a fetch that started before invalidate()", async () => {
+    let calls = 0;
+    let finishFirstFetch!: (data: RawDashboardData) => void;
+    const repo = {
+      fetchAgencyDashboardData(_agencyId: string): Promise<RawDashboardData> {
+        calls += 1;
+        if (calls === 1) {
+          return new Promise<RawDashboardData>((resolve) => {
+            finishFirstFetch = resolve;
+          });
+        }
+        return Promise.resolve(emptyData());
+      }
+    } as DashboardRepository;
+    const svc = createDashboardService({ repository: repo, cache: new TtlCache<DashboardPayload>(60_000) });
+
+    const inFlight = svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    svc.invalidate(AGENCY); // a reply lands while the first fetch is still reading
+    finishFirstFetch(emptyData());
+    await inFlight;
+
+    await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    expect(calls).toBe(2); // the pre-reply result was not cached, so this read went back to the repository
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -617,5 +668,51 @@ describe("getDashboard – KPI units and no-signal values", () => {
 
     expect(payload.kpis.winRate.value).toBe(100);
     expect(payload.kpis.winRate.deltaVsPrior).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Recently viewed
+// ---------------------------------------------------------------------------
+
+describe("getDashboard – recently viewed", () => {
+  function viewedData(): RawDashboardData {
+    return {
+      ...emptyData(),
+      trips: [
+        makeTrip("t1", { title: "Kyoto", clientName: "Santos" }),
+        makeTrip("t2", { title: "Palawan", createdByUserId: USER_B })
+      ],
+      shares: [
+        makeShare("s1", "t1", { viewCount: 3, lastViewedAt: new Date("2026-05-26T07:00:00Z") }),
+        makeShare("s2", "t2", { viewCount: 1, lastViewedAt: new Date("2026-05-20T12:00:00Z") })
+      ]
+    };
+  }
+
+  it("lists the agency's recently viewed trips on the owner view", async () => {
+    const { svc } = makeService(viewedData());
+    const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+
+    expect(payload.recentViews).toEqual([
+      { tripId: "t1", tripTitle: "Kyoto", clientName: "Santos", viewCount: 3, lastViewedAt: "2026-05-26T07:00:00.000Z" },
+      { tripId: "t2", tripTitle: "Palawan", clientName: null, viewCount: 1, lastViewedAt: "2026-05-20T12:00:00.000Z" }
+    ]);
+  });
+
+  it("shows a staff member only their own trips", async () => {
+    const { svc } = makeService(viewedData());
+    const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+
+    expect(payload.recentViews.map((row) => row.tripId)).toEqual(["t2"]);
+  });
+
+  it("keeps recentViews through both payload schemas", async () => {
+    const { svc } = makeService(viewedData());
+    const owner = await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", view: "owner", now: NOW });
+    const staff = await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", view: "staff", now: NOW });
+
+    expect(ownerDashboardPayloadSchema.parse(owner).recentViews).toHaveLength(2);
+    expect(staffDashboardPayloadSchema.parse(staff).recentViews).toHaveLength(1);
   });
 });

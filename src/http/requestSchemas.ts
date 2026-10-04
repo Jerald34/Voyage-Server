@@ -23,6 +23,8 @@ function trimBlankToNull(value: unknown) {
 }
 
 export const uuidSchema = z.string().uuid();
+/** Ids of models declared with Prisma `@default(cuid())` (ItineraryShare, ItineraryComment). */
+export const cuidSchema = z.cuid();
 export const opaqueTokenSchema = z.string().trim().min(16).max(512);
 export const shortTextSchema = z.string().trim().min(1).max(200);
 export const longTextSchema = z.string().trim().min(1).max(5000);
