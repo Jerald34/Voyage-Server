@@ -101,6 +101,17 @@ export type OwnerRecentReview = {
   submittedAt: string;
 };
 
+/** A trip clients opened recently, for the Recently viewed card. */
+export type RecentView = {
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  /** All-time views, summed over the trip's share links. */
+  viewCount: number;
+  /** The latest view over those links (ISO). */
+  lastViewedAt: string;
+};
+
 export type ActivityRibbonItem = {
   kind: "share_sent" | "trip_status_changed" | "itinerary_approved";
   tripId: string;
@@ -116,6 +127,7 @@ export type OwnerDashboardPayload = {
   kpis: OwnerKpis;
   funnel: OwnerFunnel;
   recentReviews: OwnerRecentReview[];
+  recentViews: RecentView[];
   activityRibbon: ActivityRibbonItem[];
 };
 
@@ -192,6 +204,54 @@ export type StaffDashboardPayload = {
   worklist: StaffWorklist;
   pipeline: StaffPipeline;
   startingSoon: StaffStartingSoonCard[];
+  recentViews: RecentView[];
 };
 
 export type DashboardPayload = OwnerDashboardPayload | StaffDashboardPayload;
+
+// ---------- Calendar ----------
+
+export type CalendarEventKind =
+  | "share_sent"
+  | "share_expires"
+  | "client_viewed"
+  | "client_commented"
+  | "proposal_rated"
+  | "review_submitted";
+
+export type CalendarTrip = {
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  /** destinationSummary, or the title when there is none; shown on the calendar tile. */
+  placeLabel: string;
+  /** Calendar date, YYYY-MM-DD. */
+  startDate: string;
+  /** Calendar date, YYYY-MM-DD; equals startDate for one-day or undated-end trips. */
+  endDate: string;
+  status: "DRAFT" | "IN_REVIEW" | "APPROVED_INTERNAL";
+  travelerCount: number | null;
+};
+
+export type CalendarEvent = {
+  /** "{kind}:{source row id}" — unique within a payload. */
+  id: string;
+  kind: CalendarEventKind;
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  /** ISO instant; the client places it on the viewer's local day. */
+  occurredAt: string;
+  /** `needsReply` is set on client_commented events only. */
+  detail: { viewCount?: number; rating?: number; excerpt?: string; needsReply?: boolean };
+};
+
+export type CalendarPayload = {
+  from: string;
+  to: string;
+  generatedAt: string;
+  /** In-scope, non-archived trips with no start date. */
+  tripsWithoutDates: number;
+  trips: CalendarTrip[];
+  events: CalendarEvent[];
+};

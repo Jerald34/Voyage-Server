@@ -1,5 +1,6 @@
 import type { AgentEvent } from "./agentSchemas";
 import type { UsageSummary } from "./agentRunUsage";
+import type { TravelerNeeds } from "./travelerNeeds";
 
 export interface CompleteRunUsage {
   promptTokens: number;
@@ -135,6 +136,7 @@ export type AgentThreadRecord = {
   title: string;
   status: AgentThreadStatus;
   titleSetByUser: boolean;
+  travelerNeeds?: unknown;
   messages: AgentMessageRecord[];
   events: AgentRunEventRecord[];
   createdAt: Date;
@@ -194,7 +196,7 @@ export type AgentOrchestratorAgentService = {
   getThread(
     agencyId: string | null,
     threadId: string
-  ): Promise<{ messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string }> }>;
+  ): Promise<{ messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string }>; travelerNeeds?: unknown }>;
   startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
   recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<AgentRunEventRecord>;
   recordToolCallStarted(
@@ -250,6 +252,7 @@ export interface AgentRepository {
     authorUserId: string;
     content: string;
     metadata?: unknown;
+    travelerNeeds?: TravelerNeeds;
     modelProvider: string;
     modelName: string;
   }): Promise<{ message: AgentMessageRecord; run: AgentRunRecord }>;

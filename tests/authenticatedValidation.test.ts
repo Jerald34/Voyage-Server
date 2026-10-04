@@ -6,8 +6,9 @@ const VALID_AGENCY_ID = "11111111-1111-4111-8111-111111111111";
 const VALID_ITINERARY_ID = "22222222-2222-4222-8222-222222222222";
 const VALID_THREAD_ID = "33333333-3333-4333-8333-333333333333";
 const VALID_RUN_ID = "44444444-4444-4444-8444-444444444444";
-const VALID_SHARE_ID = "55555555-5555-4555-8555-555555555555";
-const VALID_COMMENT_ID = "66666666-6666-4666-8666-666666666666";
+// ItineraryShare and ItineraryComment ids are Prisma cuid()s, not UUIDs.
+const VALID_SHARE_ID = "cmpsm6sn00000eohoyq6shdqz";
+const VALID_COMMENT_ID = "cmpt0a1b20003eohoq8r7s6tu";
 const VALID_REPORT_ID = "77777777-7777-4777-8777-777777777777";
 const VALID_IMAGE_ID = "88888888-8888-4888-8888-888888888888";
 const VALID_MEMBERSHIP_ID = "99999999-9999-4999-8999-999999999999";
@@ -756,10 +757,10 @@ describe("authenticated route validation", () => {
         expiresAt: "not-a-date"
       });
     const revokeResponse = await request(app).delete(
-      `/agencies/${VALID_AGENCY_ID}/shares/not-a-uuid`
+      `/agencies/${VALID_AGENCY_ID}/shares/not-a-cuid`
     );
     const replyResponse = await request(app)
-      .post(`/agencies/${VALID_AGENCY_ID}/shares/comments/not-a-uuid/reply`)
+      .post(`/agencies/${VALID_AGENCY_ID}/shares/comments/not-a-cuid/reply`)
       .send({ content: "Thanks" });
 
     expectValidationError(listResponse);
@@ -787,6 +788,53 @@ describe("authenticated route validation", () => {
 
     expect(response.status).toBe(200);
     expect(mockRevokeShare).toHaveBeenCalledWith(VALID_AGENCY_ID, VALID_SHARE_ID);
+  });
+
+  // Regression: share and comment ids are cuid()s. A UUID-only param schema
+  // turned every comments, revoke and reply request into a 400.
+  it("accepts cuid share and comment ids on the comments, revoke and reply routes", async () => {
+    const app = createRouteApp({
+      mountPath: "/agencies/:agencyId/shares",
+      router: shareRoutes,
+      authUser: agencyUser
+    });
+
+    const commentsResponse = await request(app).get(
+      `/agencies/${VALID_AGENCY_ID}/shares/${VALID_SHARE_ID}/comments`
+    );
+    const revokeResponse = await request(app).delete(
+      `/agencies/${VALID_AGENCY_ID}/shares/${VALID_SHARE_ID}`
+    );
+    const replyResponse = await request(app)
+      .post(`/agencies/${VALID_AGENCY_ID}/shares/comments/${VALID_COMMENT_ID}/reply`)
+      .send({ content: "Thanks" });
+
+    expect(commentsResponse.status).toBe(200);
+    expect(revokeResponse.status).toBe(200);
+    expect(replyResponse.status).toBe(200);
+    expect(mockListComments).toHaveBeenCalledWith(VALID_AGENCY_ID, VALID_SHARE_ID);
+    expect(mockRevokeShare).toHaveBeenCalledWith(VALID_AGENCY_ID, VALID_SHARE_ID);
+    expect(mockReplyToComment).toHaveBeenCalledWith(VALID_AGENCY_ID, VALID_COMMENT_ID, "Thanks");
+  });
+
+  it("rejects a share id that is not a cuid, such as a UUID", async () => {
+    const app = createRouteApp({
+      mountPath: "/agencies/:agencyId/shares",
+      router: shareRoutes,
+      authUser: agencyUser
+    });
+
+    const response = await request(app).get(
+      `/agencies/${VALID_AGENCY_ID}/shares/${VALID_ITINERARY_ID}/comments`
+    );
+    // Starts with "c" like a cuid, but the hyphens still rule it out.
+    const cPrefixedUuidResponse = await request(app).get(
+      `/agencies/${VALID_AGENCY_ID}/shares/c2222222-2222-4222-8222-222222222222/comments`
+    );
+
+    expectValidationError(response);
+    expectValidationError(cPrefixedUuidResponse);
+    expect(mockListComments).not.toHaveBeenCalled();
   });
 
   it("rejects invalid support report bodies with unknown keys", async () => {

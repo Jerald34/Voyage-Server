@@ -1,5 +1,6 @@
 import { z } from "zod";
 import {
+  cuidSchema,
   futureIsoDateTimeSchema,
   idParamsSchema,
   longTextSchema,
@@ -52,8 +53,9 @@ export const publicShareTokenParamsSchema = z.object({
 }).strict();
 // Mounted under `/agencies/:agencyId/shares` with a mergeParams router, so
 // `req.params` also carries `agencyId`; include it or strict parsing rejects it.
-export const shareIdParamsSchema = idParamsSchema("agencyId", "shareId");
-export const commentIdParamsSchema = idParamsSchema("agencyId", "commentId");
+// Share and comment ids are Prisma cuid()s, unlike the UUID agency id.
+export const shareIdParamsSchema = z.object({ agencyId: uuidSchema, shareId: cuidSchema }).strict();
+export const commentIdParamsSchema = z.object({ agencyId: uuidSchema, commentId: cuidSchema }).strict();
 export const itineraryIdParamsSchema = idParamsSchema("agencyId", "itineraryId");
 export const listSharesQuerySchema = z.object({
   tripId: uuidSchema.optional()

@@ -112,13 +112,15 @@ const routeInputSchema = z.union([
   z.object({
     origin: geoPointSchema,
     destination: geoPointSchema,
-    travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
+    travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE"),
+    transitRoutingPreference: z.enum(["LESS_WALKING", "FEWER_TRANSFERS"]).optional()
   }),
   z.object({
     originPlaceName: z.string().min(1).max(500),
     destinationPlaceName: z.string().min(1).max(500),
     cityContext: z.string().min(1).max(200).optional(),
-    travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE")
+    travelMode: z.enum(["DRIVE", "BICYCLE", "WALK", "TWO_WHEELER", "TRANSIT"]).default("DRIVE"),
+    transitRoutingPreference: z.enum(["LESS_WALKING", "FEWER_TRANSFERS"]).optional()
   })
 ]);
 
@@ -397,6 +399,7 @@ export function createEstimateRouteTool(options: {
     name: "estimate_route",
     async execute(_context, input) {
       const parsed = routeInputSchema.parse(input);
+      const transitRoutingPreference = parsed.transitRoutingPreference;
       let origin: { latitude: number; longitude: number };
       let destination: { latitude: number; longitude: number };
       let travelMode: "DRIVE" | "BICYCLE" | "WALK" | "TWO_WHEELER" | "TRANSIT";
@@ -445,7 +448,8 @@ export function createEstimateRouteTool(options: {
       const result = await options.maps.estimateRoute({
         origin,
         destination,
-        travelMode
+        travelMode,
+        ...(transitRoutingPreference ? { transitRoutingPreference } : {})
       });
       const run = createRunRecord(_context);
 

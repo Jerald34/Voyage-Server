@@ -45,7 +45,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -69,7 +69,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -94,7 +94,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -117,7 +117,7 @@ describe("email HTML security", () => {
     const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
     const text = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.text ?? "";
 
-    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<img src=x");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&amp;");
     expect(html).toContain("&quot;");
@@ -127,5 +127,62 @@ describe("email HTML security", () => {
     );
     expect(text).toContain(malicious);
     expect(text).not.toContain("&lt;img");
+  });
+});
+
+describe("email branding and delivery", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setSmtpEnv();
+    vi.unstubAllGlobals();
+    process.env.APP_ORIGIN = "https://app.example.com";
+    process.env.EMAIL_LOGO_URL = "";
+  });
+
+  it("loads the logo from the app origin by default", async () => {
+    const { sendVerificationEmail } = await loadEmailService();
+
+    await sendVerificationEmail({
+      to: "recipient@example.com",
+      displayName: "Ana",
+      verificationUrl: "https://app.example.com/verify-email?token=abc"
+    });
+
+    const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
+    expect(html).toContain('src="https://app.example.com/email/voyage-logo.png"');
+  });
+
+  it("loads the logo from EMAIL_LOGO_URL when set", async () => {
+    process.env.EMAIL_LOGO_URL = "https://cdn.example.com/logo.png";
+    const { sendVerificationEmail } = await loadEmailService();
+
+    await sendVerificationEmail({
+      to: "recipient@example.com",
+      displayName: "Ana",
+      verificationUrl: "https://app.example.com/verify-email?token=abc"
+    });
+
+    const html = mailMocks.sendMail.mock.calls.at(-1)?.[0]?.html ?? "";
+    expect(html).toContain('src="https://cdn.example.com/logo.png"');
+  });
+
+  it("sends the plain-text part through Resend", async () => {
+    process.env.SMTP_HOST = "";
+    process.env.RESEND_API_KEY = "re_test_key";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: "email_1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { sendPasswordResetEmail } = await loadEmailService();
+
+    await sendPasswordResetEmail({
+      to: "recipient@example.com",
+      displayName: "Ana",
+      resetUrl: "https://app.example.com/reset-password?token=abc"
+    });
+
+    const body = JSON.parse(fetchMock.mock.calls.at(-1)?.[1]?.body ?? "{}");
+    expect(body.text).toContain("https://app.example.com/reset-password?token=abc");
+    expect(mailMocks.sendMail).not.toHaveBeenCalled();
   });
 });

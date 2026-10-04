@@ -4,6 +4,7 @@ import { shareService } from "./shareService";
 import { buildShareResponse } from "./publicShareService";
 import { proposalRatingInputSchema } from "../reviews/reviewSchemas";
 import { reviewService } from "../reviews/reviewService";
+import { itineraryWeatherService } from "../weather/weatherService";
 
 export const publicShareRoutes = Router();
 
@@ -20,6 +21,17 @@ publicShareRoutes.get("/:token", async (request, response, next) => {
       creator: data.creator
     });
     response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /shared/:token/weather — per-day weather for a share link (no auth, not a view)
+publicShareRoutes.get("/:token/weather", async (request, response, next) => {
+  try {
+    const { token } = publicShareTokenParamsSchema.parse(request.params);
+    const weather = await itineraryWeatherService.forShareToken(token);
+    response.json({ weather });
   } catch (error) {
     next(error);
   }

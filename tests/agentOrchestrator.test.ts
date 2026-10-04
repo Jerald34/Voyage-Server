@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { ApiError } from "../src/http/errors";
 import {
   createAgentOrchestrator,
@@ -20,6 +20,7 @@ import { createPlaceSelectionService } from "../src/services/places/placeSelecti
 import { createPlaceSnapshotRepository } from "../src/services/places/placeSnapshotRepository";
 import { buildPlaceGate } from "../src/services/places/placeGate";
 import { enrichResolvedPlaceForSnapshot } from "../src/modules/agent/tools/placeSnapshotEnrichment";
+import { createWeatherForecastTool } from "../src/modules/agent/tools/weatherTools";
 import { createItineraryService } from "../src/modules/itineraries/itineraryService";
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
@@ -402,7 +403,7 @@ describe("agent orchestrator", () => {
       expect.arrayContaining([
         { role: "user", content: "We are planning a Cebu itinerary." },
         { role: "assistant", content: "Great, what dates are you targeting?" },
-        { role: "user", content: "Build a Cebu itinerary." }
+        { role: "user", content: expect.stringContaining("Build a Cebu itinerary.") }
       ])
     );
   });
@@ -2443,5 +2444,501 @@ describe("agent orchestrator", () => {
         formattedAddress: "Olongapo City, Zambales"
       }
     ]);
+  });
+});
+
+describe("runtime date and image context", () => {
+  it("tells the model today's date on the first turn", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([]),
+      now: () => new Date("2026-10-01T03:00:00.000Z")
+    });
+
+    await orchestrator.run(createRunInput());
+
+    const lastUser = provider.calls[0].messages.filter((message) => message.role === "user").at(-1);
+    expect(lastUser?.content).toContain("Today's date (UTC): 2026-10-01.");
+    expect(lastUser?.content).toContain("Build a Cebu itinerary.");
+  });
+
+  it("tells the model today's date on continuation turns", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "web_search", "query": "Cebu festivals this month"}',
+      "Here is a draft itinerary.",
+      "Here is a draft itinerary."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["web_search"],
+      toolRegistry: createAgentToolRegistry([{ name: "web_search", async execute() { return []; } }]),
+      now: () => new Date("2026-10-01T03:00:00.000Z")
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(provider.calls.length).toBeGreaterThanOrEqual(2);
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("Today's date (UTC): 2026-10-01.");
+  });
+
+  it("keeps the runtime context inside the text part of an image message", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "image/png" } }))
+    );
+    try {
+      const { service } = createFakeAgentService();
+      const provider = createModelProvider("Nice photo.");
+      const orchestrator = createAgentOrchestrator({
+        modelProvider: provider,
+        agentService: service,
+        toolRegistry: createAgentToolRegistry([]),
+        now: () => new Date("2026-10-01T03:00:00.000Z")
+      });
+
+      await orchestrator.run({ ...createRunInput(), imageUrls: ["https://example.com/photo.png"] });
+
+      const lastUser = provider.calls[0].messages.filter((message) => message.role === "user").at(-1);
+      expect(lastUser?.parts?.[0]).toEqual({ text: expect.stringContaining("Today's date (UTC): 2026-10-01.") });
+      expect(lastUser?.parts?.[1]).toEqual({ inlineData: { mimeType: "image/png", data: "AQID" } });
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("weather tool failures", () => {
+  it("keeps the run alive when the weather provider is unavailable", async () => {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}',
+      "Weather is unavailable right now, so I planned without it.",
+      "Weather is unavailable right now, so I planned without it."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast"],
+      toolRegistry: createAgentToolRegistry([
+        {
+          name: "weather_forecast",
+          async execute() {
+            throw new ApiError(503, "WEATHER_PROVIDER_UNAVAILABLE", "Weather provider is unavailable.");
+          }
+        }
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("WEATHER_PROVIDER_UNAVAILABLE");
+  });
+
+  it("recovers when the real weather tool cannot geocode the place", async () => {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Atlantis", "startDate": "2026-10-10"}',
+      "I could not look up the weather, so I planned without it.",
+      "I could not look up the weather, so I planned without it."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast"],
+      toolRegistry: createAgentToolRegistry([
+        createWeatherForecastTool({
+          weather: {
+            name: "open-meteo",
+            getDailyForecast: vi.fn(async () => []),
+            getDailyHistory: vi.fn(async () => [])
+          },
+          geocoder: {
+            resolvePlace: vi.fn(async () => {
+              throw new ApiError(503, "MAPS_PROVIDER_UNAVAILABLE", "Nominatim could not find the requested place.");
+            })
+          },
+          agentService: service as never,
+          typicalYears: 5,
+          now: () => new Date("2026-10-01T00:00:00.000Z")
+        })
+      ])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("MAPS_PROVIDER_UNAVAILABLE");
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("Nominatim could not find the requested place.");
+  });
+});
+
+describe("traveler accessibility needs", () => {
+  const needsThread = {
+    messages: [{ role: "USER", content: "Plan 2 days in Baguio." }],
+    travelerNeeds: { needs: ["WHEELCHAIR"], notes: "Uses a foldable wheelchair." }
+  };
+
+  it("puts the thread's needs into the first turn's user message, not the system prompt", async () => {
+    const { service } = createFakeAgentService();
+    service.getThread = async () => needsThread as any;
+    const provider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run({ ...createRunInput(), userContent: "Plan 2 days in Baguio." });
+
+    const messages = provider.calls[0].messages;
+    const lastUser = messages.filter((message) => message.role === "user").at(-1);
+    expect(lastUser?.content).toContain("Traveler accessibility needs for this trip");
+    expect(lastUser?.content).toContain("Wheelchair user: needs step-free access");
+    expect(lastUser?.content).toContain('Staff notes: "Uses a foldable wheelchair."');
+    expect(messages[0].role).toBe("system");
+    expect(messages[0].content).not.toContain("Uses a foldable wheelchair.");
+  });
+
+  it("keeps the needs on continuation turns", async () => {
+    const { service } = createFakeAgentService();
+    service.getThread = async () => needsThread as any;
+    const provider = createModelProvider([
+      '{"tool": "web_search", "query": "wheelchair accessible attractions Baguio"}',
+      "Here is an accessible plan.",
+      "Here is an accessible plan."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["web_search"],
+      toolRegistry: createAgentToolRegistry([{ name: "web_search", async execute() { return []; } }])
+    });
+
+    await orchestrator.run({ ...createRunInput(), userContent: "Plan 2 days in Baguio." });
+
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("Traveler accessibility needs for this trip");
+  });
+
+  it("puts the needs into the synthesis user message and keeps the synthesis prompt identical across threads", async () => {
+    async function synthesisFor(thread: unknown) {
+      const { service } = createFakeAgentService();
+      service.getThread = async () => thread as any;
+      const provider = createModelProvider([
+        '{"tool": "web_search", "query": "wheelchair accessible attractions Baguio"}',
+        "Here is an accessible plan.",
+        "Here is an accessible plan."
+      ]);
+      const orchestrator = createAgentOrchestrator({
+        modelProvider: provider,
+        agentService: service,
+        availableToolNames: ["web_search"],
+        toolRegistry: createAgentToolRegistry([{ name: "web_search", async execute() { return []; } }])
+      });
+      await orchestrator.run({ ...createRunInput(), userContent: "Plan 2 days in Baguio." });
+      return provider.calls.at(-1)!.messages;
+    }
+
+    const withNeeds = await synthesisFor(needsThread);
+    const otherNeeds = await synthesisFor({
+      messages: needsThread.messages,
+      travelerNeeds: { needs: ["SENIOR"], notes: "Needs a rest every hour." }
+    });
+    const withoutNeeds = await synthesisFor({ messages: needsThread.messages });
+
+    const synthesisUser = withNeeds.at(-1)?.content ?? "";
+    expect(synthesisUser).toContain("Traveler accessibility needs for this trip");
+    expect(synthesisUser).toContain("Wheelchair user: needs step-free access");
+    expect(withNeeds[0].role).toBe("system");
+    expect(withNeeds[0].content).toContain("If traveler accessibility needs are listed");
+    expect(withNeeds[0].content).not.toContain("Uses a foldable wheelchair.");
+    expect(otherNeeds[0].content).toBe(withNeeds[0].content);
+    expect(withoutNeeds[0].content).toBe(withNeeds[0].content);
+    expect(withoutNeeds.at(-1)?.content).not.toContain("Traveler accessibility needs");
+  });
+
+  it("adds nothing when the thread has no needs", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(JSON.stringify(provider.calls[0].messages)).not.toContain("Traveler accessibility needs");
+  });
+});
+
+describe("weather in continuation context", () => {
+  const weatherOutput = {
+    location: { name: "Baguio", latitude: 16.4, longitude: 120.6 },
+    days: [
+      {
+        date: "2026-10-10",
+        status: "OK",
+        kind: "FORECAST",
+        condition: "RAIN",
+        summary: "Rain, 16-23°C, 85% chance of rain",
+        rainRisk: true,
+        temperatureMinC: 16,
+        temperatureMaxC: 23,
+        precipitationProbabilityPct: 85
+      },
+      {
+        date: "2026-10-11",
+        status: "OK",
+        kind: "TYPICAL",
+        condition: "CLOUDY",
+        summary: "Cloudy, 15-22°C, rain on 2 of the last 5 years",
+        rainRisk: false,
+        temperatureMinC: 15,
+        temperatureMaxC: 22,
+        precipitationProbabilityPct: null,
+        wetYears: 2,
+        sampleYears: 5
+      }
+    ],
+    note: "TYPICAL days average the last 5 years; they are not a forecast.",
+    attribution: "Weather data by Open-Meteo.com"
+  };
+
+  function buildWeatherRun() {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10", "endDate": "2026-10-11"}',
+      '{"tool": "plan_itinerary", "title": "Baguio"}',
+      '{"tool": "add_itinerary_item", "title": "Stop 1"}',
+      '{"tool": "add_itinerary_item", "title": "Stop 2"}',
+      '{"tool": "add_itinerary_item", "title": "Stop 3"}',
+      "Done planning around the rain.",
+      "Done planning around the rain."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast", "plan_itinerary", "add_itinerary_item"],
+      toolRegistry: createAgentToolRegistry([
+        { name: "weather_forecast", async execute() { return weatherOutput; } },
+        { name: "plan_itinerary", async execute() { return { ok: true }; } },
+        { name: "add_itinerary_item", async execute() { return { ok: true }; } }
+      ])
+    });
+    return { orchestrator, provider, run };
+  }
+
+  it("keeps the latest weather in every continuation after the tool result scrolls out", async () => {
+    const { orchestrator, provider, run } = buildWeatherRun();
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    // calls[0] initial, calls[1..5] continuations; calls[4] is the 4th continuation
+    // (after weather, plan, add, add), where the raw weather result has left the tail.
+    for (const index of [4, 5]) {
+      const lastUser = provider.calls[index].messages.at(-1)?.content ?? "";
+      expect(lastUser).toContain("Weather already fetched");
+      expect(lastUser).toContain("TYPICAL means past-year averages, not a forecast");
+      expect(lastUser).toContain("2026-10-10 FORECAST: Rain, 16-23°C, 85% chance of rain; rain risk: yes");
+      expect(lastUser).toContain("2026-10-11 TYPICAL: Cloudy, 15-22°C, rain on 2 of the last 5 years; rain risk: no");
+    }
+    expect(provider.calls[0].messages[0].content).toBe(provider.calls[4].messages[0].content);
+  });
+
+  it("keeps the weather in the synthesis turn", async () => {
+    const { orchestrator, provider } = buildWeatherRun();
+
+    await orchestrator.run(createRunInput());
+
+    const synthesisUser = provider.calls.at(-1)?.messages.at(-1)?.content ?? "";
+    expect(synthesisUser).toContain("2026-10-10 FORECAST: Rain, 16-23°C, 85% chance of rain; rain risk: yes");
+  });
+
+  it("caps the weather block size", async () => {
+    const { buildWeatherContextBlock } = await import("../src/modules/agent/weatherContextBlock");
+    const many = {
+      ...weatherOutput,
+      days: Array.from({ length: 40 }, (_, index) => ({
+        ...weatherOutput.days[0],
+        date: `2026-10-${String((index % 28) + 1).padStart(2, "0")}`,
+        summary: "x".repeat(200)
+      }))
+    };
+
+    const block = buildWeatherContextBlock(many);
+
+    expect(block.length).toBeLessThanOrEqual(2000);
+    expect(block.split("\n").filter((line) => line.startsWith("- ")).length).toBeLessThanOrEqual(14);
+  });
+
+  it("ignores weather results with no usable day", () => {
+    return import("../src/modules/agent/weatherContextBlock").then(({ buildWeatherContextBlock }) => {
+      expect(buildWeatherContextBlock({ ...weatherOutput, days: [{ date: "2026-10-10", status: "UNAVAILABLE" }] })).toBe("");
+      expect(buildWeatherContextBlock({ unavailable: true })).toBe("");
+    });
+  });
+});
+
+describe("weather for several places", () => {
+  function weatherFor(name: string, latitude: number, summary: string) {
+    return {
+      location: { name, latitude, longitude: 120.6 },
+      days: [
+        { date: "2026-10-10", status: "OK", kind: "FORECAST", condition: "RAIN", summary, rainRisk: true }
+      ]
+    };
+  }
+
+  function buildMultiCityRun(places: Array<ReturnType<typeof weatherFor>>) {
+    const { service, run } = createFakeAgentService();
+    const queue = [...places];
+    const provider = createModelProvider([
+      ...places.map((place) => `{"tool": "weather_forecast", "placeName": "${place.location.name}", "startDate": "2026-10-10"}`),
+      "Planned around the weather.",
+      "Planned around the weather."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["weather_forecast"],
+      maxToolCallsPerRun: 10,
+      toolRegistry: createAgentToolRegistry([
+        { name: "weather_forecast", async execute() { return queue.shift(); } }
+      ])
+    });
+    return { orchestrator, provider, run };
+  }
+
+  it("keeps the first city's weather after a second city is fetched", async () => {
+    const { orchestrator, provider, run } = buildMultiCityRun([
+      weatherFor("Baguio", 16.4, "Rain in Baguio"),
+      weatherFor("Vigan", 17.57, "Rain in Vigan")
+    ]);
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const synthesisUser = provider.calls.at(-1)?.messages.at(-1)?.content ?? "";
+    expect(synthesisUser).toContain("Weather already fetched with weather_forecast for Baguio");
+    expect(synthesisUser).toContain("Weather already fetched with weather_forecast for Vigan");
+    expect(synthesisUser).toContain("Rain in Baguio");
+    expect(synthesisUser).toContain("Rain in Vigan");
+  });
+
+  it("keeps at most three places, evicting the oldest", async () => {
+    const { orchestrator, provider } = buildMultiCityRun([
+      weatherFor("Baguio", 16.4, "Rain in Baguio"),
+      weatherFor("Vigan", 17.57, "Rain in Vigan"),
+      weatherFor("Sagada", 17.08, "Rain in Sagada"),
+      weatherFor("Banaue", 16.92, "Rain in Banaue")
+    ]);
+
+    await orchestrator.run(createRunInput());
+
+    const continuation = provider.calls[4].messages.at(-1)?.content ?? "";
+    expect(continuation).not.toContain("Rain in Baguio");
+    for (const name of ["Vigan", "Sagada", "Banaue"]) {
+      expect(continuation).toContain(`Weather already fetched with weather_forecast for ${name}`);
+    }
+  });
+
+  it("caps the combined weather blocks at 2000 characters", async () => {
+    const { buildWeatherContextBlocks } = await import("../src/modules/agent/weatherContextBlock");
+    const many = (name: string, latitude: number) => ({
+      location: { name, latitude, longitude: 120.6 },
+      days: Array.from({ length: 14 }, (_, index) => ({
+        date: `2026-10-${String(index + 1).padStart(2, "0")}`,
+        status: "OK",
+        kind: "FORECAST",
+        summary: `${name} ${"x".repeat(150)}`,
+        rainRisk: false
+      }))
+    });
+
+    const block = buildWeatherContextBlocks([many("Baguio", 16.4), many("Vigan", 17.57), many("Sagada", 17.08)]);
+
+    expect(block.length).toBeLessThanOrEqual(2000);
+    for (const name of ["Baguio", "Vigan", "Sagada"]) {
+      expect(block).toContain(`Weather already fetched with weather_forecast for ${name}`);
+    }
+    expect(buildWeatherContextBlocks([])).toBe("");
+  });
+});
+
+describe("unavailable tools", () => {
+  it("keeps the run alive when the model calls a tool that is not registered", async () => {
+    const { service, run } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}',
+      "Weather is not available, so here is the plan without it.",
+      "Weather is not available, so here is the plan without it."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: [],
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const continuation = provider.calls[1].messages.at(-1)?.content ?? "";
+    expect(continuation).toContain("AGENT_TOOL_NOT_FOUND");
+    expect(continuation).toContain("continue without it");
+  });
+});
+
+describe("repeated calls to an unavailable tool", () => {
+  it("stops after three unknown-tool failures and completes through synthesis", async () => {
+    const { service, run } = createFakeAgentService();
+    // A model that calls the unknown tool on every turn, synthesis included.
+    const calls: Array<Parameters<ModelProvider["complete"]>[0]> = [];
+    const provider: ModelProvider & { calls: typeof calls } = {
+      calls,
+      async complete(input) {
+        calls.push(input);
+        return { content: '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}' };
+      }
+    };
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: [],
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(provider.calls.length).toBeLessThanOrEqual(4);
+    expect(run.status).toBe("COMPLETED");
+  });
+
+  it("names the tool and tells the model not to call it again", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "weather_forecast", "placeName": "Baguio City", "startDate": "2026-10-10"}',
+      "Planned without weather.",
+      "Planned without weather."
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: [],
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    const continuation = provider.calls[1].messages.at(-1)?.content ?? "";
+    expect(continuation).toContain("weather_forecast is unavailable in this run");
+    expect(continuation).toContain("Do not call weather_forecast again");
   });
 });

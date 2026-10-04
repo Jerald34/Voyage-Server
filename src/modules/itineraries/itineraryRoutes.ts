@@ -6,6 +6,7 @@ import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { replaceItinerarySchema } from "./itinerarySchemas";
 import { createPlaceSession, getPlaceRefreshScheduler } from "../../services/places/placeServices";
 import { itineraryService } from "./itineraryService";
+import { itineraryWeatherService } from "../weather/weatherService";
 
 function getAgencyId(request: Request): string {
   return request.resolvedAgencyId ?? String((request.params as Record<string, string | undefined>).agencyId);
@@ -61,6 +62,19 @@ itineraryRoutes.get("/:itineraryId", async (request, response, next) => {
       scheduler: getPlaceRefreshScheduler()
     });
     response.json({ itinerary });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /agencies/:agencyId/itineraries/:itineraryId/weather — per-day forecast or
+// typical weather. Same membership rule as the itinerary read above.
+itineraryRoutes.get("/:itineraryId/weather", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { itineraryId } = itineraryIdParamsSchema.parse(request.params);
+    const weather = await itineraryWeatherService.forAgencyItinerary(agencyId, itineraryId);
+    response.json({ weather });
   } catch (error) {
     next(error);
   }

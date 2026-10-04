@@ -28,6 +28,9 @@ type NominatimPlace = {
 const DEFAULT_PROVIDER_TIMEOUT_MS = 30_000;
 const NOMINATIM_MIN_INTERVAL_MS = 1100;
 let lastNominatimRequestAt = 0;
+// Process-wide queue: each caller waits for the previous caller's slot before taking
+// its own, so concurrent callers are spaced out instead of all waking after one wait.
+let nominatimQueue: Promise<void> = Promise.resolve();
 
 function mapsUnavailable(message = "Google Maps provider is unavailable.") {
   return new ApiError(503, "MAPS_PROVIDER_UNAVAILABLE", message);
@@ -43,13 +46,17 @@ function createUnsupportedMapsProviderMethod(methodName: string) {
   };
 }
 
-async function throttleNominatimRequest() {
-  const now = Date.now();
-  const elapsed = now - lastNominatimRequestAt;
-  if (elapsed < NOMINATIM_MIN_INTERVAL_MS) {
-    await new Promise((resolve) => setTimeout(resolve, NOMINATIM_MIN_INTERVAL_MS - elapsed));
-  }
-  lastNominatimRequestAt = Date.now();
+/** Resolves when this caller may send its request (Nominatim policy: at most 1 req/s). */
+function throttleNominatimRequest(): Promise<void> {
+  const slot = nominatimQueue.then(async () => {
+    const elapsed = Date.now() - lastNominatimRequestAt;
+    if (elapsed < NOMINATIM_MIN_INTERVAL_MS) {
+      await new Promise((resolve) => setTimeout(resolve, NOMINATIM_MIN_INTERVAL_MS - elapsed));
+    }
+    lastNominatimRequestAt = Date.now();
+  });
+  nominatimQueue = slot.catch(() => undefined);
+  return slot;
 }
 
 export function createNominatimMapsProvider(options: NominatimMapsProviderOptions = {}): MapsProvider {

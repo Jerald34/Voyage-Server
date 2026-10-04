@@ -3,6 +3,7 @@ import type { MapsProvider, ResolvedPlace } from "../../../services/maps";
 import { isCloudinaryConfigured, uploadPlacePhotoBuffer } from "../../../services/cloudinary";
 import { upsertPlaceSnapshot } from "./toolUtils";
 import { createPlaceSnapshotRepository } from "../../../services/places/placeSnapshotRepository";
+import { buildAccessibilityMetadata, hasAccessibilityCheck } from "../../../services/places/placeAccessibility";
 
 function nonEmptyString(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0;
@@ -22,7 +23,8 @@ export async function enrichResolvedPlaceForSnapshot(
   if (
     place.rating != null &&
     nonEmptyString(meta?.primaryPhotoUrl) &&
-    place.websiteUrl !== undefined
+    place.websiteUrl !== undefined &&
+    hasAccessibilityCheck(meta)
   ) {
     return place;
   }
@@ -50,8 +52,14 @@ export async function enrichResolvedPlaceForSnapshot(
       metadata.phoneNumber = details.phoneNumber;
     }
 
+    // A successful details call is an accessibility check even when Google has no
+    // data: `checkedAt` without flags means "unknown" and stops further re-checks.
+    metadata.accessibility = buildAccessibilityMetadata(details.accessibilityOptions, new Date());
+
     // Extract photo URLs from the merged response (no second API call needed).
-    if (Array.isArray(details.photos) && details.photos.length > 0) {
+    // Reuse a stored photo: a re-check for accessibility must not re-download and
+    // re-upload it (Place Photos is billed separately from Place Details).
+    if (!nonEmptyString(metadata.primaryPhotoUrl) && Array.isArray(details.photos) && details.photos.length > 0) {
       const photoUrls = details.photos
         .map((photo) => photo.photoUri)
         .filter(nonEmptyString);
@@ -154,7 +162,12 @@ export async function backfillUnenrichedSnapshots(options: {
 
   const toEnrich = (candidates as any[]).filter((s: any) => {
     const meta = s.metadata as Record<string, unknown> | null;
-    return s.rating == null || !nonEmptyString(meta?.primaryPhotoUrl);
+    return (
+      s.rating == null ||
+      !nonEmptyString(meta?.primaryPhotoUrl) ||
+      // Google rows only: a Nominatim ID cannot be looked up in Google details.
+      (s.provider === "GOOGLE_MAPS" && !hasAccessibilityCheck(meta))
+    );
   });
 
   if (toEnrich.length === 0) return;

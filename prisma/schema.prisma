@@ -525,6 +525,10 @@ model AgentThread {
   title           String
   status          AgentThreadStatus @default(ACTIVE)
   titleSetByUser  Boolean           @default(false)
+  /// Traveler accessibility needs for this planning conversation:
+  /// `{ needs: string[], notes: string | null }`. Null until staff set them.
+  /// Sensitive personal data: agency-only, never copied to shares or PDFs.
+  travelerNeeds   Json?
   messages        AgentMessage[]
   runs            AgentRun[]
   toolCalls       AgentToolCall[]

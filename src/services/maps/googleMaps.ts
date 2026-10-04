@@ -10,7 +10,8 @@ import {
   isRecord,
   parseString,
   readJsonResponse,
-  parseBusinessStatus
+  parseBusinessStatus,
+  parseAccessibilityOptions
 } from "./parsing";
 import { redactSecrets } from "../../utils/redaction";
 
@@ -204,7 +205,7 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
           method: "GET",
           headers: providerHeaders(
             apiKey,
-            "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri,photos,businessStatus"
+            "id,displayName,formattedAddress,location,rating,userRatingCount,types,nationalPhoneNumber,internationalPhoneNumber,websiteUri,photos,businessStatus,accessibilityOptions"
           )
         },
         timeoutMs,
@@ -231,11 +232,14 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
         });
       }
 
+      const accessibilityOptions = parseAccessibilityOptions(details.accessibilityOptions);
+
       return {
         ...place,
         phoneNumber: parseString(details.nationalPhoneNumber) ?? parseString(details.internationalPhoneNumber),
         websiteUri: parseString(details.websiteUri),
         photos,
+        ...(accessibilityOptions ? { accessibilityOptions } : {}),
         // `place` already carries businessStatus (if recognized) via the spread above;
         // only attach the checked-at time when that status was actually recognized.
         ...(place.businessStatus !== undefined ? { businessStatusCheckedAt: requestStartedAt } : {})
@@ -360,6 +364,11 @@ export function createGoogleMapsProvider(options: GoogleMapsProviderOptions = {}
 
       if (input.routingPreference) {
         body.routingPreference = input.routingPreference;
+      }
+
+      // The Routes API has no wheelchair option; for transit this is the closest control.
+      if (input.travelMode === "TRANSIT" && input.transitRoutingPreference) {
+        body.transitPreferences = { routingPreference: input.transitRoutingPreference };
       }
 
       const response = await readJsonResponse<unknown>(
