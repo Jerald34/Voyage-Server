@@ -343,6 +343,47 @@ describe("selectRecentViews", () => {
     ]);
   });
 
+  it("on tied view times, prefers the link that names its client, whichever comes first", () => {
+    const tied = daysAgo(2);
+    const named = (id: string, tripId: string, clientName: string | null) => ({
+      ...share({ id, tripId, viewCount: 1, lastViewedAt: tied }),
+      clientName
+    });
+    const rows = selectRecentViews({
+      trips: [viewed("t1", { clientName: "Santos" }), viewed("t2", { clientName: "Lim" }), viewed("t3", { clientName: "Ong" })],
+      shares: [
+        named("s1", "t1", null),
+        named("s2", "t1", "Maria Santos"),
+        named("s3", "t2", "Lee Lim"),
+        named("s4", "t2", null),
+        named("s5", "t3", "First Contact"),
+        named("s6", "t3", "Second Contact")
+      ],
+      now: NOW
+    });
+
+    expect(Object.fromEntries(rows.map((row) => [row.tripId, row.clientName]))).toEqual({
+      t1: "Maria Santos", // the null link came first, but the named one wins the tie
+      t2: "Lee Lim", // the named link came first and keeps it
+      t3: "First Contact" // both named: the first stays
+    });
+  });
+
+  it("orders trips with the same last view by trip id, not by the order the links arrive", () => {
+    const tied = daysAgo(2);
+    const rows = selectRecentViews({
+      trips: [viewed("t-b"), viewed("t-c"), viewed("t-a")],
+      shares: [
+        share({ id: "s1", tripId: "t-c", viewCount: 1, lastViewedAt: tied }),
+        share({ id: "s2", tripId: "t-a", viewCount: 1, lastViewedAt: tied }),
+        share({ id: "s3", tripId: "t-b", viewCount: 1, lastViewedAt: tied })
+      ],
+      now: NOW
+    });
+
+    expect(rows.map((row) => row.tripId)).toEqual(["t-a", "t-b", "t-c"]);
+  });
+
   it("draws the line at 30 days", () => {
     const rows = selectRecentViews({
       trips: [viewed("in"), viewed("out")],

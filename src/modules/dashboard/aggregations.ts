@@ -431,9 +431,18 @@ export function selectRecentViews(inputs: RecentViewInputs): RecentView[] {
 
     const entry = byTrip.get(trip.id) ?? { viewCount: 0, lastViewedAt: null, clientName: null };
     entry.viewCount += share.viewCount;
-    if (share.lastViewedAt !== null && (entry.lastViewedAt === null || share.lastViewedAt > entry.lastViewedAt)) {
-      entry.lastViewedAt = share.lastViewedAt;
-      entry.clientName = share.clientName ?? null;
+    if (share.lastViewedAt !== null) {
+      const newer = entry.lastViewedAt === null || share.lastViewedAt > entry.lastViewedAt;
+      // On a tie the first link stays, unless this one names its client and the first doesn't.
+      const tiedButNamed =
+        entry.lastViewedAt !== null &&
+        share.lastViewedAt.getTime() === entry.lastViewedAt.getTime() &&
+        entry.clientName === null &&
+        share.clientName != null;
+      if (newer || tiedButNamed) {
+        entry.lastViewedAt = share.lastViewedAt;
+        entry.clientName = share.clientName ?? null;
+      }
     }
     byTrip.set(trip.id, entry);
   }
@@ -450,6 +459,11 @@ export function selectRecentViews(inputs: RecentViewInputs): RecentView[] {
       lastViewedAt: entry.lastViewedAt.toISOString()
     });
   }
-  rows.sort((a, b) => b.lastViewedAt.localeCompare(a.lastViewedAt));
+  // Newest view first; equal ISO timestamps fall back to trip id so the order never depends on row order.
+  rows.sort((a, b) => {
+    if (a.lastViewedAt !== b.lastViewedAt) return a.lastViewedAt < b.lastViewedAt ? 1 : -1;
+    if (a.tripId !== b.tripId) return a.tripId < b.tripId ? -1 : 1;
+    return 0;
+  });
   return rows.slice(0, RECENT_VIEWS_LIMIT);
 }
