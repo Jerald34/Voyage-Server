@@ -83,6 +83,7 @@ function makeShare(
   return {
     id,
     tripId,
+    clientName: null,
     viewCount: 0,
     lastViewedAt: null,
     expiresAt: null,

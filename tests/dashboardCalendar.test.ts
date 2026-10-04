@@ -260,6 +260,8 @@ describe("buildCalendar events", () => {
         id: "c1",
         content: `Can we swap the day 2 lunch spot? ${"x".repeat(100)}`,
         authorName: "Ken",
+        status: "PENDING",
+        agencyRepliedAt: null,
         createdAt: new Date("2026-10-02T10:00:00.000Z"),
         share: { clientName: null, trip: lisbon }
       }
@@ -277,6 +279,8 @@ describe("buildCalendar events", () => {
       id,
       content,
       authorName: "Ken",
+      status: "PENDING" as const,
+      agencyRepliedAt: null,
       createdAt: new Date("2026-10-02T10:00:00.000Z"),
       share: { clientName: null, trip: lisbon }
     });
@@ -303,6 +307,8 @@ describe("buildCalendar events", () => {
         id: "c2",
         content: "Looks great",
         authorName: "Ken",
+        status: "PENDING",
+        agencyRepliedAt: null,
         createdAt: new Date("2026-10-02T10:00:00.000Z"),
         share: { clientName: null, trip: tripRef("t9", { clientName: null }) }
       }
@@ -413,6 +419,8 @@ describe("buildCalendar events", () => {
         id: "c1",
         content: "Hi",
         authorName: "Ken",
+        status: "PENDING",
+        agencyRepliedAt: null,
         createdAt: new Date("2026-10-02T10:00:00.000Z"),
         share: { clientName: null, trip: lisbon }
       }

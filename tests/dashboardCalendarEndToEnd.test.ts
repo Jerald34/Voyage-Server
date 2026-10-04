@@ -114,6 +114,8 @@ function rawData(): RawCalendarData {
         id: "comment-assigned",
         content: "Can we move the transfer earlier?",
         authorName: "Ken",
+        status: "PENDING",
+        agencyRepliedAt: null,
         createdAt: new Date("2026-10-02T12:00:00.000Z"),
         share: { clientName: null, trip: assigned }
       },
@@ -121,6 +123,8 @@ function rawData(): RawCalendarData {
         id: "comment-foreign",
         content: "Looks lovely",
         authorName: "Mia",
+        status: "PENDING",
+        agencyRepliedAt: null,
         createdAt: new Date("2026-10-02T13:00:00.000Z"),
         share: { clientName: null, trip: foreign }
       }
