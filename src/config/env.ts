@@ -48,6 +48,10 @@ const envSchema = z.object({
     })
   ).default(""),
   EMAIL_FROM: z.string().default("Voyage <no-reply@example.com>"),
+  // Absolute URL of the logo at the top of transactional emails. Defaults to the client's
+  // hosted copy at `${APP_ORIGIN}/email/voyage-logo.png`. Set it in local dev, where
+  // APP_ORIGIN is localhost and mail clients can't load images from it.
+  EMAIL_LOGO_URL: trimmedString().default(""),
   SMTP_HOST: z.string().default(""),
   SMTP_PORT: z.coerce.number().int().positive().default(587),
   SMTP_SECURE: z.preprocess(
