@@ -3,6 +3,7 @@ import { Router } from "express";
 import { requireAuth } from "../../http/authMiddleware";
 import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
+import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 import {
   commentIdParamsSchema,
   createShareInputSchema,
@@ -116,6 +117,9 @@ shareRoutes.post("/comments/:commentId/reply", async (request, response, next) =
     const { commentId } = commentIdParamsSchema.parse(request.params);
     const { content } = replyCommentInputSchema.parse(request.body);
     const comment = await shareService.replyToComment(agencyId, commentId, content);
+    // The comment no longer needs a reply. Drop the cached to-do lists and
+    // calendars before answering, so the client's refetch gets fresh data.
+    invalidateAgencyDashboards(agencyId);
     response.json({ comment });
   } catch (error) {
     next(error);
