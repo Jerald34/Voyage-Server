@@ -245,7 +245,7 @@ Relative times are computed in the browser after mount and refresh every minute,
 
 Both payloads are cached for 60 seconds per agency, and nothing clears them early. After `POST /agencies/:agencyId/shares/comments/:commentId/reply` succeeds:
 
-- clear the agency's dashboard cache with `dashboardService.invalidate(agencyId)`. It exists already but nothing calls it;
+- clear the agency's dashboard cache with `dashboardService.invalidate(agencyId)`. It exists already, but nothing calls it, and it misses staff entries, whose keys end in the user id (`${agencyId}:staff:${period}:${userId}`). It switches to the prefix invalidation below;
 - clear the agency's calendar cache entries. Their keys are `${agencyId}:${scope}:${from}:${to}`, so add a prefix invalidation to `TtlCache` (`invalidatePrefix(prefix)`) and call it with `${agencyId}:`.
 
 ## 7. Client changes (Voyage-Client)
@@ -265,7 +265,7 @@ Both payloads are cached for 60 seconds per agency, and nothing clears them earl
 ## 8. Freshness and mismatched deploys
 
 - **A reply from the slide-over** clears its red icon and its "Needs you today" row straight away: the client refetches, and the server clears its caches.
-- **Replies made elsewhere** show the next time the Dashboard opens, because it refetches on mount. The dashboard data also polls every 60 seconds.
+- **Replies made elsewhere** (Itineraries page, Command Center) show within about a minute. The calendar and the dashboard data each refresh every 60 seconds while the page is visible, and both refetch when the Dashboard opens. The server clears its caches on every reply, so those refreshes get fresh data.
 - **New views** reach the card within the 60-second poll plus the 60-second cache: about two minutes at worst.
 - **Separate deploys.** The client (Vercel) and server (Railway) deploy separately:
   - a new client with an old server: comments without `needsReply` stay quiet, so there is no false red, and a missing `recentViews` hides the card;
