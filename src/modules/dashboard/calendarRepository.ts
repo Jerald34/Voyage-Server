@@ -82,6 +82,8 @@ export function createPrismaCalendarRepository(client: PrismaClient = prisma): C
             id: true,
             content: true,
             authorName: true,
+            status: true,
+            agencyRepliedAt: true,
             createdAt: true,
             share: { select: { clientName: true, trip: { select: tripRefSelect } } }
           }

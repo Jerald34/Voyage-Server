@@ -86,6 +86,8 @@ export type RawCalendarData = {
     id: string;
     content: string;
     authorName: string;
+    status: "PENDING" | "SEEN" | "ADDRESSED";
+    agencyRepliedAt: Date | null;
     createdAt: Date;
     share: { clientName: string | null; trip: CalendarTripRef | null };
   }>;
@@ -226,7 +228,9 @@ export function buildCalendar(raw: RawCalendarData, opts: BuildCalendarOptions):
     if (trip === null || !inScope(trip) || !inWindow(comment.createdAt)) continue;
     const clientName = comment.share.clientName ?? trip.clientName ?? comment.authorName;
     addEvent("client_commented", comment.id, trip, clientName, comment.createdAt, {
-      excerpt: excerpt(comment.content)
+      excerpt: excerpt(comment.content),
+      // The "Needs you today" rule for an unread comment; a reply sets ADDRESSED.
+      needsReply: comment.status === "PENDING" && comment.agencyRepliedAt === null
     });
   }
 

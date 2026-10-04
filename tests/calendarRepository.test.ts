@@ -36,6 +36,16 @@ describe("calendar repository", () => {
     expect(client.tripReview.findMany.mock.calls[0][0].where.agencyId).toBe("agency-1");
   });
 
+  it("reads each comment's status and reply time, for needsReply", async () => {
+    const client = fakeClient();
+    await fetchWith(client);
+
+    expect(client.itineraryComment.findMany.mock.calls[0][0].select).toMatchObject({
+      status: true,
+      agencyRepliedAt: true
+    });
+  });
+
   it("also requires the related trip to belong to the agency", async () => {
     const client = fakeClient();
     await fetchWith(client);

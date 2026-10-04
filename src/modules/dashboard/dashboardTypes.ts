@@ -229,7 +229,8 @@ export type CalendarEvent = {
   clientName: string | null;
   /** ISO instant; the client places it on the viewer's local day. */
   occurredAt: string;
-  detail: { viewCount?: number; rating?: number; excerpt?: string };
+  /** `needsReply` is set on client_commented events only. */
+  detail: { viewCount?: number; rating?: number; excerpt?: string; needsReply?: boolean };
 };
 
 export type CalendarPayload = {

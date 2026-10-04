@@ -45,6 +45,20 @@ describe("calendarPayloadSchema", () => {
     const parsed = calendarPayloadSchema.safeParse({ ...payload, trips: [{ ...trip, status: "ARCHIVED" }] });
     expect(parsed.success).toBe(false);
   });
+
+  it("keeps needsReply on a comment event and rejects a non-boolean", () => {
+    const comment = {
+      ...event,
+      id: "client_commented:c1",
+      kind: "client_commented",
+      detail: { excerpt: "Can we swap lunch?", needsReply: true }
+    };
+    const parsed = calendarPayloadSchema.parse({ ...payload, events: [comment] });
+    expect(parsed.events[0].detail.needsReply).toBe(true);
+
+    const notBoolean = { ...comment, detail: { excerpt: "Can we swap lunch?", needsReply: "yes" } };
+    expect(calendarPayloadSchema.safeParse({ ...payload, events: [notBoolean] }).success).toBe(false);
+  });
 });
 
 describe("calendarQuerySchema", () => {

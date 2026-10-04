@@ -310,6 +310,47 @@ describe("buildCalendar events", () => {
     expect(build(raw).events[0]).toMatchObject({ clientName: "Ken", detail: { excerpt: "Looks great" } });
   });
 
+  it("says whether a client comment still needs a reply", () => {
+    const raw = emptyRaw();
+    const comment = (id: string, status: "PENDING" | "SEEN" | "ADDRESSED", agencyRepliedAt: Date | null) => ({
+      id,
+      content: "Can we swap lunch?",
+      authorName: "Ken",
+      status,
+      agencyRepliedAt,
+      createdAt: new Date("2026-10-02T10:00:00.000Z"),
+      share: { clientName: null, trip: lisbon }
+    });
+    raw.comments = [
+      comment("open", "PENDING", null),
+      comment("replied", "ADDRESSED", new Date("2026-10-02T12:00:00.000Z")),
+      comment("seen", "SEEN", null),
+      comment("pending-but-replied", "PENDING", new Date("2026-10-02T12:00:00.000Z"))
+    ];
+
+    const needsReply = Object.fromEntries(build(raw).events.map((event) => [event.id, event.detail.needsReply]));
+    expect(needsReply).toEqual({
+      "client_commented:open": true,
+      "client_commented:replied": false,
+      "client_commented:seen": false,
+      "client_commented:pending-but-replied": false
+    });
+  });
+
+  it("leaves needsReply off every other kind of event", () => {
+    const raw = emptyRaw();
+    raw.shares = [
+      share({
+        createdAt: new Date("2026-09-28T09:00:00.000Z"),
+        lastViewedAt: new Date("2026-10-03T02:00:00.000Z"),
+        viewCount: 1
+      })
+    ];
+    for (const event of build(raw).events) {
+      expect(event.detail).not.toHaveProperty("needsReply");
+    }
+  });
+
   it("adds submitted reviews with their rating", () => {
     const raw = emptyRaw();
     raw.reviews = [

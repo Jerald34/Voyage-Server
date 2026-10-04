@@ -235,7 +235,8 @@ export const calendarPayloadSchema = z.object({
       detail: z.object({
         viewCount: z.number().int().nonnegative().optional(),
         rating: z.number().int().optional(),
-        excerpt: z.string().optional()
+        excerpt: z.string().optional(),
+        needsReply: z.boolean().optional()
       })
     })
   )
