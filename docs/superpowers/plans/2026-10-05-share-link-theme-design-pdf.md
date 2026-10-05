@@ -1744,7 +1744,8 @@ with:
                       ) : null}
                     </span>
                     <h2 className="m-0 font-sans text-[22px] font-semibold leading-snug tracking-[-0.015em] text-text-primary max-[400px]:text-[19px]">{day.title}</h2>
-                    <WeatherChip entry={shareWeather.byDayId.get(day.id)} className="mt-1 self-start" />
+                    {/* justify-self-start: the parent is a grid, where self-start only aligns vertically and the chip would stretch. */}
+                    <WeatherChip entry={shareWeather.byDayId.get(day.id)} className="mt-1 justify-self-start" />
                   </div>
                   <CommentTriggerBtn
                     label={`Comment on Day ${day.dayNumber}`}
