@@ -23,6 +23,8 @@ const adminReportStatusQuerySchema = z
     status: z.enum(["NEW", "IN_PROGRESS", "RESOLVED", "WONT_FIX"]).optional()
   })
   .strict();
+// The account list takes no filters; strict makes a stray query parameter a validation error like its siblings.
+const adminUsersQuerySchema = z.object({}).strict();
 const reportIdParamsSchema = idParamsSchema("id");
 const agencyIdParamsSchema = idParamsSchema("agencyId");
 const userIdParamsSchema = idParamsSchema("userId");
@@ -61,6 +63,7 @@ adminRoutes.get("/agencies", requireSuperAdmin, async (request, response, next) 
 
 adminRoutes.get("/users", requireSuperAdmin, async (request, response, next) => {
   try {
+    adminUsersQuerySchema.parse(request.query);
     const users = await accountService.listAccounts(request.authUser!);
     response.json({ users });
   } catch (error) {
@@ -111,7 +114,7 @@ adminRoutes.get("/users/:userId", requireSuperAdmin, async (request, response, n
   }
 });
 
-adminRoutes.get("/agencies/:agencyId",requireSuperAdmin, async (request, response, next) => {
+adminRoutes.get("/agencies/:agencyId", requireSuperAdmin, async (request, response, next) => {
   try {
     const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const agency = await agencyService.getAgencyDetail(request.authUser!, agencyId);

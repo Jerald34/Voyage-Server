@@ -639,6 +639,13 @@ describe("authenticated route validation", () => {
       expect(mockFindAdminAccount).not.toHaveBeenCalled();
     });
 
+    it("rejects any query parameter on the account list before the repository is called", async () => {
+      const response = await request(adminApp()).get("/admin/users?status=x");
+
+      expectValidationError(response);
+      expect(mockListAdminAccounts).not.toHaveBeenCalled();
+    });
+
     it("lists every account for a super admin as { users } without any secret", async () => {
       mockListAdminAccounts.mockResolvedValue([makeAccountRow()]);
 

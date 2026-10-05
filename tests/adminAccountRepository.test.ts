@@ -74,7 +74,7 @@ describe("adminAccountRepository.findAccount", () => {
     const args = mockFindUnique.mock.calls[0]![0];
     expect(args.where).toEqual({ id: USER_ID });
     expect(args).not.toHaveProperty("include");
-    expect(args.select).toMatchObject({
+    expect(args.select).toEqual({
       id: true,
       email: true,
       displayName: true,
@@ -85,8 +85,11 @@ describe("adminAccountRepository.findAccount", () => {
       createdAt: true,
       updatedAt: true,
       passwordHash: true,
-      providerAccounts: { select: { provider: true } },
-      memberships: { select: { role: true, status: true, agency: { select: { id: true, name: true, status: true } } } },
+      providerAccounts: { orderBy: { createdAt: "asc" }, select: { provider: true } },
+      memberships: {
+        orderBy: { createdAt: "asc" },
+        select: { role: true, status: true, agency: { select: { id: true, name: true, status: true } } }
+      },
       _count: { select: { createdItineraries: true, createdClientTrips: true, createdAgentThreads: true } }
     });
     for (const key of FORBIDDEN_USER_KEYS) {
