@@ -1978,3 +1978,17 @@ Code-review fixes applied after the tasks above shipped. They refine D1, D4, D5 
 - **DST note.** Open-Meteo applies one fixed UTC offset to the whole 16-day series, so after a clock change inside the window the rows are one hour off the wall clock (the daily rows share the skew). Accepted and documented on `RawHourlyWeather`.
 - **Daytime chance of rain.** `HourlyDayOutlook` gains `maxDaytimePrecipitationProbabilityPct` (highest hourly chance among coded daytime rows, 06:00 up to 22:00; `null` when none has one), so the client can say "Light rain possible at times · Up to 70% chance of rain" on a dry-coded day and agree with the stops' D5 tags. The agent's `rainRisk` keeps a floor: `wetWindow !== null` or a daytime peak of at least 60% (`RAIN_RISK_CHANCE_PCT`, the daily rule's threshold).
 - **Client follow-up.** The client needs `SNOW` support (labels and tone for the new outlook and window condition) and must tolerate the new `lastWetHour` field. This is handled in a separate client change.
+
+### Client wording
+
+D7 above is the wording from the first mockup. After review the client (`app/lib/weather/weatherDisplay.js`) ships this instead:
+
+- **Part of the day.** The spell is named by the part (morning, afternoon, evening) holding most of its hours; a tie goes to the earlier part.
+- **Advice.** Four-way, from the dry hours around the spell and its real end (`lastWetHour` + 1 when the server sends it): "Put outdoor stops before 11 AM." (dry before, rain to the evening), "Put outdoor stops after 3 PM." (rain starts early), "Keep outdoor stops outside 11 AM–3 PM." (dry on both sides), otherwise the generic "Plan indoor stops or bring rain gear.".
+- **Dry hours.** "Dry until {hour}" when the first wet hour is 3 PM or later (and for 7-11 AM); "Dry morning" for a first wet hour from noon to 3 PM. The detail line also names "{N} stop(s) may see storms/rain/drizzle/snow" on screen only: it counts by forecast band, so it says "may see", never "will be in".
+- **Showers-possible day.** A forecast day with no wet window but a daytime peak of at least 50% reads "Light rain possible at times · Up to {N}% chance of rain", chip "{temp} · showers possible", with the rain tip. Without a peak, the stops' SHOWERS outlooks stand in and the rain line is "At times during the day". Below 50% (or with no peak and no SHOWERS stop) the day stays dry.
+- **Night-only weather.** A day whose only rain or snow is at night reads "Mostly dry" (condition cloudy), never "Snow" or "Rain" beside "no rain expected".
+- **Snow.** Labels "Snow likely" (stop tag), "{Morning} snow, {range}", chip "AM snow", "up to N% chance of snow", and "about N mm of precipitation" (water equivalent, not rain).
+- **No tooltip.** The stop tag's `title` is removed; the visible label and a screen-reader-only copy of `ariaLabel` carry the text.
+- **Unusable hourly data.** A malformed summary, or a wet window whose weather the client has no word for (for example `HAIL`), falls back to the whole-day wording instead of reading as a dry day.
+- **Agent.** On a day with no wet window the agent's `timing` says "no rain coded from 6 AM to 10 PM, but up to {N}% chance of showers" when the daytime peak is 50% or more (`SHOWER_CHANCE_PCT`), and "dry from 6 AM to 10 PM" below that or when there is no chance. `rainRisk` keeps its 60% floor.
