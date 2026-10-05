@@ -4,7 +4,8 @@ import {
   resolveDayDate,
   resolveDayLocation
 } from "../src/services/weather/itineraryWeather";
-import type { RawDailyWeather } from "../src/services/weather/types";
+import type { RawDailyWeather, RawHourlyWeather } from "../src/services/weather/types";
+import { baguioHours } from "./baguioHourlyFixture";
 
 const stop = (latitude: number | null, longitude: number | null) => ({ placeSnapshot: { latitude, longitude } });
 
@@ -25,6 +26,7 @@ function provider(rows: RawDailyWeather[]) {
   return {
     name: "open-meteo" as const,
     getDailyForecast: vi.fn(async () => rows),
+    getHourlyForecast: vi.fn(async (): Promise<RawHourlyWeather[]> => []),
     getDailyHistory: vi.fn(async () => [])
   };
 }
@@ -66,6 +68,74 @@ describe("resolveDayLocation", () => {
 
 describe("buildItineraryWeather", () => {
   const now = new Date("2026-10-01T02:00:00.000Z");
+
+  it("adds rain timing and per-stop weather to forecast days", async () => {
+    const weather = provider([forecastRow("2026-10-10")]);
+    weather.getHourlyForecast.mockResolvedValue(baguioHours("2026-10-10"));
+
+    const result = await buildItineraryWeather({
+      days: [
+        {
+          id: "day-1",
+          dayNumber: 1,
+          date: "2026-10-10",
+          items: [
+            { id: "s1", startTime: "09:00", endTime: "11:00", ...stop(16.4023, 120.596) },
+            { id: "s3", startTime: "14:00", endTime: "16:30", ...stop(16.4023, 120.596) }
+          ]
+        }
+      ],
+      tripStartDate: null,
+      provider: weather,
+      now,
+      typicalYears: 5
+    });
+
+    expect(weather.getHourlyForecast).toHaveBeenCalledTimes(1);
+    expect(weather.getHourlyForecast).toHaveBeenCalledWith({ latitude: 16.4023, longitude: 120.596 });
+    expect(result.days[0]).toMatchObject({ status: "OK", weather: { kind: "FORECAST" } });
+    expect(result.days[0].hourly).toEqual({
+      firstWetHour: 11,
+      wetWindow: { condition: "THUNDERSTORM", fromHour: 14, toHour: 20 },
+      stops: [
+        { itemId: "s1", outlook: "DRY", maxPrecipitationProbabilityPct: 45 },
+        { itemId: "s3", outlook: "STORM", maxPrecipitationProbabilityPct: 99 }
+      ]
+    });
+  });
+
+  it("keeps the daily summary when the hourly lookup fails", async () => {
+    const weather = provider([forecastRow("2026-10-10")]);
+    weather.getHourlyForecast.mockRejectedValue(new Error("hourly down"));
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    const result = await buildItineraryWeather({
+      days: [{ id: "day-1", dayNumber: 1, date: "2026-10-10", items: [stop(16.4, 120.6)] }],
+      tripStartDate: null,
+      provider: weather,
+      now,
+      typicalYears: 5
+    });
+
+    expect(result.days[0]).toMatchObject({ status: "OK", weather: { kind: "FORECAST" } });
+    expect(result.days[0]).not.toHaveProperty("hourly");
+    vi.restoreAllMocks();
+  });
+
+  it("asks for hours only where a day is a forecast", async () => {
+    const weather = provider([]);
+
+    await buildItineraryWeather({
+      // Ten weeks out: typical weather, never hourly.
+      days: [{ id: "day-1", dayNumber: 1, date: "2026-12-10", items: [stop(16.4, 120.6)] }],
+      tripStartDate: null,
+      provider: weather,
+      now,
+      typicalYears: 5
+    });
+
+    expect(weather.getHourlyForecast).not.toHaveBeenCalled();
+  });
 
   it("groups days in one city into one forecast call and reports each day", async () => {
     const weather = provider([forecastRow("2026-10-01"), forecastRow("2026-10-10"), forecastRow("2026-10-11")]);
