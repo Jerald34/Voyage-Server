@@ -113,3 +113,14 @@ Commits (client): C1 `feat(admin): add an Accounts tab to the admin page`, C2 `f
 ## QA (lead)
 
 As super admin in the browser: Accounts tab lists all users incl. personal ones; filter counts add up to All; search; detail pane on desktop and drawer on mobile width; light + dark themes.
+
+## Post-review changes (2026-10-06)
+
+Recorded after review of the client implementation (Voyage-Client C1-C3). Where these differ from the task text above, these win.
+
+- **Table / card switch is a container query at 34rem**, on the list pane's own width, not the viewport `sm` breakpoint. The 440px detail pane leaves a 1280px laptop only about 635-652px of list (less once a Windows scrollbar appears), so a 40rem threshold flipped with the scrollbar. Below 34rem the list is cards (1 column, 2 from 32rem); cards cannot sort.
+- **Status column dropped.** The table is Name, Type, Agency, Joined. Status is shown by exception only: the Type cell stacks the type pill, the Super admin chip and, only when `status === "DISABLED"`, a Disabled pill. There is no "Active" pill in the table or the cards. "Email not verified" is a third muted line under the name. The detail pane keeps its Active / Disabled status pill.
+- **Shared `AgencyStatusPill` now also renders the status in `AgencyDetail`** (its local duplicate was removed). Pending is a peach tint with primary text and a terracotta dot (`bg-accent/20 text-text-primary`, dot `bg-secondary`): about 11:1 text contrast in both themes, and clearly different from Suspended's orange.
+- **Secondary text uses `text-text-muted`** (not `text-soft`) in the new Accounts components: emails, roles, notes, column headers, field labels and footers. `text-soft` is about 3.6:1 on white; `text-muted` is about 7:1.
+- **One polite live region.** The two "Showing X of Y accounts" footers are no longer `aria-live`. A single always-mounted `<p role="status" class="sr-only">` in `AdminAccountsPage` carries the count text, or "No accounts match your search." / "No accounts found.", and stays empty while loading or on error. The visible empty-state message is `aria-hidden`.
+- **Accounts without a display name** show their email as the name (`displayName(a)` in `accountLabels.js`, used by the page, table, cards and pane title); the email line is not repeated beneath it.
