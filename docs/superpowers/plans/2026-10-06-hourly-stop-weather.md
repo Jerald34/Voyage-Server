@@ -1964,3 +1964,16 @@ Expected: build succeeds.
 - [ ] **Step 3: Report**
 
 Summarize the results to the user: the test counts against the baseline, the build status, and any QA items that could not be checked (for example, no dated local trip). Leave pushing and merging to the user.
+
+## Post-review changes (2026-10-06)
+
+Code-review fixes applied after the tasks above shipped. They refine D1, D4, D5 and the agent tool; the task steps above are left as written.
+
+- **Rounded hourly point.** The hourly request uses `roundPoint()` (two decimals), the same point as the daily lookup, in `itineraryWeather.ts` and `weatherTools.ts`. Raw four-decimal points resolved to a different Open-Meteo grid cell (about 9 km apart for Baguio) and made the cached entry depend on whichever point arrived first.
+- **Snow is not dry.** `StopRainOutlook` gains `"SNOW"`, ranked `DRY < SHOWERS < RAIN < SNOW < STORM`. The day's wet window and a stop's outlook can now be snow, and the agent line says "snow". `isWetCondition` is unchanged; `hourlyWeather.ts` uses its own `isPrecipitation` helper.
+- **Whole wet spell.** `HourlyDayOutlook` gains `lastWetHour` (last daytime hour with precipitation, inclusive; `null` when dry). The agent line appends `; wet until {hour}` when the spell outlasts the worst weather, e.g. "dry until 11 AM; thunderstorms 2 PM-8 PM; wet until 9 PM". The prompt now says to put outdoor stops "before the first wet hour or after the wet spell ends" and covered stops "inside the wet hours it names".
+- **Missing codes are not "dry".** An hourly row with no weather code is ignored: it does not cover a stop and adds no rain chance. A stop entirely in such rows gets no entry, and a day with no coded daytime row has no outlook (`summarizeHourlyDay` returns `null`), so it keeps its daily display as D2 says.
+- **Stops ending at midnight.** An end time of "24:00" is the end of the day (hours up to 23 count). A start must still be before 24:00, and a late stop with no end is capped at midnight.
+- **rainRisk follows the timing.** In `weather_forecast`, a forecast day with an hourly outlook sets `rainRisk` from `wetWindow !== null`, so a night-only storm no longer reads `rainRisk: true` beside "dry from 6 AM to 10 PM". Days without an outlook keep the daily rule.
+- **DST note.** Open-Meteo applies one fixed UTC offset to the whole 16-day series, so after a clock change inside the window the rows are one hour off the wall clock (the daily rows share the skew). Accepted and documented on `RawHourlyWeather`.
+- **Client follow-up.** The client needs `SNOW` support (labels and tone for the new outlook and window condition) and must tolerate the new `lastWetHour` field. This is handled in a separate client change.
