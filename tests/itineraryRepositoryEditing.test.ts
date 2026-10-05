@@ -5,7 +5,14 @@ vi.mock("../src/db/prisma", () => ({ prisma: {} }));
 
 import { createPrismaItineraryRepository } from "../src/modules/itineraries/itineraryRepository";
 
-type FakeItem = { id: string; itineraryDayId: string; sortOrder: number; title: string; routeFromPrevious: unknown };
+type FakeItem = {
+  id: string;
+  itineraryDayId: string;
+  sortOrder: number;
+  title: string;
+  placeSnapshotId: string | null;
+  routeFromPrevious: unknown;
+};
 type FakeState = {
   trips: Array<{ id: string; agencyId: string; status: string }>;
   itineraries: Array<{ id: string; agencyId: string; tripId: string; status: string; updatedAt: Date }>;
@@ -14,6 +21,14 @@ type FakeState = {
 };
 
 const AGENCY = "agency-1";
+// Places with coordinates; a stop without one is a custom stop, off the map.
+const POINTS: Record<string, { latitude: number; longitude: number }> = {
+  "snap-a": { latitude: 1, longitude: 1 },
+  "snap-b": { latitude: 2, longitude: 2 },
+  "snap-c": { latitude: 3, longitude: 3 },
+  "snap-d": { latitude: 4, longitude: 4 },
+  "snap-x": { latitude: 5, longitude: 5 }
+};
 
 function createState(status: "NEEDS_REVIEW" | "APPROVED_INTERNAL" = "NEEDS_REVIEW"): FakeState {
   return {
@@ -24,10 +39,10 @@ function createState(status: "NEEDS_REVIEW" | "APPROVED_INTERNAL" = "NEEDS_REVIE
       { id: "day-2", itineraryId: "itin-1", dayNumber: 2, title: "Old town" }
     ],
     items: [
-      { id: "a", itineraryDayId: "day-1", sortOrder: 1, title: "A", routeFromPrevious: null },
-      { id: "b", itineraryDayId: "day-1", sortOrder: 2, title: "B", routeFromPrevious: { polyline: "a-b" } },
-      { id: "c", itineraryDayId: "day-1", sortOrder: 3, title: "C", routeFromPrevious: { polyline: "b-c" } },
-      { id: "d", itineraryDayId: "day-2", sortOrder: 1, title: "D", routeFromPrevious: null }
+      { id: "a", itineraryDayId: "day-1", sortOrder: 1, title: "A", placeSnapshotId: "snap-a", routeFromPrevious: null },
+      { id: "b", itineraryDayId: "day-1", sortOrder: 2, title: "B", placeSnapshotId: "snap-b", routeFromPrevious: { polyline: "a-b" } },
+      { id: "c", itineraryDayId: "day-1", sortOrder: 3, title: "C", placeSnapshotId: "snap-c", routeFromPrevious: { polyline: "b-c" } },
+      { id: "d", itineraryDayId: "day-2", sortOrder: 1, title: "D", placeSnapshotId: "snap-d", routeFromPrevious: null }
     ]
   };
 }
@@ -85,7 +100,13 @@ function createFakeClient(state: FakeState): PrismaClient {
       async findMany({ where }: any) {
         return state.days
           .filter((day) => where.id.in.includes(day.id))
-          .map((day) => ({ id: day.id, items: itemsOf(day.id).map((item) => ({ id: item.id })) }));
+          .map((day) => ({
+            id: day.id,
+            items: itemsOf(day.id).map((item) => ({
+              id: item.id,
+              placeSnapshot: item.placeSnapshotId ? POINTS[item.placeSnapshotId] ?? null : null
+            }))
+          }));
       },
       async update({ where, data }: any) {
         const day = dayOf(where.id)!;
@@ -105,7 +126,7 @@ function createFakeClient(state: FakeState): PrismaClient {
           .map((item) => ({ id: item.id, sortOrder: item.sortOrder, startTime: null }));
       },
       async create({ data }: any) {
-        const item = { routeFromPrevious: null, ...data, id: `new-${state.items.length + 1}` };
+        const item = { routeFromPrevious: null, placeSnapshotId: null, ...data, id: `new-${state.items.length + 1}` };
         state.items.push(item);
         return { ...item, placeSnapshot: null };
       },
@@ -181,7 +202,22 @@ describe("stale route clearing", () => {
     expect(routeOf(state, "c")).toBe(Prisma.DbNull);
   });
 
-  it("keeps routes that still start from the right stop when a stop is inserted", async () => {
+  it("clears the next stop's route when a stop with a place is inserted before it", async () => {
+    const state = createState();
+    await repoFor(state).addItem("itin-1", AGENCY, {
+      dayId: "day-1",
+      sortOrder: 2,
+      item: { type: "ACTIVITY", title: "Museum", placeSnapshotId: "snap-x" } as any
+    });
+    const added = state.items.find((item) => item.title === "Museum")!;
+    expect(orderOf(state, "day-1")).toEqual(["a", added.id, "b", "c"]);
+    expect(routeOf(state, "b")).toBe(Prisma.DbNull);
+    expect(routeOf(state, "c")).toEqual({ polyline: "b-c" });
+  });
+
+  // A route starts at the nearest earlier stop on the map, so a custom stop (no
+  // place) between two places leaves the route between them as it was.
+  it("keeps the next stop's route when a custom stop is inserted before it", async () => {
     const state = createState();
     await repoFor(state).addItem("itin-1", AGENCY, {
       dayId: "day-1",
@@ -190,8 +226,28 @@ describe("stale route clearing", () => {
     });
     const added = state.items.find((item) => item.title === "Coffee")!;
     expect(orderOf(state, "day-1")).toEqual(["a", added.id, "b", "c"]);
-    expect(routeOf(state, "b")).toBe(Prisma.DbNull);
+    expect(routeOf(state, "b")).toEqual({ polyline: "a-b" });
     expect(routeOf(state, "c")).toEqual({ polyline: "b-c" });
+  });
+
+  it("keeps the next stop's route when a custom stop before it is deleted", async () => {
+    const state = createState();
+    state.items.find((item) => item.id === "b")!.placeSnapshotId = null;
+    state.items.find((item) => item.id === "b")!.routeFromPrevious = null;
+    state.items.find((item) => item.id === "c")!.routeFromPrevious = { polyline: "a-c" };
+    await repoFor(state).removeItem("itin-1", AGENCY, "b");
+    expect(routeOf(state, "c")).toEqual({ polyline: "a-c" });
+  });
+
+  it("clears a route whose start moved away from behind a custom stop", async () => {
+    const state = createState();
+    // a, b (custom), c: c's route starts at a.
+    state.items.find((item) => item.id === "b")!.placeSnapshotId = null;
+    state.items.find((item) => item.id === "b")!.routeFromPrevious = null;
+    state.items.find((item) => item.id === "c")!.routeFromPrevious = { polyline: "a-c" };
+    await repoFor(state).moveItem("itin-1", AGENCY, "a", { toDayId: "day-2" });
+    expect(orderOf(state, "day-1")).toEqual(["b", "c"]);
+    expect(routeOf(state, "c")).toBe(Prisma.DbNull);
   });
 });
 

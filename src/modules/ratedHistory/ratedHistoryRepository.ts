@@ -12,6 +12,7 @@ import { prisma } from "../../db/prisma.js";
 import type { RatedTripSummary, RatedItinerary } from "./ratedHistoryTypes.js";
 import { ItineraryLockedError, StaleVersionError, SourceNotFoundError } from "./ratedHistoryErrors.js";
 import { startDateToSeason } from "./seasonHelper.js";
+import { clearStaleRoutes, readDayOrders } from "../itineraries/routeStaleness.js";
 
 // ── listRatedTrips ───────────────────────────────────────────────────────────
 
@@ -518,6 +519,7 @@ export async function insertItemsTransactional(
 
         const { targetDayId, items, atPosition } = insertions;
         const insertedCount = items.length;
+        const before = await readDayOrders(tx, [targetDayId]);
 
         if (atPosition !== undefined) {
           // Shift existing items at or after atPosition to make room.
@@ -549,6 +551,8 @@ export async function insertItemsTransactional(
             },
           });
         }
+        // The stop that now follows the copies has a route from the stop before them.
+        await clearStaleRoutes(tx, [targetDayId], before);
       }
 
       // Step 6: Increment Itinerary.version.

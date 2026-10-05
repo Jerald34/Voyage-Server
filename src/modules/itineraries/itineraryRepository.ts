@@ -1,9 +1,9 @@
-import { Prisma, type PrismaClient } from "@prisma/client";
+import type { Prisma, PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { assertUuid } from "./itineraryService";
 import { assertItineraryEditable } from "./itineraryLock";
-import { stopsWithStaleRoutes, type DayItemOrder } from "./routeStaleness";
+import { clearStaleRoutes, readDayOrders } from "./routeStaleness";
 import type {
   ClientTripRecord,
   ItineraryRecord,
@@ -788,24 +788,6 @@ async function assertEditableItinerary(tx: ItineraryTx, id: string, agencyId: st
   }
   assertItineraryEditable(existing.status);
   return existing;
-}
-
-/** The stop order of the given days, for working out which routes a change made stale. */
-async function readDayOrders(tx: ItineraryTx, dayIds: string[]): Promise<DayItemOrder> {
-  return tx.itineraryDay.findMany({
-    where: { id: { in: [...new Set(dayIds)] } },
-    select: { id: true, items: { orderBy: { sortOrder: "asc" }, select: { id: true } } }
-  });
-}
-
-/** Clears the stored route of every stop whose previous stop changed since `before`. */
-async function clearStaleRoutes(tx: ItineraryTx, dayIds: string[], before: DayItemOrder) {
-  const stale = stopsWithStaleRoutes(before, await readDayOrders(tx, dayIds));
-  if (stale.length === 0) return;
-  await tx.itineraryItem.updateMany({
-    where: { id: { in: stale } },
-    data: { routeFromPrevious: Prisma.DbNull }
-  });
 }
 
 async function resequenceDayItems(tx: ItineraryTx, dayId: string) {
