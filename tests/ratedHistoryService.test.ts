@@ -26,6 +26,7 @@ import {
   MalformedSelectionError,
   SameAgencyViolationError,
   StaleVersionError,
+  ItineraryLockedError,
   SourceNotFoundError
 } from "../src/modules/ratedHistory/ratedHistoryErrors";
 import type {
@@ -127,6 +128,7 @@ type FakeDepsOpts = {
     id: string;
     tripId: string | null;
     version: number;
+    status?: string;
     trip: { startDate: Date | null } | null;
     days: Array<{ id: string; dayNumber: number }>;
   } | null;
@@ -820,5 +822,41 @@ describe("insertFromRated place eligibility", () => {
       .catch(() => undefined);
 
     expect(prepareCopiedPlaces).not.toHaveBeenCalled();
+  });
+});
+
+// ── Approval lock ────────────────────────────────────────────────────────────
+
+describe("approval lock", () => {
+  it("refuses to insert into an approved itinerary and writes nothing", async () => {
+    const source = makeSource();
+    const insertImpl = vi.fn(async () => ({ itineraryId: TARGET_ITIN_ID, newVersion: 6 }));
+    const deps = makeDeps({
+      source,
+      insertImpl,
+      targetItinerary: {
+        id: TARGET_ITIN_ID,
+        tripId: TARGET_TRIP_ID,
+        version: 5,
+        status: "APPROVED_INTERNAL",
+        trip: { startDate: null },
+        days: [{ id: "td-1", dayNumber: 1 }]
+      }
+    });
+    const svc = createRatedHistoryService(deps);
+
+    await expect(
+      svc.insertFromRated({
+        callerAgencyId: AGENCY_A,
+        callerUserId: USER_OWNER,
+        callerRole: "OWNER",
+        targetTripId: TARGET_TRIP_ID,
+        sourceTripId: SOURCE_TRIP_ID,
+        selection: { kind: "day", dayIds: [source.days[0].dayId] },
+        target: { itineraryId: TARGET_ITIN_ID, dayIndex: 0 },
+        ifMatchVersion: 5
+      })
+    ).rejects.toBeInstanceOf(ItineraryLockedError);
+    expect(insertImpl).not.toHaveBeenCalled();
   });
 });

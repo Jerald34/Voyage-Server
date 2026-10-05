@@ -47,6 +47,7 @@ import {
   GRANULAR_ITINERARY_TOOL_NAMES,
   CONTINUATION_TRIGGER_TOOL_NAMES,
   buildActiveItineraryContext,
+  withLiveItinerary,
   applyToolResultToItineraryContext,
   countItineraryItems,
   availableToolSet,
@@ -226,9 +227,32 @@ export function createAgentOrchestrator(options: {
           }
         }
 
+        /**
+         * The thread's last itinerary tool event can be out of date: staff may have
+         * edited the itinerary by hand since. Re-read it under the run's own
+         * authorization so the agent works from, and never overwrites, the live copy.
+         */
+        async function refreshActiveItinerary(
+          context: { prompt: string; itinerary: Record<string, unknown> } | null
+        ) {
+          const itineraryId = context?.itinerary?.id;
+          if (!context || typeof itineraryId !== "string" || !options.loadCurrentItinerary) return context;
+          try {
+            const live = await options.loadCurrentItinerary({
+              agencyId: input.agencyId,
+              userId: input.userId,
+              itineraryId
+            });
+            return withLiveItinerary(context, live);
+          } catch (error) {
+            console.error("[Agent] Failed to load the live itinerary; using the thread's snapshot.", error);
+            return context;
+          }
+        }
+
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
-          activeItineraryContext = buildActiveItineraryContext(thread);
+          activeItineraryContext = await refreshActiveItinerary(buildActiveItineraryContext(thread));
           travelerNeedsBlock = buildTravelerNeedsBlock(parseStoredTravelerNeeds(thread.travelerNeeds));
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
           conversationHistory = recentMessages

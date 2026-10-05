@@ -27,7 +27,8 @@ import {
 import {
   MalformedSelectionError,
   SameAgencyViolationError,
-  SourceNotFoundError
+  SourceNotFoundError,
+  ItineraryLockedError
 } from "./ratedHistoryErrors.js";
 import type {
   RatedHistoryListResponse,
@@ -114,6 +115,7 @@ type TargetItineraryRow = {
   id: string;
   tripId: string | null;
   version: number;
+  status?: string;
   trip: { startDate: Date | null } | null;
   days: Array<{ id: string; dayNumber: number }>;
 };
@@ -329,6 +331,7 @@ export function createRatedHistoryService(deps: RatedHistoryDeps) {
         id: true,
         tripId: true,
         version: true,
+        status: true,
         trip: { select: { startDate: true } },
         days: {
           select: { id: true, dayNumber: true },
@@ -344,6 +347,11 @@ export function createRatedHistoryService(deps: RatedHistoryDeps) {
       throw new MalformedSelectionError(
         "target itinerary does not belong to target trip"
       );
+    }
+    // The same lock as every other edit: approval freezes the itinerary until the
+    // trip is reopened.
+    if (targetItinerary.status === "APPROVED_INTERNAL") {
+      throw new ItineraryLockedError();
     }
 
     // ── 3e. Build prepared payload + delegate to repo ────────────────────────

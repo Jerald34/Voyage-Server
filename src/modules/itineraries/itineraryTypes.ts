@@ -108,6 +108,8 @@ export interface ItineraryRepository {
     itinerary: PlanItineraryInput["itinerary"];
   }): Promise<{ trip: ClientTripRecord; itinerary: ItineraryRecord }>;
   findItineraryByAgency(id: string, agencyId: string): Promise<ItineraryRecord | null>;
+  /** The trip an itinerary belongs to, for trip-level access checks. Null outside the agency. */
+  findItineraryTripId(id: string, agencyId: string): Promise<{ tripId: string | null } | null>;
   replaceItineraryDraft(
     id: string,
     agencyId: string,
@@ -168,6 +170,11 @@ export interface ItineraryRepository {
     tripId: string,
     agencyId: string
   ): Promise<{ trip: ClientTripRecord; itinerary: ItineraryRecord | null }>;
+  /** Undo an approval: the trip goes back to IN_REVIEW and its latest itinerary to NEEDS_REVIEW. */
+  reopenTrip(
+    tripId: string,
+    agencyId: string
+  ): Promise<{ trip: ClientTripRecord; itinerary: { id: string; status: string } | null }>;
 }
 
 import { z } from "zod";

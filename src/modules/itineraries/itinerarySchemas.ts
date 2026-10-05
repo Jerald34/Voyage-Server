@@ -157,3 +157,39 @@ export const deleteItineraryInputSchema = z.object({
   itineraryId: z.string().min(1),
   deleteTrip: z.boolean().default(false)
 });
+
+// ── Hand edits from the Itineraries page ─────────────────────────────────────
+// Strict on purpose: place fields (placeName, placeSnapshotId, cityContext,
+// routeFromPrevious) are rejected, so a hand edit never changes which place a stop
+// points to. That stays with the agent, which checks the new place. An empty string
+// clears an optional field.
+export const manualStopCreateSchema = z
+  .object({
+    type: itineraryItemTypeSchema,
+    title: z.string().trim().min(1).max(200),
+    description: z.string().trim().max(2000).optional(),
+    startTime: z.string().trim().max(20).optional(),
+    endTime: z.string().trim().max(20).optional(),
+    clientNotes: z.string().trim().max(2000).optional(),
+    staffNotes: z.string().trim().max(2000).optional()
+  })
+  .strict();
+
+export const manualStopPatchSchema = manualStopCreateSchema
+  .partial()
+  .strict()
+  .refine((patch) => Object.keys(patch).length > 0, "Send at least one field to change.");
+
+export const manualDayRenameSchema = z
+  .object({
+    title: z.string().trim().min(1).max(200)
+  })
+  .strict();
+
+export const manualStopMoveSchema = z
+  .object({
+    toDayId: z.string().uuid(),
+    // The stop's 1-based position among the day's other stops; left out, it goes last.
+    toSortOrder: z.number().int().positive().optional()
+  })
+  .strict();

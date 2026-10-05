@@ -6,6 +6,7 @@
  *   SameAgencyViolationError → 403
  *   MalformedSelectionError  → 400
  *   StaleVersionError        → 409
+ *   ItineraryLockedError     → 409 (error: "itinerary_locked")
  *
  * MissingStartDateAdvisory is NOT thrown — it is a flag attached to a 200 response
  * body (`missingStartDateAdvisory: true`). Document here for clarity.
@@ -60,6 +61,16 @@ export class StaleVersionError extends Error {
     this.name = "StaleVersionError";
     this.expectedVersion = expectedVersion;
     this.actualVersion = actualVersion;
+  }
+}
+
+/** The target itinerary is approved. It takes no copies until the trip is reopened. */
+export class ItineraryLockedError extends Error {
+  readonly httpStatus = 409 as const;
+
+  constructor() {
+    super("The target itinerary is approved. Reopen the trip to add to it.");
+    this.name = "ItineraryLockedError";
   }
 }
 

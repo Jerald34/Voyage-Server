@@ -13,7 +13,8 @@ import {
   MalformedSelectionError,
   SameAgencyViolationError,
   SourceNotFoundError,
-  StaleVersionError
+  StaleVersionError,
+  ItineraryLockedError
 } from "./ratedHistoryErrors.js";
 
 // ── Error-to-response helper ─────────────────────────────────────────────────
@@ -33,6 +34,10 @@ function handleServiceError(err: unknown, response: Response, next: (e: unknown)
     } else {
       response.status(404).json({ error: "not_found" });
     }
+    return;
+  }
+  if (err instanceof ItineraryLockedError) {
+    response.status(409).json({ error: "itinerary_locked" });
     return;
   }
   if (err instanceof StaleVersionError) {
