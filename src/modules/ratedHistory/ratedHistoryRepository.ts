@@ -10,7 +10,7 @@
 import { Prisma, type ItineraryItemType as PrismaItineraryItemType } from "@prisma/client";
 import { prisma } from "../../db/prisma.js";
 import type { RatedTripSummary, RatedItinerary } from "./ratedHistoryTypes.js";
-import { StaleVersionError, SourceNotFoundError } from "./ratedHistoryErrors.js";
+import { ItineraryLockedError, StaleVersionError, SourceNotFoundError } from "./ratedHistoryErrors.js";
 import { startDateToSeason } from "./seasonHelper.js";
 
 // ── listRatedTrips ───────────────────────────────────────────────────────────
@@ -432,11 +432,16 @@ export async function insertItemsTransactional(
       // Step 1: Re-fetch and check version for optimistic concurrency.
       const current = await tx.itinerary.findUnique({
         where: { id: targetItineraryId },
-        select: { id: true, version: true },
+        select: { id: true, version: true, status: true },
       });
 
       if (!current) {
         throw new SourceNotFoundError("missing");
+      }
+
+      // Approved between the service's check and this write: refuse it.
+      if (current.status === "APPROVED_INTERNAL") {
+        throw new ItineraryLockedError();
       }
 
       if (current.version !== ifMatchVersion) {

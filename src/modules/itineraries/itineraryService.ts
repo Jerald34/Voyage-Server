@@ -24,6 +24,7 @@ import {
   storedPointsBySnapshotId
 } from "./itineraryPlaceGuard";
 import { overlayPlaceAdvisories, scheduleSavedRead } from "./savedPlaceAdvisories";
+import { assertItineraryEditable } from "./itineraryLock";
 import type { PlaceRefreshScheduler } from "../../services/places/placeRefreshScheduler";
 
 // Re-export all types from itineraryTypes
@@ -190,9 +191,7 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       if (!existing) {
         throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
       }
-      if (existing.status !== "DRAFT") {
-        throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
-      }
+      assertItineraryEditable(existing.status);
 
       // Preservation is computed from the authorized stored itinerary, never from
       // anything a request body supplied.
@@ -351,8 +350,21 @@ export function createItineraryService(options: { repository: ItineraryRepositor
       });
     },
 
+    /** The trip an itinerary belongs to, for trip-level access checks on edits. */
+    async getItineraryTripId(agencyId: string, itineraryId: string) {
+      const found = await options.repository.findItineraryTripId(itineraryId, agencyId);
+      if (!found?.tripId) {
+        throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
+      }
+      return found.tripId;
+    },
+
     async approveTrip(agencyId: string, tripId: string) {
       return options.repository.approveTrip(tripId, agencyId);
+    },
+
+    async reopenTrip(agencyId: string, tripId: string) {
+      return options.repository.reopenTrip(tripId, agencyId);
     }
   };
 }

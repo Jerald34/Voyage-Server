@@ -1,7 +1,9 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { assertUuid } from "./itineraryService";
+import { assertItineraryEditable } from "./itineraryLock";
+import { stopsWithStaleRoutes, type DayItemOrder } from "./routeStaleness";
 import type {
   ClientTripRecord,
   ItineraryRecord,
@@ -138,6 +140,13 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
       }) as Promise<ItineraryRecord | null>;
     },
 
+    async findItineraryTripId(id, agencyId) {
+      return client.itinerary.findFirst({
+        where: { id, agencyId },
+        select: { tripId: true }
+      });
+    },
+
     async replaceItineraryDraft(id, agencyId, data) {
       return client.$transaction(async (tx) => {
         const existing = await tx.itinerary.findFirst({
@@ -148,9 +157,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         if (!existing) {
           return null;
         }
-        if (existing.status !== "DRAFT") {
-          throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
-        }
+        assertItineraryEditable(existing.status);
 
         await tx.itineraryDay.deleteMany({
           where: { itineraryId: id }
@@ -264,7 +271,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async addDay(itineraryId, agencyId, data) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const existingDays = await tx.itineraryDay.findMany({
           where: { itineraryId },
           orderBy: { dayNumber: "asc" },
@@ -323,7 +330,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async updateDay(itineraryId, agencyId, dayId, patch) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const existingDay = await tx.itineraryDay.findFirst({
           where: { id: dayId, itineraryId },
           select: { id: true }
@@ -359,7 +366,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async removeDay(itineraryId, agencyId, dayId) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const existingDay = await tx.itineraryDay.findFirst({
           where: { id: dayId, itineraryId },
           select: { id: true, dayNumber: true }
@@ -414,7 +421,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async addItem(itineraryId, agencyId, data) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const day = await tx.itineraryDay.findFirst({
           where: { id: data.dayId, itineraryId },
           select: { id: true }
@@ -422,6 +429,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         if (!day) {
           throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary day not found.");
         }
+        const before = await readDayOrders(tx, [data.dayId]);
 
         const existingItems = await tx.itineraryItem.findMany({
           where: { itineraryDayId: data.dayId },
@@ -481,6 +489,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
           },
           include: { placeSnapshot: true }
         });
+        await clearStaleRoutes(tx, [data.dayId], before);
 
         const updated = await tx.itinerary.findFirst({
           where: { id: itineraryId, agencyId },
@@ -499,7 +508,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async updateItem(itineraryId, agencyId, itemId, patch) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const existing = await tx.itineraryItem.findFirst({
           where: {
             id: itemId,
@@ -552,7 +561,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async removeItem(itineraryId, agencyId, itemId) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const existing = await tx.itineraryItem.findFirst({
           where: { id: itemId, itineraryDay: { itineraryId } },
           select: { id: true, itineraryDayId: true }
@@ -560,9 +569,11 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         if (!existing) {
           throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary item not found.");
         }
+        const before = await readDayOrders(tx, [existing.itineraryDayId]);
 
         await tx.itineraryItem.delete({ where: { id: itemId } });
         await resequenceDayItems(tx, existing.itineraryDayId);
+        await clearStaleRoutes(tx, [existing.itineraryDayId], before);
 
         const updated = await tx.itinerary.findFirst({
           where: { id: itineraryId, agencyId },
@@ -583,7 +594,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
     async moveItem(itineraryId, agencyId, itemId, target) {
       return client.$transaction(async (tx) => {
-        await assertDraftItinerary(tx, itineraryId, agencyId);
+        await assertEditableItinerary(tx, itineraryId, agencyId);
         const existing = await tx.itineraryItem.findFirst({
           where: { id: itemId, itineraryDay: { itineraryId } },
           select: { id: true, itineraryDayId: true }
@@ -601,6 +612,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
         const fromDayId = existing.itineraryDayId;
         const toDayId = target.toDayId;
+        const before = await readDayOrders(tx, [fromDayId, toDayId]);
 
         // Park the moved item on a sentinel sortOrder to escape the (dayId, sortOrder) unique constraint
         // while we re-pack the source day.
@@ -661,6 +673,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         if (fromDayId === toDayId) {
           await resequenceDayItems(tx, toDayId);
         }
+        await clearStaleRoutes(tx, [fromDayId, toDayId], before);
 
         const updated = await tx.itinerary.findFirst({
           where: { id: itineraryId, agencyId },
@@ -721,13 +734,51 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
         return { trip: updatedTrip as unknown as ClientTripRecord, itinerary: updatedItinerary };
       });
+    },
+
+    async reopenTrip(tripId, agencyId) {
+      return client.$transaction(async (tx) => {
+        const trip = await tx.clientTrip.findFirst({
+          where: { id: tripId, agencyId },
+          include: {
+            itineraries: {
+              orderBy: { updatedAt: "desc" as const },
+              take: 1,
+              select: { id: true, status: true }
+            }
+          }
+        });
+        if (!trip) {
+          throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+        }
+
+        // Reopening only undoes an approval. A trip that is still a draft or in
+        // review is returned unchanged, so a repeated click does no harm.
+        const { itineraries, ...tripRow } = trip;
+        const updatedTrip =
+          tripRow.status === "APPROVED_INTERNAL"
+            ? await tx.clientTrip.update({ where: { id: tripId }, data: { status: "IN_REVIEW" } })
+            : tripRow;
+
+        const latest = itineraries[0] ?? null;
+        const itinerary =
+          latest?.status === "APPROVED_INTERNAL"
+            ? await tx.itinerary.update({
+                where: { id: latest.id },
+                data: { status: "NEEDS_REVIEW" },
+                select: { id: true, status: true }
+              })
+            : latest;
+
+        return { trip: updatedTrip as unknown as ClientTripRecord, itinerary };
+      });
     }
   };
 }
 
 type ItineraryTx = Prisma.TransactionClient;
 
-async function assertDraftItinerary(tx: ItineraryTx, id: string, agencyId: string) {
+async function assertEditableItinerary(tx: ItineraryTx, id: string, agencyId: string) {
   const existing = await tx.itinerary.findFirst({
     where: { id, agencyId },
     select: { id: true, status: true }
@@ -735,10 +786,26 @@ async function assertDraftItinerary(tx: ItineraryTx, id: string, agencyId: strin
   if (!existing) {
     throw new ApiError(404, "ITINERARY_NOT_FOUND", "Itinerary not found.");
   }
-  if (existing.status !== "DRAFT") {
-    throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be modified.");
-  }
+  assertItineraryEditable(existing.status);
   return existing;
+}
+
+/** The stop order of the given days, for working out which routes a change made stale. */
+async function readDayOrders(tx: ItineraryTx, dayIds: string[]): Promise<DayItemOrder> {
+  return tx.itineraryDay.findMany({
+    where: { id: { in: [...new Set(dayIds)] } },
+    select: { id: true, items: { orderBy: { sortOrder: "asc" }, select: { id: true } } }
+  });
+}
+
+/** Clears the stored route of every stop whose previous stop changed since `before`. */
+async function clearStaleRoutes(tx: ItineraryTx, dayIds: string[], before: DayItemOrder) {
+  const stale = stopsWithStaleRoutes(before, await readDayOrders(tx, dayIds));
+  if (stale.length === 0) return;
+  await tx.itineraryItem.updateMany({
+    where: { id: { in: stale } },
+    data: { routeFromPrevious: Prisma.DbNull }
+  });
 }
 
 async function resequenceDayItems(tx: ItineraryTx, dayId: string) {

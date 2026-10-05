@@ -133,6 +133,30 @@ export function buildActiveItineraryContext(thread: unknown) {
   return null;
 }
 
+export const ITINERARY_LOCKED_NOTICE = [
+  "This itinerary is APPROVED and locked. Do not call any itinerary edit tool: every edit will be refused.",
+  "If the user asks for a change, tell them an owner, an admin or the trip's assigned staff member must click \"Reopen for edits\" on the Itineraries page first, then ask again."
+].join("\n");
+
+/**
+ * Swap the thread's last stored snapshot for the live itinerary. Staff can edit an
+ * itinerary by hand between runs, so the snapshot in the thread's tool events can be
+ * out of date. With no live copy (gone, or not readable) the snapshot stays.
+ */
+export function withLiveItinerary(
+  context: { prompt: string; itinerary: Record<string, unknown> } | null,
+  live: unknown
+) {
+  if (!context) return null;
+  const itinerary = extractItineraryFromToolOutput(live);
+  if (!itinerary) return context;
+  const locked = itinerary.status === "APPROVED_INTERNAL";
+  return {
+    prompt: locked ? `${context.prompt}\n${ITINERARY_LOCKED_NOTICE}` : context.prompt,
+    itinerary
+  };
+}
+
 // Update the in-memory itinerary cache after a granular tool call so the agent's next turn sees a fresh snapshot.
 export function applyToolResultToItineraryContext(
   context: { prompt: string; itinerary: Record<string, unknown> } | null,

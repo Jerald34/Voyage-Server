@@ -57,7 +57,8 @@ import {
   MalformedSelectionError,
   SameAgencyViolationError,
   SourceNotFoundError,
-  StaleVersionError
+  StaleVersionError,
+  ItineraryLockedError
 } from "../src/modules/ratedHistory/ratedHistoryErrors";
 
 // ── Fixture constants ────────────────────────────────────────────────────────
@@ -662,6 +663,19 @@ describe("POST /trips/:tripId/itinerary/insert-from-rated", () => {
     expect(res.body.error).toBe("stale_version");
     expect(res.body.expected).toBe(1);
     expect(res.body.actual).toBe(2);
+  });
+
+  it("21b. approved target itinerary → 409 itinerary_locked", async () => {
+    mockInsertFromRated.mockRejectedValue(new ItineraryLockedError());
+
+    const app = createApp();
+    const res = await request(app)
+      .post(`/trips/${TARGET_TRIP_ID}/itinerary/insert-from-rated`)
+      .set("Cookie", `voyage_session=${SESSION_TOKEN}`)
+      .send(dayInsertBody({ ifMatchVersion: 1 }));
+
+    expect(res.status).toBe(409);
+    expect(res.body.error).toBe("itinerary_locked");
   });
 
   it("22. source deleted between list and insert → SKIP (see note)", () => {
