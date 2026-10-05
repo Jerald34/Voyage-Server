@@ -123,13 +123,13 @@ describe("weather_forecast tool", () => {
 
   it("takes rainRisk from the hourly timing, so a night-only storm is not a rain risk", async () => {
     const { tool, weather } = buildTool();
-    // The daily code says rain (85%), but the only wet hours are 2-3 AM.
+    // The daily code says rain (85%), but the only wet hours are 2-3 AM (at 95%); the daytime is dry at 20%.
     weather.getHourlyForecast.mockResolvedValue(
       Array.from({ length: 24 }, (_, hour) => ({
         date: "2026-10-10",
         hour,
         weatherCode: hour === 2 || hour === 3 ? 95 : 1,
-        precipitationProbabilityPct: 10
+        precipitationProbabilityPct: hour === 2 || hour === 3 ? 95 : 20
       }))
     );
 
@@ -137,6 +137,32 @@ describe("weather_forecast tool", () => {
 
     expect(result).toMatchObject({
       days: [{ kind: "FORECAST", condition: "RAIN", rainRisk: false, timing: "dry from 6 AM to 10 PM" }]
+    });
+  });
+
+  it("keeps a rain-chance floor on rainRisk when the daytime codes are dry", async () => {
+    const { tool, weather } = buildTool();
+    const dryDayWithPeak = (peak: number) =>
+      Array.from({ length: 24 }, (_, hour) => ({
+        date: "2026-10-10",
+        hour,
+        weatherCode: 3,
+        precipitationProbabilityPct: hour === 12 ? peak : 10
+      }));
+
+    // An overcast hour with a 79% chance: no wet window, but still a rain risk.
+    weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(79));
+    const risky = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+    expect(risky).toMatchObject({ days: [{ rainRisk: true, timing: "dry from 6 AM to 10 PM" }] });
+
+    // The floor is the daily rule's 60%: 60 counts, 59 does not.
+    weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(60));
+    expect(await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" })).toMatchObject({
+      days: [{ rainRisk: true }]
+    });
+    weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(59));
+    expect(await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" })).toMatchObject({
+      days: [{ rainRisk: false }]
     });
   });
 

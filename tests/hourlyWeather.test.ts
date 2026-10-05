@@ -1,5 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
+  DAYTIME_END_HOUR,
+  DAYTIME_START_HOUR,
   describeHourlyForAgent,
   groupHoursByDate,
   summarizeHourlyDay
@@ -30,6 +32,8 @@ describe("summarizeHourlyDay", () => {
       wetWindow: { condition: "THUNDERSTORM", fromHour: 14, toHour: 20 },
       // The 20:00 row is still drizzle: the wet spell outlasts the storms.
       lastWetHour: 20,
+      // The 15:00 and 16:00 rows peak at 99%.
+      maxDaytimePrecipitationProbabilityPct: 99,
       stops: []
     });
   });
@@ -66,7 +70,14 @@ describe("summarizeHourlyDay", () => {
   it("ignores rain at night", () => {
     const outlook = summarizeHourlyDay(hoursWith({ 0: 95, 1: 95, 2: 63, 23: 61 }), []);
 
-    expect(outlook).toEqual({ firstWetHour: null, wetWindow: null, lastWetHour: null, stops: [] });
+    // The night's storms and chances do not count toward the daytime peak either.
+    expect(outlook).toEqual({
+      firstWetHour: null,
+      wetWindow: null,
+      lastWetHour: null,
+      maxDaytimePrecipitationProbabilityPct: 10,
+      stops: []
+    });
   });
 
   it("has no wet hours at all on a dry day", () => {
@@ -74,6 +85,7 @@ describe("summarizeHourlyDay", () => {
       firstWetHour: null,
       wetWindow: null,
       lastWetHour: null,
+      maxDaytimePrecipitationProbabilityPct: 10,
       stops: []
     });
   });
@@ -104,6 +116,7 @@ describe("summarizeHourlyDay", () => {
       // Snow outranks the 9 AM rain.
       wetWindow: { condition: "SNOW", fromHour: 12, toHour: 14 },
       lastWetHour: 13,
+      maxDaytimePrecipitationProbabilityPct: 10,
       stops: [
         { itemId: "rain-stop", outlook: "RAIN", maxPrecipitationProbabilityPct: 10 },
         { itemId: "snow-stop", outlook: "SNOW", maxPrecipitationProbabilityPct: 10 },
@@ -124,6 +137,7 @@ describe("summarizeHourlyDay", () => {
       firstWetHour: 6,
       wetWindow: { condition: "SNOW", fromHour: 6, toHour: 8 },
       lastWetHour: 7,
+      maxDaytimePrecipitationProbabilityPct: 10,
       stops: []
     });
     expect(describeHourlyForAgent(outlook!)).toBe("snow 6 AM-8 AM");
@@ -184,6 +198,43 @@ describe("summarizeHourlyDay", () => {
     ]);
   });
 
+  it("reports the highest daytime chance of rain, even on a dry-coded day", () => {
+    // Dry codes all day, but a 70% hour at 14:00; the 95% at 02:00 and 90% at 23:00 are night.
+    const outlook = summarizeHourlyDay(hoursWith({}, 10, { 2: 95, 14: 70, 23: 90 }), []);
+
+    expect(outlook).toEqual({
+      firstWetHour: null,
+      wetWindow: null,
+      lastWetHour: null,
+      maxDaytimePrecipitationProbabilityPct: 70,
+      stops: []
+    });
+  });
+
+  it("counts 06:00 through 21:00 for the daytime chance and not 05:00 or 22:00", () => {
+    expect(summarizeHourlyDay(hoursWith({}, 10, { 5: 99, 6: 55, 22: 99 }), [])?.maxDaytimePrecipitationProbabilityPct).toBe(55);
+    expect(summarizeHourlyDay(hoursWith({}, 10, { 21: 80, 22: 99 }), [])?.maxDaytimePrecipitationProbabilityPct).toBe(80);
+  });
+
+  it("skips rows with no weather code when finding the daytime chance", () => {
+    // The 12:00 row has no code, so its 99% chance is not read.
+    const outlook = summarizeHourlyDay(hoursWith({ 12: null }, 10, { 12: 99, 15: 40 }), []);
+
+    expect(outlook?.maxDaytimePrecipitationProbabilityPct).toBe(40);
+  });
+
+  it("has no daytime chance when the provider gave none for any daytime row", () => {
+    const noChances = hoursWith({}).map((row) => ({
+      ...row,
+      // Night rows keep a chance: only the daytime counts.
+      precipitationProbabilityPct: row.hour < DAYTIME_START_HOUR || row.hour >= DAYTIME_END_HOUR ? 90 : null
+    }));
+    const outlook = summarizeHourlyDay(noChances, [{ id: "s1", startTime: "09:00", endTime: "10:00" }]);
+
+    expect(outlook?.maxDaytimePrecipitationProbabilityPct).toBeNull();
+    expect(outlook?.stops).toEqual([{ itemId: "s1", outlook: "DRY", maxPrecipitationProbabilityPct: null }]);
+  });
+
   it("returns null when the date has no hours", () => {
     expect(summarizeHourlyDay([], [{ id: "s1", startTime: "09:00" }])).toBeNull();
   });
@@ -208,14 +259,21 @@ describe("describeHourlyForAgent", () => {
     expect(describeHourlyForAgent(summarizeHourlyDay(baguioHours(), [])!)).toBe(
       "dry until 11 AM; thunderstorms 2 PM-8 PM; wet until 9 PM"
     );
-    expect(describeHourlyForAgent({ firstWetHour: null, wetWindow: null, lastWetHour: null, stops: [] })).toBe(
-      "dry from 6 AM to 10 PM"
-    );
+    expect(
+      describeHourlyForAgent({
+        firstWetHour: null,
+        wetWindow: null,
+        lastWetHour: null,
+        maxDaytimePrecipitationProbabilityPct: 5,
+        stops: []
+      })
+    ).toBe("dry from 6 AM to 10 PM");
     expect(
       describeHourlyForAgent({
         firstWetHour: 6,
         wetWindow: { condition: "RAIN", fromHour: 6, toHour: 9 },
         lastWetHour: 8,
+        maxDaytimePrecipitationProbabilityPct: 90,
         stops: []
       })
     ).toBe("rain 6 AM-9 AM");

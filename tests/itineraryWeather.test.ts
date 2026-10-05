@@ -99,6 +99,7 @@ describe("buildItineraryWeather", () => {
       firstWetHour: 11,
       wetWindow: { condition: "THUNDERSTORM", fromHour: 14, toHour: 20 },
       lastWetHour: 20,
+      maxDaytimePrecipitationProbabilityPct: 99,
       stops: [
         { itemId: "s1", outlook: "DRY", maxPrecipitationProbabilityPct: 45 },
         { itemId: "s3", outlook: "STORM", maxPrecipitationProbabilityPct: 99 }
@@ -137,12 +138,14 @@ describe("buildItineraryWeather", () => {
       firstWetHour: 11,
       wetWindow: { condition: "THUNDERSTORM", fromHour: 14, toHour: 20 },
       lastWetHour: 20,
+      maxDaytimePrecipitationProbabilityPct: 99,
       stops: [{ itemId: "b1", outlook: "STORM", maxPrecipitationProbabilityPct: 99 }]
     });
     expect(result.days[1].hourly).toEqual({
       firstWetHour: 8,
       wetWindow: { condition: "RAIN", fromHour: 8, toHour: 10 },
       lastWetHour: 9,
+      maxDaytimePrecipitationProbabilityPct: 10,
       stops: [{ itemId: "c1", outlook: "RAIN", maxPrecipitationProbabilityPct: 10 }]
     });
   });

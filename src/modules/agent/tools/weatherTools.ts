@@ -86,8 +86,11 @@ export function describeWeatherForAgent(weather: DailyWeather): string {
   return parts.join(", ");
 }
 
+/** A day with at least this chance of rain (daily, or any daytime hour) counts as a rain risk. */
+export const RAIN_RISK_CHANCE_PCT = 60;
+
 export function isRainRisk(weather: DailyWeather): boolean {
-  return isWetCondition(weather.condition) || (weather.precipitationProbabilityPct ?? 0) >= 60;
+  return isWetCondition(weather.condition) || (weather.precipitationProbabilityPct ?? 0) >= RAIN_RISK_CHANCE_PCT;
 }
 
 export function createWeatherForecastTool(options: {
@@ -159,7 +162,14 @@ export function createWeatherForecastTool(options: {
             ...base,
             // With hour-by-hour timing, the risk follows the daytime hours the model is told about:
             // a storm at 2 AM must not read "rainRisk: true" beside "dry from 6 AM to 10 PM".
-            ...(outlook ? { rainRisk: outlook.wetWindow !== null } : {}),
+            // A high daytime chance on dry-coded hours still counts, like the daily rule's floor.
+            ...(outlook
+              ? {
+                  rainRisk:
+                    outlook.wetWindow !== null ||
+                    (outlook.maxDaytimePrecipitationProbabilityPct ?? 0) >= RAIN_RISK_CHANCE_PCT
+                }
+              : {}),
             ...(timing ? { summary: `${base.summary}; ${timing}`, timing } : {}),
             precipitationProbabilityPct: weather.precipitationProbabilityPct
           };

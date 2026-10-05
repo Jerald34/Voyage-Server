@@ -27,6 +27,11 @@ export type HourlyDayOutlook = {
   wetWindow: { condition: WeatherCondition; fromHour: number; toHour: number } | null;
   /** Last daytime hour (local, inclusive) with drizzle, rain, snow or storms, so the whole wet spell is known; null when dry. */
   lastWetHour: number | null;
+  /**
+   * Highest hourly chance of rain across the daytime (06:00 up to 22:00); null when no daytime row has one.
+   * A dry-coded day can still peak high: that is the "light rain possible" the stop tags report.
+   */
+  maxDaytimePrecipitationProbabilityPct: number | null;
   /** One entry per stop that has an id and a readable start time. */
   stops: StopWeather[];
 };
@@ -140,10 +145,15 @@ export function summarizeHourlyDay(hours: RawHourlyWeather[], items: HourlyStopI
     wetWindow = { condition, fromHour: inBand[0].hour, toHour: inBand[inBand.length - 1].hour + 1 };
   }
 
+  const chances = daytime
+    .map((row) => row.precipitationProbabilityPct)
+    .filter((chance): chance is number => typeof chance === "number" && Number.isFinite(chance));
+
   return {
     firstWetHour: wet.length > 0 ? wet[0].hour : null,
     wetWindow,
     lastWetHour: wet.length > 0 ? wet[wet.length - 1].hour : null,
+    maxDaytimePrecipitationProbabilityPct: chances.length > 0 ? Math.max(...chances) : null,
     stops: items.map((item) => stopWeather(item, byHour)).filter((stop): stop is StopWeather => stop !== null)
   };
 }
