@@ -614,7 +614,16 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
       return undefined;
     }
 
-    const resolvedProjectId = await resolveVertexProjectId();
+    // The cache lives in a Cloud project. Without one (API-key mode with no
+    // GOOGLE_CLOUD_PROJECT) skip the cache: it only saves tokens, so it must never
+    // fail the request.
+    let resolvedProjectId: string;
+    try {
+      resolvedProjectId = await resolveVertexProjectId();
+    } catch (err) {
+      console.log(`[Vertex Cache] skipped, no project: ${err instanceof Error ? err.message : String(err)}`);
+      return undefined;
+    }
     const cacheKey = makePromptCacheKey(systemInstructionText, resolvedProjectId);
     const existing = cachedContentByPromptKey.get(cacheKey);
     if (existing) {
