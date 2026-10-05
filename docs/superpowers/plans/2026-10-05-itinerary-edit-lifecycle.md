@@ -36,7 +36,7 @@ Reopen for edits sets the trip to `IN_REVIEW` and its itinerary to `NEEDS_REVIEW
 
 ## Branches and test commands
 
-Both repos are on `feat/itinerary-edit-lifecycle`, branched from `fix/share-link-theme-pdf` (unpushed) because this work builds on its Reuse-reload change (`ClientItineraryPage.handleReuseInserted`). Rebase onto `staging` once that branch lands.
+The work lives on `fix/share-link-theme-pdf` in both repos, because it builds on that branch's Reuse-reload change (`ClientItineraryPage.handleReuseInserted`). It merges into `staging` together with that branch. Commits: server 5bf6da5 (this plan) and 0b5599b (the code); client e6b6123 (the code), then 65511b1 and 16ffcc2 (fixes from Task 20's QA). An earlier `feat/itinerary-edit-lifecycle` branch points at the same commits and is no longer used.
 
 - Server, one file: `cd Voyage-Server && npx vitest run tests/<file>`
 - Server, all + build: `cd Voyage-Server && npx vitest run && npm run build`
@@ -76,7 +76,7 @@ Commit messages carry no `Co-Authored-By` line (the user's standing rule).
 
 ### Task 0: Baseline
 
-- [ ] **Step 1: Record the current test results in both repos**
+- [x] **Step 1: Record the current test results in both repos**
 
 ```bash
 cd Voyage-Server && npx vitest run 2>&1 | tail -40
@@ -97,7 +97,7 @@ Write the failing test names down. Some stale tests already fail on this branch 
 - Modify: `Voyage-Server/src/modules/itineraries/itineraryService.ts` (`replaceDraft`, ~line 193)
 - Test: `Voyage-Server/tests/itineraryLock.test.ts`, `Voyage-Server/tests/itineraryService.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Server/tests/itineraryLock.test.ts`:
 
@@ -140,12 +140,12 @@ describe("itinerary lock rule", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryLock.test.ts`
 Expected: FAIL, cannot resolve `../src/modules/itineraries/itineraryLock`.
 
-- [ ] **Step 3: Write the rule**
+- [x] **Step 3: Write the rule**
 
 Create `Voyage-Server/src/modules/itineraries/itineraryLock.ts`:
 
@@ -172,12 +172,12 @@ export function assertItineraryEditable(status: string | null | undefined): void
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryLock.test.ts`
 Expected: PASS (3 tests).
 
-- [ ] **Step 5: Change the service test to the new rule**
+- [x] **Step 5: Change the service test to the new rule**
 
 In `Voyage-Server/tests/itineraryService.test.ts`:
 
@@ -241,12 +241,12 @@ with
   });
 ```
 
-- [ ] **Step 6: Run the service test to verify the in-review case fails**
+- [x] **Step 6: Run the service test to verify the in-review case fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryService.test.ts`
 Expected: FAIL. "replaces an itinerary that is in review" rejects with `ITINERARY_NOT_DRAFT`, and "refuses to replace an approved itinerary" gets `ITINERARY_NOT_DRAFT` instead of `ITINERARY_LOCKED`.
 
-- [ ] **Step 7: Use the rule in `replaceDraft`**
+- [x] **Step 7: Use the rule in `replaceDraft`**
 
 In `Voyage-Server/src/modules/itineraries/itineraryService.ts`, add an import next to the other local imports:
 
@@ -268,12 +268,12 @@ with
       assertItineraryEditable(existing.status);
 ```
 
-- [ ] **Step 8: Run the tests to verify they pass**
+- [x] **Step 8: Run the tests to verify they pass**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryService.test.ts tests/itineraryLock.test.ts`
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/itineraries/itineraryLock.ts src/modules/itineraries/itineraryService.ts tests/itineraryLock.test.ts tests/itineraryService.test.ts && git commit -m "feat(itinerary): allow edits while in review and lock them at approval"
@@ -287,7 +287,7 @@ cd Voyage-Server && git add src/modules/itineraries/itineraryLock.ts src/modules
 - Create: `Voyage-Server/src/modules/itineraries/routeStaleness.ts`
 - Test: `Voyage-Server/tests/routeStaleness.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Server/tests/routeStaleness.test.ts`:
 
@@ -322,12 +322,12 @@ describe("stopsWithStaleRoutes", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/routeStaleness.test.ts`
 Expected: FAIL, cannot resolve `routeStaleness`.
 
-- [ ] **Step 3: Write the helper**
+- [x] **Step 3: Write the helper**
 
 Create `Voyage-Server/src/modules/itineraries/routeStaleness.ts`:
 
@@ -367,12 +367,12 @@ export function stopsWithStaleRoutes(before: DayItemOrder, after: DayItemOrder):
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Server && npx vitest run tests/routeStaleness.test.ts`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/itineraries/routeStaleness.ts tests/routeStaleness.test.ts && git commit -m "feat(itinerary): work out which stop routes a reorder makes stale"
@@ -387,7 +387,7 @@ cd Voyage-Server && git add src/modules/itineraries/routeStaleness.ts tests/rout
 - Modify: `Voyage-Server/src/modules/itineraries/itineraryTypes.ts` (`ItineraryRepository`, ~line 92)
 - Test: `Voyage-Server/tests/itineraryRepositoryEditing.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Server/tests/itineraryRepositoryEditing.test.ts`. The fake client implements only the Prisma calls these repository methods make, backed by plain arrays:
 
@@ -623,12 +623,12 @@ describe("trip lookup and reopen", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryRepositoryEditing.test.ts`
 Expected: FAIL. The in-review edit gets `ITINERARY_NOT_DRAFT`, routes stay set, and `findItineraryTripId` / `reopenTrip` are not functions.
 
-- [ ] **Step 3: Add the two methods to the repository type**
+- [x] **Step 3: Add the two methods to the repository type**
 
 In `Voyage-Server/src/modules/itineraries/itineraryTypes.ts`, inside `export interface ItineraryRepository {`, add after `findItineraryByAgency(...)`:
 
@@ -647,7 +647,7 @@ and after `approveTrip(...)`:
   ): Promise<{ trip: ClientTripRecord; itinerary: { id: string; status: string } | null }>;
 ```
 
-- [ ] **Step 4: Change the repository**
+- [x] **Step 4: Change the repository**
 
 In `Voyage-Server/src/modules/itineraries/itineraryRepository.ts`:
 
@@ -819,17 +819,17 @@ add:
     },
 ```
 
-- [ ] **Step 5: Run the test to verify it passes**
+- [x] **Step 5: Run the test to verify it passes**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryRepositoryEditing.test.ts`
 Expected: PASS (11 tests).
 
-- [ ] **Step 6: Check the types**
+- [x] **Step 6: Check the types**
 
 Run: `cd Voyage-Server && npx tsc --noEmit`
 Expected: no new errors. `itineraryService.test.ts`'s memory repository doesn't implement the two new methods yet; tests are outside `tsconfig.json`'s `include`, so tsc doesn't see them, and Task 4 adds them.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/itineraries/itineraryRepository.ts src/modules/itineraries/itineraryTypes.ts tests/itineraryRepositoryEditing.test.ts && git commit -m "feat(itinerary): lock edits at approval, clear stale routes, add reopen"
@@ -843,7 +843,7 @@ cd Voyage-Server && git add src/modules/itineraries/itineraryRepository.ts src/m
 - Modify: `Voyage-Server/src/modules/itineraries/itineraryService.ts`
 - Test: `Voyage-Server/tests/itineraryService.test.ts`
 
-- [ ] **Step 1: Teach the memory repository the two methods**
+- [x] **Step 1: Teach the memory repository the two methods**
 
 In `Voyage-Server/tests/itineraryService.test.ts`, inside `createMemoryRepository()`'s returned object, add after `findItineraryByAgency`:
 
@@ -869,7 +869,7 @@ and after `approveTrip`:
     },
 ```
 
-- [ ] **Step 2: Write the failing tests**
+- [x] **Step 2: Write the failing tests**
 
 Append to the end of `Voyage-Server/tests/itineraryService.test.ts`:
 
@@ -911,12 +911,12 @@ describe("reopenTrip", () => {
 });
 ```
 
-- [ ] **Step 3: Run them to verify they fail**
+- [x] **Step 3: Run them to verify they fail**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryService.test.ts`
 Expected: FAIL, `service.getItineraryTripId is not a function` and `service.reopenTrip is not a function`.
 
-- [ ] **Step 4: Add the methods**
+- [x] **Step 4: Add the methods**
 
 In `Voyage-Server/src/modules/itineraries/itineraryService.ts`, add before `async approveTrip(`:
 
@@ -939,12 +939,12 @@ and after `approveTrip`:
     },
 ```
 
-- [ ] **Step 5: Run the tests to verify they pass**
+- [x] **Step 5: Run the tests to verify they pass**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryService.test.ts`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/itineraries/itineraryService.ts tests/itineraryService.test.ts && git commit -m "feat(itinerary): look up an itinerary's trip and reopen trips in the service"
@@ -958,7 +958,7 @@ cd Voyage-Server && git add src/modules/itineraries/itineraryService.ts tests/it
 - Modify: `Voyage-Server/src/modules/itineraries/itinerarySchemas.ts` (append)
 - Test: `Voyage-Server/tests/itineraryManualEditSchemas.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Server/tests/itineraryManualEditSchemas.test.ts`:
 
@@ -1006,12 +1006,12 @@ describe("hand-edit schemas", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryManualEditSchemas.test.ts`
 Expected: FAIL, the schemas are undefined.
 
-- [ ] **Step 3: Add the schemas**
+- [x] **Step 3: Add the schemas**
 
 Append to `Voyage-Server/src/modules/itineraries/itinerarySchemas.ts`:
 
@@ -1053,12 +1053,12 @@ export const manualStopMoveSchema = z
   .strict();
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryManualEditSchemas.test.ts`
 Expected: PASS (5 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/itineraries/itinerarySchemas.ts tests/itineraryManualEditSchemas.test.ts && git commit -m "feat(itinerary): add strict schemas for hand edits"
@@ -1072,7 +1072,7 @@ cd Voyage-Server && git add src/modules/itineraries/itinerarySchemas.ts tests/it
 - Modify: `Voyage-Server/src/modules/itineraries/itineraryRoutes.ts` (whole file below)
 - Test: `Voyage-Server/tests/itineraryEditRoutes.test.ts`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Server/tests/itineraryEditRoutes.test.ts`:
 
@@ -1331,12 +1331,12 @@ describe("trip access on existing routes", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryEditRoutes.test.ts`
 Expected: FAIL. The new routes answer 404 `NOT_FOUND`, and approve / replace run without a trip check.
 
-- [ ] **Step 3: Replace the routes file**
+- [x] **Step 3: Replace the routes file**
 
 Replace the contents of `Voyage-Server/src/modules/itineraries/itineraryRoutes.ts` with:
 
@@ -1572,17 +1572,17 @@ itineraryRoutes.post("/trips/:tripId/reopen", async (request, response, next) =>
 });
 ```
 
-- [ ] **Step 4: Run the new and the existing route tests**
+- [x] **Step 4: Run the new and the existing route tests**
 
 Run: `cd Voyage-Server && npx vitest run tests/itineraryEditRoutes.test.ts tests/weatherRoutes.test.ts tests/routes.test.ts`
 Expected: PASS. `weatherRoutes.test.ts` mocks `itineraryService` as `{}`; it only calls the weather route, so the new imports are fine.
 
-- [ ] **Step 5: Check the types**
+- [x] **Step 5: Check the types**
 
 Run: `cd Voyage-Server && npx tsc --noEmit`
 Expected: no new errors.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/itineraries/itineraryRoutes.ts tests/itineraryEditRoutes.test.ts && git commit -m "feat(itinerary): add hand-edit and reopen routes behind trip access"
@@ -1596,7 +1596,7 @@ cd Voyage-Server && git add src/modules/itineraries/itineraryRoutes.ts tests/iti
 - Modify: `Voyage-Server/src/modules/ratedHistory/ratedHistoryErrors.ts`, `ratedHistoryService.ts`, `ratedHistoryRepository.ts`, `ratedHistoryRoutes.ts`
 - Test: `Voyage-Server/tests/ratedHistoryService.test.ts`, `Voyage-Server/tests/ratedHistoryRoutes.test.ts`, `Voyage-Server/tests/ratedHistoryInsertLock.test.ts`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 (a) In `Voyage-Server/tests/ratedHistoryService.test.ts`, add `ItineraryLockedError` to the import from `../src/modules/ratedHistory/ratedHistoryErrors`. In `FakeDepsOpts.targetItinerary`'s type, add `status?: string;`. Append at the end of the file:
 
@@ -1684,12 +1684,12 @@ describe("insertItemsTransactional", () => {
 });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd Voyage-Server && npx vitest run tests/ratedHistoryService.test.ts tests/ratedHistoryRoutes.test.ts tests/ratedHistoryInsertLock.test.ts`
 Expected: FAIL. `ItineraryLockedError` isn't exported, so all three files fail to import it.
 
-- [ ] **Step 3: Add the error**
+- [x] **Step 3: Add the error**
 
 In `Voyage-Server/src/modules/ratedHistory/ratedHistoryErrors.ts`, add to the header comment's list:
 
@@ -1711,7 +1711,7 @@ export class ItineraryLockedError extends Error {
 }
 ```
 
-- [ ] **Step 4: Check the status in the service**
+- [x] **Step 4: Check the status in the service**
 
 In `Voyage-Server/src/modules/ratedHistory/ratedHistoryService.ts`:
 
@@ -1740,7 +1740,7 @@ add:
 
 (The check is on `APPROVED_INTERNAL` itself, not `!isItineraryEditable(...)`: the service tests' default target row has no `status`, and that must stay insertable.)
 
-- [ ] **Step 5: Check it again inside the write**
+- [x] **Step 5: Check it again inside the write**
 
 In `Voyage-Server/src/modules/ratedHistory/ratedHistoryRepository.ts`:
 
@@ -1757,7 +1757,7 @@ In `Voyage-Server/src/modules/ratedHistory/ratedHistoryRepository.ts`:
 
 The `catch` at the end re-throws anything that isn't a Prisma P2003, so the error reaches the route unchanged.
 
-- [ ] **Step 6: Map it in the routes**
+- [x] **Step 6: Map it in the routes**
 
 In `Voyage-Server/src/modules/ratedHistory/ratedHistoryRoutes.ts`, add `ItineraryLockedError` to the error import, and in `handleServiceError` add before the `StaleVersionError` branch:
 
@@ -1768,12 +1768,12 @@ In `Voyage-Server/src/modules/ratedHistory/ratedHistoryRoutes.ts`, add `Itinerar
   }
 ```
 
-- [ ] **Step 7: Run the tests to verify they pass**
+- [x] **Step 7: Run the tests to verify they pass**
 
 Run: `cd Voyage-Server && npx vitest run tests/ratedHistoryService.test.ts tests/ratedHistoryRoutes.test.ts tests/ratedHistoryInsertLock.test.ts tests/ratedHistoryRepository.union.test.ts`
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/ratedHistory tests/ratedHistoryService.test.ts tests/ratedHistoryRoutes.test.ts tests/ratedHistoryInsertLock.test.ts && git commit -m "fix(reuse): refuse to insert into an approved itinerary"
@@ -1788,7 +1788,7 @@ cd Voyage-Server && git add src/modules/ratedHistory tests/ratedHistoryService.t
 - Modify: `Voyage-Server/src/modules/agent/agentOrchestrator.ts` (~line 191 and ~line 231)
 - Test: `Voyage-Server/tests/agentLiveItinerary.test.ts`, `Voyage-Server/tests/agentOrchestrator.test.ts`
 
-- [ ] **Step 1: Write the failing unit test**
+- [x] **Step 1: Write the failing unit test**
 
 Create `Voyage-Server/tests/agentLiveItinerary.test.ts`:
 
@@ -1828,12 +1828,12 @@ describe("withLiveItinerary", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/agentLiveItinerary.test.ts`
 Expected: FAIL, `withLiveItinerary` is not exported.
 
-- [ ] **Step 3: Add the helper**
+- [x] **Step 3: Add the helper**
 
 In `Voyage-Server/src/modules/agent/agentContextBuilder.ts`, add right after `buildActiveItineraryContext`:
 
@@ -1863,12 +1863,12 @@ export function withLiveItinerary(
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Server && npx vitest run tests/agentLiveItinerary.test.ts`
 Expected: PASS (4 tests).
 
-- [ ] **Step 5: Write the failing orchestrator test**
+- [x] **Step 5: Write the failing orchestrator test**
 
 Append to the end of `Voyage-Server/tests/agentOrchestrator.test.ts`:
 
@@ -1945,12 +1945,12 @@ describe("live itinerary at run start", () => {
 });
 ```
 
-- [ ] **Step 6: Run it to verify it fails**
+- [x] **Step 6: Run it to verify it fails**
 
 Run: `cd Voyage-Server && npx vitest run tests/agentOrchestrator.test.ts -t "live itinerary at run start"`
 Expected: FAIL. The prompt still lists "Old lunch spot", and `loadCurrentItinerary` isn't called at run start.
 
-- [ ] **Step 7: Refresh the active itinerary at run start**
+- [x] **Step 7: Refresh the active itinerary at run start**
 
 In `Voyage-Server/src/modules/agent/agentOrchestrator.ts`:
 
@@ -1995,12 +1995,12 @@ with
           activeItineraryContext = await refreshActiveItinerary(buildActiveItineraryContext(thread));
 ```
 
-- [ ] **Step 8: Run the agent tests to verify they pass**
+- [x] **Step 8: Run the agent tests to verify they pass**
 
 Run: `cd Voyage-Server && npx vitest run tests/agentOrchestrator.test.ts tests/agentLiveItinerary.test.ts`
 Expected: PASS, apart from orchestrator tests that already failed in Task 0.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd Voyage-Server && git add src/modules/agent/agentContextBuilder.ts src/modules/agent/agentOrchestrator.ts tests/agentLiveItinerary.test.ts tests/agentOrchestrator.test.ts && git commit -m "feat(agent): work from the live itinerary and respect the approval lock"
@@ -2010,7 +2010,7 @@ cd Voyage-Server && git add src/modules/agent/agentContextBuilder.ts src/modules
 
 ### Task 9: Server check
 
-- [ ] **Step 1: Run the whole server suite and the build**
+- [x] **Step 1: Run the whole server suite and the build**
 
 ```bash
 cd Voyage-Server && npx vitest run 2>&1 | tail -40
@@ -2031,7 +2031,7 @@ Expected: the build succeeds; the only failing tests are the ones listed in Task
 - Modify: `Voyage-Client/app/lib/api/index.js`
 - Test: `Voyage-Client/tests/itinerary-editing-api.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/itinerary-editing-api.test.js`:
 
@@ -2098,12 +2098,12 @@ describe("itinerary editing API", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-editing-api.test.js`
 Expected: FAIL, the module doesn't exist.
 
-- [ ] **Step 3: Write the module**
+- [x] **Step 3: Write the module**
 
 Create `Voyage-Client/app/lib/api/itineraryEditing.js`:
 
@@ -2177,12 +2177,12 @@ export {
 } from "./itineraryEditing.js";
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-editing-api.test.js`
 Expected: PASS (6 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd Voyage-Client && git add app/lib/api/itineraryEditing.js app/lib/api/index.js tests/itinerary-editing-api.test.js && git commit -m "feat(itinerary): add API calls for hand edits and reopening a trip"
@@ -2196,7 +2196,7 @@ cd Voyage-Client && git add app/lib/api/itineraryEditing.js app/lib/api/index.js
 - Create: `Voyage-Client/app/lib/trip-dashboard/itineraryEditing.js`
 - Test: `Voyage-Client/tests/itinerary-editing-helpers.test.js`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/itinerary-editing-helpers.test.js`:
 
@@ -2309,12 +2309,12 @@ describe("edit errors", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-editing-helpers.test.js`
 Expected: FAIL, the module doesn't exist.
 
-- [ ] **Step 3: Write the helpers**
+- [x] **Step 3: Write the helpers**
 
 Create `Voyage-Client/app/lib/trip-dashboard/itineraryEditing.js`:
 
@@ -2441,12 +2441,12 @@ export function shouldReloadAfterError(error) {
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-editing-helpers.test.js`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd Voyage-Client && git add app/lib/trip-dashboard/itineraryEditing.js tests/itinerary-editing-helpers.test.js && git commit -m "feat(itinerary): add the lock rule and stop form helpers"
@@ -2460,7 +2460,7 @@ cd Voyage-Client && git add app/lib/trip-dashboard/itineraryEditing.js tests/iti
 - Create: `Voyage-Client/app/hooks/useItineraryEditor.js`
 - Test: `Voyage-Client/tests/use-itinerary-editor.test.jsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/use-itinerary-editor.test.jsx`:
 
@@ -2628,12 +2628,12 @@ describe("useItineraryEditor", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/use-itinerary-editor.test.jsx`
 Expected: FAIL, the hook doesn't exist.
 
-- [ ] **Step 3: Write the hook**
+- [x] **Step 3: Write the hook**
 
 Create `Voyage-Client/app/hooks/useItineraryEditor.js`:
 
@@ -2786,12 +2786,12 @@ export function useItineraryEditor({ agencyId, itineraryId, canEdit, onItinerary
 }
 ```
 
-- [ ] **Step 4: Run it to verify it passes**
+- [x] **Step 4: Run it to verify it passes**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/use-itinerary-editor.test.jsx`
 Expected: PASS (10 tests).
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd Voyage-Client && git add app/hooks/useItineraryEditor.js tests/use-itinerary-editor.test.jsx && git commit -m "feat(itinerary): add the editor hook behind the hand-edit dialogs"
@@ -2806,7 +2806,7 @@ cd Voyage-Client && git add app/hooks/useItineraryEditor.js tests/use-itinerary-
 - Create: `Voyage-Client/app/components/trip-dashboard/itinerary-edit/StopActionsMenu.jsx`
 - Test: `Voyage-Client/tests/stop-actions-menu.test.jsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/stop-actions-menu.test.jsx`:
 
@@ -2894,12 +2894,12 @@ describe("StopActionsMenu", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/stop-actions-menu.test.jsx`
 Expected: FAIL, the component doesn't exist.
 
-- [ ] **Step 3: Add the two icons**
+- [x] **Step 3: Add the two icons**
 
 Append to `Voyage-Client/app/components/icons/index.js`:
 
@@ -2924,7 +2924,7 @@ export function PencilIcon(props) {
 }
 ```
 
-- [ ] **Step 4: Write the menu**
+- [x] **Step 4: Write the menu**
 
 Create `Voyage-Client/app/components/trip-dashboard/itinerary-edit/StopActionsMenu.jsx`:
 
@@ -3049,12 +3049,12 @@ export default function StopActionsMenu({
 }
 ```
 
-- [ ] **Step 5: Run it to verify it passes**
+- [x] **Step 5: Run it to verify it passes**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/stop-actions-menu.test.jsx`
 Expected: PASS (6 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/icons/index.js app/components/trip-dashboard/itinerary-edit/StopActionsMenu.jsx tests/stop-actions-menu.test.jsx && git commit -m "feat(itinerary): add the stop actions menu"
@@ -3069,7 +3069,7 @@ cd Voyage-Client && git add app/components/icons/index.js app/components/trip-da
 - Create: `Voyage-Client/app/components/trip-dashboard/itinerary-edit/StopEditDialog.jsx`
 - Test: `Voyage-Client/tests/stop-edit-dialog.test.jsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/stop-edit-dialog.test.jsx`:
 
@@ -3129,12 +3129,12 @@ describe("StopEditDialog", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/stop-edit-dialog.test.jsx`
 Expected: FAIL. `StopEditDialog` doesn't exist, and the side panel has no `bottom-0`.
 
-- [ ] **Step 3: Make the side Modal a bottom sheet below `sm`**
+- [x] **Step 3: Make the side Modal a bottom sheet below `sm`**
 
 In `Voyage-Client/app/components/ui/Modal.jsx`, in the side variant, replace the panel's className
 
@@ -3152,7 +3152,7 @@ with
 
 No other component uses the side variant today (`grep -rn 'variant="side"' app` finds nothing), so nothing else changes.
 
-- [ ] **Step 4: Write the stop form**
+- [x] **Step 4: Write the stop form**
 
 Create `Voyage-Client/app/components/trip-dashboard/itinerary-edit/StopEditDialog.jsx`:
 
@@ -3285,12 +3285,12 @@ export default function StopEditDialog({ open, mode = "edit", item = null, dayLa
 }
 ```
 
-- [ ] **Step 5: Run it to verify it passes**
+- [x] **Step 5: Run it to verify it passes**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/stop-edit-dialog.test.jsx`
 Expected: PASS (4 tests).
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/ui/Modal.jsx app/components/trip-dashboard/itinerary-edit/StopEditDialog.jsx tests/stop-edit-dialog.test.jsx && git commit -m "feat(itinerary): add the stop form as a side panel and phone bottom sheet"
@@ -3304,7 +3304,7 @@ cd Voyage-Client && git add app/components/ui/Modal.jsx app/components/trip-dash
 - Create in `Voyage-Client/app/components/trip-dashboard/itinerary-edit/`: `ConfirmActionDialog.jsx`, `MoveStopDialog.jsx`, `RenameDayDialog.jsx`, `DayEditActions.jsx`, `ItineraryEditDialogs.jsx`
 - Test: `Voyage-Client/tests/itinerary-edit-dialogs.test.jsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/itinerary-edit-dialogs.test.jsx`:
 
@@ -3438,12 +3438,12 @@ describe("ItineraryEditDialogs", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-edit-dialogs.test.jsx`
 Expected: FAIL, the components don't exist.
 
-- [ ] **Step 3: Write `ConfirmActionDialog.jsx`**
+- [x] **Step 3: Write `ConfirmActionDialog.jsx`**
 
 ```jsx
 "use client";
@@ -3498,7 +3498,7 @@ export default function ConfirmActionDialog({ open, title, body, confirmLabel, b
 }
 ```
 
-- [ ] **Step 4: Write `MoveStopDialog.jsx`**
+- [x] **Step 4: Write `MoveStopDialog.jsx`**
 
 ```jsx
 "use client";
@@ -3566,7 +3566,7 @@ export default function MoveStopDialog({ open, stopTitle, days, onSubmit, onClos
 }
 ```
 
-- [ ] **Step 5: Write `RenameDayDialog.jsx`**
+- [x] **Step 5: Write `RenameDayDialog.jsx`**
 
 ```jsx
 "use client";
@@ -3640,7 +3640,7 @@ export default function RenameDayDialog({ open, day, onSubmit, onClose }) {
 }
 ```
 
-- [ ] **Step 6: Write `DayEditActions.jsx`**
+- [x] **Step 6: Write `DayEditActions.jsx`**
 
 ```jsx
 "use client";
@@ -3669,7 +3669,7 @@ export default function DayEditActions({ dayNumber, onAddStop, onRenameDay = nul
 }
 ```
 
-- [ ] **Step 7: Write `ItineraryEditDialogs.jsx`**
+- [x] **Step 7: Write `ItineraryEditDialogs.jsx`**
 
 ```jsx
 "use client";
@@ -3739,12 +3739,12 @@ export default function ItineraryEditDialogs({ editor, days }) {
 }
 ```
 
-- [ ] **Step 8: Run it to verify it passes**
+- [x] **Step 8: Run it to verify it passes**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-edit-dialogs.test.jsx`
 Expected: PASS (8 tests).
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/trip-dashboard/itinerary-edit tests/itinerary-edit-dialogs.test.jsx && git commit -m "feat(itinerary): add the move, rename and confirm dialogs"
@@ -3759,7 +3759,7 @@ cd Voyage-Client && git add app/components/trip-dashboard/itinerary-edit tests/i
 - Modify: `Voyage-Client/app/components/trip-dashboard/mobile/CompactPlaceCard.jsx`
 - Test: `Voyage-Client/tests/itinerary-day-view-editing.test.jsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/itinerary-day-view-editing.test.jsx`:
 
@@ -3876,12 +3876,12 @@ describe("CompactPlaceCard actions", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-day-view-editing.test.jsx`
 Expected: FAIL. There's no "Actions for Lunch" button, no "Add stop", and the card ignores `actions`.
 
-- [ ] **Step 3: Add the controls to `ItineraryDayView.jsx`**
+- [x] **Step 3: Add the controls to `ItineraryDayView.jsx`**
 
 (a) Change the icon import and add three imports:
 
@@ -3980,7 +3980,7 @@ with
               )}
 ```
 
-- [ ] **Step 4: Let `CompactPlaceCard.jsx` take an actions slot**
+- [x] **Step 4: Let `CompactPlaceCard.jsx` take an actions slot**
 
 (a) Change the signature to:
 
@@ -4017,12 +4017,12 @@ export default function CompactPlaceCard({
   );
 ```
 
-- [ ] **Step 5: Run the new test and the guards that read these files**
+- [x] **Step 5: Run the new test and the guards that read these files**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-day-view-editing.test.jsx tests/accessibility-integrations.test.jsx tests/heading-typography.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/trip-dashboard/pages/ItineraryDayView.jsx app/components/trip-dashboard/mobile/CompactPlaceCard.jsx tests/itinerary-day-view-editing.test.jsx && git commit -m "feat(itinerary): add stop menus, Add stop and Rename day to the day views"
@@ -4036,7 +4036,7 @@ cd Voyage-Client && git add app/components/trip-dashboard/pages/ItineraryDayView
 - Modify: `Voyage-Client/app/components/trip-dashboard/pages/ItineraryHeader.jsx`
 - Test: `Voyage-Client/tests/itinerary-header.test.jsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 Add inside `describe("ItineraryHeader", ...)` in `Voyage-Client/tests/itinerary-header.test.jsx`:
 
@@ -4057,12 +4057,12 @@ Add inside `describe("ItineraryHeader", ...)` in `Voyage-Client/tests/itinerary-
   });
 ```
 
-- [ ] **Step 2: Run them to verify the first fails**
+- [x] **Step 2: Run them to verify the first fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-header.test.jsx`
 Expected: FAIL on "offers Reopen for edits when the page passes a handler".
 
-- [ ] **Step 3: Add the props and the button**
+- [x] **Step 3: Add the props and the button**
 
 In `Voyage-Client/app/components/trip-dashboard/pages/ItineraryHeader.jsx`:
 
@@ -4101,12 +4101,12 @@ to
             ) : null}
 ```
 
-- [ ] **Step 4: Run them to verify they pass**
+- [x] **Step 4: Run them to verify they pass**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/itinerary-header.test.jsx`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/trip-dashboard/pages/ItineraryHeader.jsx tests/itinerary-header.test.jsx && git commit -m "feat(itinerary): add Reopen for edits to the itinerary header"
@@ -4121,7 +4121,7 @@ cd Voyage-Client && git add app/components/trip-dashboard/pages/ItineraryHeader.
 - Modify: `Voyage-Client/tests/client-itinerary-reuse-insert.test.jsx` (fixture)
 - Test: `Voyage-Client/tests/client-itinerary-editing.test.jsx`
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `Voyage-Client/tests/client-itinerary-editing.test.jsx`:
 
@@ -4258,12 +4258,12 @@ describe("hand edits on the Itineraries page", () => {
 });
 ```
 
-- [ ] **Step 2: Run it to verify it fails**
+- [x] **Step 2: Run it to verify it fails**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/client-itinerary-editing.test.jsx`
 Expected: FAIL. `dayView.props.editor` is undefined, and there's no Reopen button.
 
-- [ ] **Step 3: Wire up the page**
+- [x] **Step 3: Wire up the page**
 
 In `Voyage-Client/app/components/trip-dashboard/pages/ClientItineraryPage.jsx`:
 
@@ -4461,7 +4461,7 @@ add `editor={editor}` to `<ItineraryDayView`, and after the desktop `<ShareDialo
       />
 ```
 
-- [ ] **Step 4: Update the Reuse page test's fixture**
+- [x] **Step 4: Update the Reuse page test's fixture**
 
 Reuse is now hidden on approved trips, and `tests/client-itinerary-reuse-insert.test.jsx` inserts into an approved one. In that file, change
 
@@ -4476,12 +4476,12 @@ to
 const trip = { id: "t1", clientName: "Garcia", approvalStatus: "In review", destination: "Baguio", itineraryId: "iter-1", isSaved: true };
 ```
 
-- [ ] **Step 5: Run the page tests**
+- [x] **Step 5: Run the page tests**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/client-itinerary-editing.test.jsx tests/client-itinerary-approve.test.jsx tests/client-itinerary-pdf.test.jsx tests/client-itinerary-reuse-insert.test.jsx tests/client-itinerary-weather.test.jsx tests/client-itinerary-page.test.jsx tests/heading-typography.test.js`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/trip-dashboard/pages/ClientItineraryPage.jsx tests/client-itinerary-editing.test.jsx tests/client-itinerary-reuse-insert.test.jsx && git commit -m "feat(itinerary): edit saved itineraries by hand and reopen approved trips"
@@ -4496,7 +4496,7 @@ cd Voyage-Client && git add app/components/trip-dashboard/pages/ClientItineraryP
 - Modify: `Voyage-Client/app/components/ratedHistory/entryPoints/ReuseSlashCommand.jsx` (`errorReasonFor`, and its call)
 - Test: `Voyage-Client/tests/useReuseDrop.smoke.test.jsx`, `Voyage-Client/tests/reuseSlashCommand.behaviour.test.jsx`
 
-- [ ] **Step 1: Write the failing tests**
+- [x] **Step 1: Write the failing tests**
 
 (a) In `Voyage-Client/tests/useReuseDrop.smoke.test.jsx`, add right after the test `"409 stale_version → calls onStaleVersion"`:
 
@@ -4553,12 +4553,12 @@ cd Voyage-Client && git add app/components/trip-dashboard/pages/ClientItineraryP
   });
 ```
 
-- [ ] **Step 2: Run them to verify they fail**
+- [x] **Step 2: Run them to verify they fail**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/useReuseDrop.smoke.test.jsx tests/reuseSlashCommand.behaviour.test.jsx`
 Expected: FAIL. The drop reports `stale_version` and calls `onStaleVersion`; the slash command says "itinerary changed elsewhere".
 
-- [ ] **Step 3: Handle the lock in `useReuseDrop.js`**
+- [x] **Step 3: Handle the lock in `useReuseDrop.js`**
 
 At the top of `case 409: {`, add:
 
@@ -4574,7 +4574,7 @@ At the top of `case 409: {`, add:
           }
 ```
 
-- [ ] **Step 4: Handle the lock in `ReuseSlashCommand.jsx`**
+- [x] **Step 4: Handle the lock in `ReuseSlashCommand.jsx`**
 
 Change the call from
 
@@ -4597,12 +4597,12 @@ change `function errorReasonFor(status) {` to `function errorReasonFor(status, c
         : "itinerary changed elsewhere — please refresh.";
 ```
 
-- [ ] **Step 5: Run them to verify they pass**
+- [x] **Step 5: Run them to verify they pass**
 
 Run: `cd Voyage-Client && npx vitest run --pool=threads tests/useReuseDrop.smoke.test.jsx tests/useReuseDrop.behaviour.test.jsx tests/reuseSlashCommand.behaviour.test.jsx tests/reuseSlashCommand.smoke.test.jsx`
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 cd Voyage-Client && git add app/components/ratedHistory tests/useReuseDrop.smoke.test.jsx tests/reuseSlashCommand.behaviour.test.jsx && git commit -m "fix(reuse): explain a locked itinerary instead of asking for a refresh"
@@ -4612,7 +4612,7 @@ cd Voyage-Client && git add app/components/ratedHistory tests/useReuseDrop.smoke
 
 ### Task 20: Full check and hands-on QA
 
-- [ ] **Step 1: Run both suites and the client build**
+- [x] **Step 1: Run both suites and the client build**
 
 ```bash
 cd Voyage-Server && npx vitest run 2>&1 | tail -40
@@ -4642,3 +4642,30 @@ Restart the backend first: OneDrive breaks `tsx watch`, so it may still be servi
 8. The share link and the PDF show the edited itinerary.
 9. Keyboard only: Tab to ⋯, Enter opens, arrows move, Escape closes and focus returns; inside a dialog, Tab stays in the dialog, and Escape closes it and returns focus to ⋯.
 10. Dark mode: the menu, panel, sheet and notice are legible.
+
+#### Results (2026-10-05)
+
+Step 1: both suites match the Task 0 baseline. Server: 1160 passed, with the 11 known stale failures (webSearchProvider 4, agentOrchestrator 4, agentLogger 1, modelProvider 2), and `npm run build` passes. Client: the same 8 stale files fail (7 can't load `icons/index.js`, plus 1 agent-command-center-places test), and `npm run build` passes.
+
+Step 2 ran in the in-app browser, against an isolated local agency ("QA Itinerary Edits") with an owner, an assigned staff member and an unassigned one. The trip was a clone of "2-Day Coastal Escape" with straight-line stored routes. The backend was restarted first.
+
+| # | Check | Result |
+|---|---|---|
+| 1 | Edit, clear description, up/down, other day, delete, add, rename | Pass. Up/down keep focus on the moved stop's ⋯. A new stop is placed by its start time (the existing `addItem` rule). |
+| 2 | Stale routes | Pass. A move, delete or add clears exactly the stops whose previous stop changed. With none left, the map asks for a live route. |
+| 3 | Approve, then Reopen | Pass |
+| 4 | Two tabs | **Failed, then fixed (client 65511b1).** The edit was refused and the notice shown, but the header kept "In review" and Approve with no Reopen. The header now follows an approved itinerary. |
+| 5 | Staff access | Pass, through the API. Assigned staff: list, edit, reopen (409 while approved). Unassigned staff: hidden from the list, 404 on edit, approve and reopen. Place fields are rejected. |
+| 6 | Agent | **Not run.** Needs a live model call on a thread tied to the trip. The `agentLiveItinerary` and orchestrator tests cover it. |
+| 7 | 375px | **Failed, then fixed (client 16ffcc2).** The phone card showed the place's name, so an edited title never appeared. It now shows the stop's title, as desktop does. The sheet, the ⋯ beside cards, and Add stop / Rename day under the list all pass. |
+| 8 | Share link and PDF | Share link passes: rename, custom stop, moved stop and client note show, and staff notes stay hidden. The PDF was not downloaded; it is built from the same itinerary the page shows. |
+| 9 | Keyboard | Pass. The menu arrows and End work; Tab stays inside dialogs; Escape returns focus to ⋯. |
+| 10 | Dark mode | Pass for the menu, panel, sheet and notice. |
+
+Open minors (not fixed):
+- A. When the control that had focus disappears (after a move to another day, a delete, or Reopen), focus falls back to `<body>`.
+- B. A failed Add stop or Save leaves focus on the button instead of the invalid field. The error is linked with `aria-describedby`.
+- C. The Rename day dialog opens with focus on Close, not on the title field.
+- D. In dark mode, form-field borders are 1.45:1 against the panel (below 3:1). This comes from the shared `--color-border` token, which about 12 other forms use too.
+- E (older than this feature). `GET /itineraries/:id` checks only agency membership, so unassigned staff can read a trip's itinerary by its id.
+- F (older than this feature). Hand edits don't bump `Itinerary.version`; only full replaces and day add/remove do.
