@@ -29,7 +29,13 @@ export type RawDailyWeather = {
   uvIndexMax: number | null;
 };
 
-/** One forecast hour in the location's own local time. The row covers the hour that starts at `hour`. */
+/**
+ * One forecast hour in the location's own local time. The row covers the hour that starts at `hour`.
+ *
+ * Known limit: Open-Meteo applies one fixed UTC offset to the whole 16-day series. If the
+ * location's clocks change (daylight saving) inside that window, the rows after the change are
+ * one hour off the wall clock. The daily rows share the same skew; this is accepted.
+ */
 export type RawHourlyWeather = {
   /** Local calendar date, YYYY-MM-DD. */
   date: string;

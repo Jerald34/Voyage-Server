@@ -157,6 +157,9 @@ export function createWeatherForecastTool(options: {
           const timing = outlook ? describeHourlyForAgent(outlook) : null;
           return {
             ...base,
+            // With hour-by-hour timing, the risk follows the daytime hours the model is told about:
+            // a storm at 2 AM must not read "rainRisk: true" beside "dry from 6 AM to 10 PM".
+            ...(outlook ? { rainRisk: outlook.wetWindow !== null } : {}),
             ...(timing ? { summary: `${base.summary}; ${timing}`, timing } : {}),
             precipitationProbabilityPct: weather.precipitationProbabilityPct
           };
