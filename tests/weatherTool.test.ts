@@ -107,7 +107,9 @@ describe("weather_forecast tool", () => {
 
     const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
 
-    expect(weather.getHourlyForecast).toHaveBeenCalledWith({ latitude: 16.4023, longitude: 120.596 });
+    // The same rounded point the daily lookup uses, so both resolve to one grid cell.
+    expect(weather.getHourlyForecast).toHaveBeenCalledWith({ latitude: 16.4, longitude: 120.6 });
+    expect(weather.getDailyForecast).toHaveBeenCalledWith({ latitude: 16.4, longitude: 120.6 });
     expect(result).toMatchObject({
       days: [
         {

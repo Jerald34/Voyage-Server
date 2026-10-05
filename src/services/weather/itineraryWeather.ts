@@ -1,6 +1,6 @@
 import { addDays, isIsoDate, toIsoDate } from "./dates";
 import { groupHoursByDate, summarizeHourlyDay, type HourlyDayOutlook } from "./hourlyWeather";
-import { getWeatherForDates } from "./weatherOutlook";
+import { getWeatherForDates, roundPoint } from "./weatherOutlook";
 import {
   WEATHER_ATTRIBUTION,
   type DailyWeather,
@@ -169,7 +169,8 @@ export async function buildItineraryWeather(options: {
       });
       if (!hasForecast) return;
       try {
-        hoursByGroup.set(key, groupHoursByDate(await provider.getHourlyForecast(group.location)));
+        // The same rounded point the daily lookup uses: both resolve to one grid cell and share cache entries.
+        hoursByGroup.set(key, groupHoursByDate(await provider.getHourlyForecast(roundPoint(group.location))));
       } catch (error) {
         console.error("[Weather] Hourly forecast lookup failed.", error instanceof Error ? error.message : error);
       }

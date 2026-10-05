@@ -9,7 +9,7 @@ import {
 } from "../../../services/weather";
 import { addDays, daysBetween, isIsoDate, toIsoDate } from "../../../services/weather/dates";
 import { describeHourlyForAgent, groupHoursByDate, summarizeHourlyDay } from "../../../services/weather/hourlyWeather";
-import { getWeatherForDates } from "../../../services/weather/weatherOutlook";
+import { getWeatherForDates, roundPoint } from "../../../services/weather/weatherOutlook";
 import type { AgentTool, AgentToolService } from "../agentTools";
 import { createRunRecord, toCompactMetadata } from "./toolUtils";
 
@@ -130,7 +130,8 @@ export function createWeatherForecastTool(options: {
       let hoursByDate = new Map<string, RawHourlyWeather[]>();
       if (hasForecast) {
         try {
-          hoursByDate = groupHoursByDate(await options.weather.getHourlyForecast(place.location));
+          // The same rounded point the daily lookup uses: both resolve to one grid cell and share cache entries.
+          hoursByDate = groupHoursByDate(await options.weather.getHourlyForecast(roundPoint(place.location)));
         } catch (error) {
           console.error("[Weather] Hourly forecast lookup failed.", error instanceof Error ? error.message : error);
         }
