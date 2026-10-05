@@ -1,7 +1,14 @@
 import { z } from "zod";
 import type { MapsProvider } from "../../../services/maps";
-import { WEATHER_ATTRIBUTION, isWetCondition, type DailyWeather, type WeatherProvider } from "../../../services/weather";
+import {
+  WEATHER_ATTRIBUTION,
+  isWetCondition,
+  type DailyWeather,
+  type RawHourlyWeather,
+  type WeatherProvider
+} from "../../../services/weather";
 import { addDays, daysBetween, isIsoDate, toIsoDate } from "../../../services/weather/dates";
+import { describeHourlyForAgent, groupHoursByDate, summarizeHourlyDay } from "../../../services/weather/hourlyWeather";
 import { getWeatherForDates } from "../../../services/weather/weatherOutlook";
 import type { AgentTool, AgentToolService } from "../agentTools";
 import { createRunRecord, toCompactMetadata } from "./toolUtils";
@@ -114,6 +121,21 @@ export function createWeatherForecastTool(options: {
         typicalYears: options.typicalYears
       });
 
+      // Hour-by-hour timing turns "Thunderstorms" into "dry until 11 AM; thunderstorms 2 PM-8 PM",
+      // so the model can put outdoor stops in the dry hours. Forecast days only; supplementary.
+      const hasForecast = dates.some((date) => {
+        const lookup = lookups.get(date);
+        return lookup?.status === "OK" && lookup.weather.kind === "FORECAST";
+      });
+      let hoursByDate = new Map<string, RawHourlyWeather[]>();
+      if (hasForecast) {
+        try {
+          hoursByDate = groupHoursByDate(await options.weather.getHourlyForecast(place.location));
+        } catch (error) {
+          console.error("[Weather] Hourly forecast lookup failed.", error instanceof Error ? error.message : error);
+        }
+      }
+
       const days = dates.map((date) => {
         const lookup = lookups.get(date);
         if (!lookup || lookup.status !== "OK") return { date, status: lookup?.status ?? "UNAVAILABLE" };
@@ -129,7 +151,14 @@ export function createWeatherForecastTool(options: {
           temperatureMaxC: weather.temperatureMaxC
         };
         if (weather.kind === "FORECAST") {
-          return { ...base, precipitationProbabilityPct: weather.precipitationProbabilityPct };
+          const hours = hoursByDate.get(date);
+          const outlook = hours ? summarizeHourlyDay(hours, []) : null;
+          const timing = outlook ? describeHourlyForAgent(outlook) : null;
+          return {
+            ...base,
+            ...(timing ? { summary: `${base.summary}; ${timing}`, timing } : {}),
+            precipitationProbabilityPct: weather.precipitationProbabilityPct
+          };
         }
         // A TYPICAL day's internal percentage is the share of past years that were wet.
         // Exposing it as a probability invites "40% chance of rain", so it is withheld

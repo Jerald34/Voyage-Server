@@ -5,6 +5,8 @@ import { canonicalToolName } from "../src/modules/agent/agentParser";
 import { buildVoyageSystemPrompt } from "../src/modules/agent/agentPrompts";
 import { createAgentToolRegistry, type AgentToolService } from "../src/modules/agent/agentTools";
 import { createWeatherForecastTool } from "../src/modules/agent/tools/weatherTools";
+import type { RawHourlyWeather } from "../src/services/weather/types";
+import { baguioHours } from "./baguioHourlyFixture";
 
 const context = { agencyId: "agency-1", threadId: "thread-1", runId: "run-1", userId: "user-1" };
 
@@ -52,6 +54,7 @@ function buildTool() {
         uvIndexMax: 5
       }
     ]),
+    getHourlyForecast: vi.fn(async (): Promise<RawHourlyWeather[]> => []),
     getDailyHistory: vi.fn(async () => [])
   };
   const tool = createWeatherForecastTool({
@@ -96,6 +99,39 @@ describe("weather_forecast tool", () => {
       expect.objectContaining({ id: "run-1" }),
       [expect.objectContaining({ sourceType: "WEB", url: "https://open-meteo.com/", provider: "open_meteo" })]
     );
+  });
+
+  it("adds hour-by-hour timing to forecast days", async () => {
+    const { tool, weather } = buildTool();
+    weather.getHourlyForecast.mockResolvedValue(baguioHours("2026-10-10"));
+
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    expect(weather.getHourlyForecast).toHaveBeenCalledWith({ latitude: 16.4023, longitude: 120.596 });
+    expect(result).toMatchObject({
+      days: [
+        {
+          summary: "Rain, 16-23°C, 85% chance of rain; dry until 11 AM; thunderstorms 2 PM-8 PM",
+          timing: "dry until 11 AM; thunderstorms 2 PM-8 PM"
+        }
+      ]
+    });
+  });
+
+  it("skips the hourly request without forecast days and survives its failure", async () => {
+    const { tool, weather } = buildTool();
+
+    // Two months out: typical weather only.
+    await tool.execute(context, { placeName: "Baguio City", startDate: "2026-12-01" });
+    expect(weather.getHourlyForecast).not.toHaveBeenCalled();
+
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    weather.getHourlyForecast.mockRejectedValue(new Error("hourly down"));
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    expect(result).toMatchObject({ days: [{ summary: "Rain, 16-23°C, 85% chance of rain" }] });
+    expect(result).not.toHaveProperty("days.0.timing");
+    vi.restoreAllMocks();
   });
 
   it("rejects impossible dates and ranges over 14 days through the registry", async () => {
@@ -242,6 +278,7 @@ describe("weather_forecast wiring", () => {
 
     expect(prompt).toContain("weather_forecast:");
     expect(prompt).toContain('{"tool": "weather_forecast"');
+    expect(prompt).toContain("When a day also has timing");
     expect(buildVoyageSystemPrompt("weather_forecast, add_itinerary_item")).toBe(prompt);
   });
 });
