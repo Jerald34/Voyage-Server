@@ -36,7 +36,7 @@ Reopen for edits sets the trip to `IN_REVIEW` and its itinerary to `NEEDS_REVIEW
 
 ## Branches and test commands
 
-The work lives on `fix/share-link-theme-pdf` in both repos, because it builds on that branch's Reuse-reload change (`ClientItineraryPage.handleReuseInserted`). It merges into `staging` together with that branch. Commits: server 5bf6da5 (this plan) and 0b5599b (the code); client e6b6123 (the code), then 65511b1 and 16ffcc2 (fixes from Task 20's QA). An earlier `feat/itinerary-edit-lifecycle` branch points at the same commits and is no longer used.
+The work lives on `fix/share-link-theme-pdf` in both repos, because it builds on that branch's Reuse-reload change (`ClientItineraryPage.handleReuseInserted`). It merges into `staging` together with that branch. Commits: server 5bf6da5 (this plan) and 0b5599b (the code); client e6b6123 (the code), then 65511b1, 16ffcc2 and 52f0e92 (fixes from Task 20's QA). An earlier `feat/itinerary-edit-lifecycle` branch points at the same commits and is no longer used.
 
 - Server, one file: `cd Voyage-Server && npx vitest run tests/<file>`
 - Server, all + build: `cd Voyage-Server && npx vitest run && npm run build`
@@ -4662,10 +4662,10 @@ Step 2 ran in the in-app browser, against an isolated local agency ("QA Itinerar
 | 9 | Keyboard | Pass. The menu arrows and End work; Tab stays inside dialogs; Escape returns focus to ⋯. |
 | 10 | Dark mode | Pass for the menu, panel, sheet and notice. |
 
-Open minors (not fixed):
-- A. When the control that had focus disappears (after a move to another day, a delete, or Reopen), focus falls back to `<body>`.
-- B. A failed Add stop or Save leaves focus on the button instead of the invalid field. The error is linked with `aria-describedby`.
-- C. The Rename day dialog opens with focus on Close, not on the title field.
+Minors found (A–C fixed in client 52f0e92; D–F open):
+- A. Fixed. When the control that had focus disappears, focus used to fall back to `<body>`. Now a deleted or moved-away stop sends focus to the next stop's ⋯, else the previous one's, else the day's Add stop. Reopen leaves focus on the client's name, as Approve does.
+- B. Fixed. A failed Add stop, Save or Rename used to leave focus on the button. Now focus goes to the first invalid field, after its message renders.
+- C. Fixed. Edit stop and Rename day used to open on Close. Now they open on their title field, through Modal's new `initialFocusRef`.
 - D. In dark mode, form-field borders are 1.45:1 against the panel (below 3:1). This comes from the shared `--color-border` token, which about 12 other forms use too.
 - E (older than this feature). `GET /itineraries/:id` checks only agency membership, so unassigned staff can read a trip's itinerary by its id.
 - F (older than this feature). Hand edits don't bump `Itinerary.version`; only full replaces and day add/remove do.
