@@ -83,7 +83,9 @@ const {
   mockUserUpdate,
   mockPlaceSnapshotFindFirst,
   mockSessionFindUnique,
-  mockExecuteRawUnsafe
+  mockExecuteRawUnsafe,
+  mockListAdminAccounts,
+  mockFindAdminAccount
 } = vi.hoisted(() => ({
   mockRequireVerifiedAgencyMember: vi.fn(),
   mockRequireAgencyAdmin: vi.fn(),
@@ -152,7 +154,9 @@ const {
   mockUserUpdate: vi.fn(),
   mockPlaceSnapshotFindFirst: vi.fn(),
   mockSessionFindUnique: vi.fn(),
-  mockExecuteRawUnsafe: vi.fn()
+  mockExecuteRawUnsafe: vi.fn(),
+  mockListAdminAccounts: vi.fn(),
+  mockFindAdminAccount: vi.fn()
 }));
 
 vi.mock("../src/modules/agencyAccess/agencyAccessService", () => ({
@@ -177,6 +181,14 @@ vi.mock("../src/modules/agencies/agencyService", () => ({
     createAgencyApplication: mockCreateAgencyApplication,
     listPendingAgencies: vi.fn(),
     getPendingCount: vi.fn()
+  }
+}));
+
+// Only the repository is mocked: the real account service runs so its role re-check and mapper are exercised.
+vi.mock("../src/modules/admin/accountRepository", () => ({
+  adminAccountRepository: {
+    listAccounts: mockListAdminAccounts,
+    findAccount: mockFindAdminAccount
   }
 }));
 
@@ -480,6 +492,9 @@ beforeEach(() => {
   mockPlaceSnapshotFindFirst.mockResolvedValue(null);
   mockSessionFindUnique.mockResolvedValue(null);
   mockExecuteRawUnsafe.mockResolvedValue(undefined);
+
+  mockListAdminAccounts.mockResolvedValue([]);
+  mockFindAdminAccount.mockResolvedValue(null);
 });
 
 describe("authenticated route validation", () => {
@@ -589,6 +604,131 @@ describe("authenticated route validation", () => {
     expectValidationError(usageResponse);
     expect(mockListAllAgencies).not.toHaveBeenCalled();
     expect(mockListReports).not.toHaveBeenCalled();
+  });
+
+  describe("admin accounts", () => {
+    const VALID_USER_ID = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+    const PASSWORD_HASH = "$2b$12$abcdefghijklmnopqrstuuABCDEFGHIJKLMNOPQRSTUVWXYZ012345";
+
+    function makeAccountRow() {
+      return {
+        id: VALID_USER_ID,
+        email: "ana@example.com",
+        displayName: "Ana Reyes",
+        role: "USER",
+        status: "ACTIVE",
+        accountType: "AGENCY_USER",
+        emailVerifiedAt: new Date("2026-09-01T08:00:00.000Z"),
+        createdAt: new Date("2026-08-30T10:00:00.000Z"),
+        passwordHash: PASSWORD_HASH,
+        providerAccounts: [{ provider: "GOOGLE" }],
+        memberships: [
+          { role: "OWNER", status: "ACTIVE", agency: { id: VALID_AGENCY_ID, name: "Alpha Travel", status: "VERIFIED" } }
+        ]
+      };
+    }
+
+    function adminApp(authUser: Record<string, unknown> = adminUser) {
+      return createRouteApp({ mountPath: "/admin", router: adminRoutes, authUser });
+    }
+
+    it("rejects a non-UUID account id before the service or repository is called", async () => {
+      const response = await request(adminApp()).get("/admin/users/not-a-uuid");
+
+      expectValidationError(response);
+      expect(mockFindAdminAccount).not.toHaveBeenCalled();
+    });
+
+    it("lists every account for a super admin as { users } without any secret", async () => {
+      mockListAdminAccounts.mockResolvedValue([makeAccountRow()]);
+
+      const response = await request(adminApp()).get("/admin/users");
+
+      expect(response.status).toBe(200);
+      expect(response.body).toEqual({
+        users: [
+          {
+            id: VALID_USER_ID,
+            email: "ana@example.com",
+            displayName: "Ana Reyes",
+            role: "USER",
+            status: "ACTIVE",
+            accountType: "AGENCY_USER",
+            emailVerified: true,
+            createdAt: "2026-08-30T10:00:00.000Z",
+            signInMethods: ["PASSWORD", "GOOGLE"],
+            memberships: [
+              {
+                agencyId: VALID_AGENCY_ID,
+                agencyName: "Alpha Travel",
+                agencyStatus: "VERIFIED",
+                role: "OWNER",
+                status: "ACTIVE"
+              }
+            ]
+          }
+        ]
+      });
+      expect(JSON.stringify(response.body)).not.toContain("passwordHash");
+      expect(JSON.stringify(response.body)).not.toContain(PASSWORD_HASH);
+      expect(mockListAdminAccounts).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns one account's detail with activity counts for a super admin", async () => {
+      mockFindAdminAccount.mockResolvedValue({
+        ...makeAccountRow(),
+        updatedAt: new Date("2026-09-15T12:30:00.000Z"),
+        _count: { createdItineraries: 4, createdClientTrips: 2, createdAgentThreads: 7 }
+      });
+
+      const response = await request(adminApp()).get(`/admin/users/${VALID_USER_ID}`);
+
+      expect(response.status).toBe(200);
+      expect(response.body.user).toMatchObject({
+        id: VALID_USER_ID,
+        emailVerifiedAt: "2026-09-01T08:00:00.000Z",
+        updatedAt: "2026-09-15T12:30:00.000Z",
+        activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 }
+      });
+      expect(JSON.stringify(response.body)).not.toContain("passwordHash");
+      expect(JSON.stringify(response.body)).not.toContain(PASSWORD_HASH);
+      expect(mockFindAdminAccount).toHaveBeenCalledWith(VALID_USER_ID);
+    });
+
+    it("returns 404 ACCOUNT_NOT_FOUND for an unknown account id", async () => {
+      mockFindAdminAccount.mockResolvedValue(null);
+
+      const response = await request(adminApp()).get(`/admin/users/${VALID_USER_ID}`);
+
+      expect(response.status).toBe(404);
+      expect(response.body.error.code).toBe("ACCOUNT_NOT_FOUND");
+    });
+
+    it("forbids regular users on both account routes without touching the repository", async () => {
+      const app = adminApp(personalUser);
+
+      const listResponse = await request(app).get("/admin/users");
+      const detailResponse = await request(app).get(`/admin/users/${VALID_USER_ID}`);
+
+      expect(listResponse.status).toBe(403);
+      expect(listResponse.body.error.code).toBe("SUPER_ADMIN_REQUIRED");
+      expect(detailResponse.status).toBe(403);
+      expect(detailResponse.body.error.code).toBe("SUPER_ADMIN_REQUIRED");
+      expect(mockListAdminAccounts).not.toHaveBeenCalled();
+      expect(mockFindAdminAccount).not.toHaveBeenCalled();
+    });
+
+    it("requires sign-in on both account routes", async () => {
+      const app = createRouteApp({ mountPath: "/admin", router: adminRoutes });
+
+      const listResponse = await request(app).get("/admin/users");
+      const detailResponse = await request(app).get(`/admin/users/${VALID_USER_ID}`);
+
+      expect(listResponse.status).toBe(401);
+      expect(detailResponse.status).toBe(401);
+      expect(mockListAdminAccounts).not.toHaveBeenCalled();
+      expect(mockFindAdminAccount).not.toHaveBeenCalled();
+    });
   });
 
   it("rejects invalid image IDs before storage calls", async () => {

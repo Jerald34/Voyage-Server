@@ -6,10 +6,13 @@ import { agencyReviewSchema } from "../agencies/agencySchemas";
 import { agencyService } from "../agencies/agencyService";
 import { createUsageService, usageQuerySchema } from "./usageService";
 import { usageRepository } from "./usageRepository";
+import { createAdminAccountService } from "./accountService";
+import { adminAccountRepository } from "./accountRepository";
 import { supportService } from "../support/supportService";
 import { updateReportSchema } from "../support/supportSchemas";
 
 const usageService = createUsageService({ repository: usageRepository });
+const accountService = createAdminAccountService({ repository: adminAccountRepository });
 const adminAgencyStatusQuerySchema = z
   .object({
     status: z.enum(["PENDING_REVIEW", "VERIFIED", "REJECTED", "SUSPENDED"]).optional()
@@ -22,6 +25,7 @@ const adminReportStatusQuerySchema = z
   .strict();
 const reportIdParamsSchema = idParamsSchema("id");
 const agencyIdParamsSchema = idParamsSchema("agencyId");
+const userIdParamsSchema = idParamsSchema("userId");
 
 export const adminRoutes = Router();
 
@@ -50,6 +54,15 @@ adminRoutes.get("/agencies", requireSuperAdmin, async (request, response, next) 
     const { status } = adminAgencyStatusQuerySchema.parse(request.query);
     const agencies = await agencyService.listAllAgencies(request.authUser!, status);
     response.json({ agencies });
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRoutes.get("/users", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const users = await accountService.listAccounts(request.authUser!);
+    response.json({ users });
   } catch (error) {
     next(error);
   }
@@ -88,7 +101,17 @@ adminRoutes.patch("/reports/:id", requireSuperAdmin, async (request, response, n
 
 // Parameterized routes
 
-adminRoutes.get("/agencies/:agencyId", requireSuperAdmin, async (request, response, next) => {
+adminRoutes.get("/users/:userId", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const { userId } = userIdParamsSchema.parse(request.params);
+    const user = await accountService.getAccount(request.authUser!, userId);
+    response.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+adminRoutes.get("/agencies/:agencyId",requireSuperAdmin, async (request, response, next) => {
   try {
     const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const agency = await agencyService.getAgencyDetail(request.authUser!, agencyId);
