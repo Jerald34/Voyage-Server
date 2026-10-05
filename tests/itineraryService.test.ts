@@ -5,6 +5,7 @@ import {
   type StructuredItineraryInput
 } from "../src/modules/itineraries/itineraryService";
 import { ApiError } from "../src/http/errors";
+import { assertItineraryEditable, ITINERARY_LOCKED_MESSAGE } from "../src/modules/itineraries/itineraryLock";
 
 type TripRecord = Awaited<ReturnType<ItineraryRepository["createTripWithItinerary"]>>["trip"];
 type ItineraryRecord = Awaited<ReturnType<ItineraryRepository["createTripWithItinerary"]>>["itinerary"];
@@ -82,14 +83,16 @@ function createMemoryRepository(): ItineraryRepository & {
     async findItineraryByAgency(id, agencyId) {
       return itineraries.find((itinerary) => itinerary.id === id && itinerary.agencyId === agencyId) ?? null;
     },
+    async findItineraryTripId(id, agencyId) {
+      const itinerary = itineraries.find((candidate) => candidate.id === id && candidate.agencyId === agencyId);
+      return itinerary ? { tripId: itinerary.tripId } : null;
+    },
     async replaceItineraryDraft(id, agencyId, data) {
       const itinerary = itineraries.find((candidate) => candidate.id === id && candidate.agencyId === agencyId);
       if (!itinerary) {
         return null;
       }
-      if (itinerary.status !== "DRAFT") {
-        throw new ApiError(409, "ITINERARY_NOT_DRAFT", "Only draft itineraries can be replaced.");
-      }
+      assertItineraryEditable(itinerary.status);
 
       const now = new Date("2026-04-28T00:00:00.000Z");
       itinerary.title = data.title;
@@ -168,6 +171,16 @@ function createMemoryRepository(): ItineraryRepository & {
         itinerary.status = "APPROVED_INTERNAL";
       }
       return { trip, itinerary };
+    },
+    async reopenTrip(tripId, agencyId) {
+      const trip = trips.find((t) => t.id === tripId && t.agencyId === agencyId);
+      if (!trip) {
+        throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+      }
+      const itinerary = itineraries.find((i) => i.tripId === tripId) ?? null;
+      if (trip.status === "APPROVED_INTERNAL") trip.status = "IN_REVIEW";
+      if (itinerary?.status === "APPROVED_INTERNAL") itinerary.status = "NEEDS_REVIEW";
+      return { trip, itinerary: itinerary ? { id: itinerary.id, status: itinerary.status } : null };
     }
   };
 }
@@ -344,27 +357,36 @@ describe("itinerary service", () => {
     });
   });
 
-  it("rejects replacing non-draft itineraries", async () => {
+  it("replaces an itinerary that is in review", async () => {
     const repository = createMemoryRepository();
     const service = createItineraryService({ repository });
     const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
     created.itinerary.status = "NEEDS_REVIEW";
 
+    const replaced = await service.replaceDraft("agency-1", created.itinerary.id, {
+      title: "Updated Cebu Plan",
+      days: [{ dayNumber: 1, title: "Slower arrival", items: [] }]
+    });
+
+    expect(replaced.title).toBe("Updated Cebu Plan");
+    expect(replaced.version).toBe(2);
+  });
+
+  it("refuses to replace an approved itinerary", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
+    created.itinerary.status = "APPROVED_INTERNAL";
+
     await expect(
       service.replaceDraft("agency-1", created.itinerary.id, {
         title: "Updated Cebu Plan",
-        days: [
-          {
-            dayNumber: 1,
-            title: "Slower arrival",
-            items: []
-          }
-        ]
+        days: [{ dayNumber: 1, title: "Slower arrival", items: [] }]
       })
     ).rejects.toMatchObject({
-      code: "ITINERARY_NOT_DRAFT",
+      code: "ITINERARY_LOCKED",
       statusCode: 409,
-      message: "Only draft itineraries can be replaced."
+      message: ITINERARY_LOCKED_MESSAGE
     });
 
     expect(repository.itineraries[0]?.title).toBe("4-Day Cebu Honeymoon");
@@ -427,5 +449,41 @@ describe("approveTrip", () => {
     await expect(service.approveTrip("agency-1", created.trip.id)).rejects.toMatchObject({
       statusCode: 404
     });
+  });
+});
+
+describe("getItineraryTripId", () => {
+  it("returns the trip an itinerary belongs to", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
+
+    await expect(service.getItineraryTripId("agency-1", created.itinerary.id)).resolves.toBe(created.trip.id);
+  });
+
+  it("404s for another agency's itinerary", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    const created = await service.createDraftFromStructuredInput("agency-other", "user-1", createStructuredInput());
+
+    await expect(service.getItineraryTripId("agency-1", created.itinerary.id)).rejects.toMatchObject({
+      statusCode: 404,
+      code: "ITINERARY_NOT_FOUND"
+    });
+  });
+});
+
+describe("reopenTrip", () => {
+  it("puts an approved trip back in review", async () => {
+    const repository = createMemoryRepository();
+    const service = createItineraryService({ repository });
+    const created = await service.createDraftFromStructuredInput("agency-1", "user-1", createStructuredInput());
+    created.trip.status = "APPROVED_INTERNAL";
+    created.itinerary.status = "APPROVED_INTERNAL";
+
+    const result = await service.reopenTrip("agency-1", created.trip.id);
+
+    expect(result.trip.status).toBe("IN_REVIEW");
+    expect(result.itinerary).toEqual({ id: created.itinerary.id, status: "NEEDS_REVIEW" });
   });
 });

@@ -2942,3 +2942,74 @@ describe("repeated calls to an unavailable tool", () => {
     expect(continuation).toContain("Do not call weather_forecast again");
   });
 });
+
+describe("live itinerary at run start", () => {
+  function threadWithSnapshot() {
+    return {
+      messages: [{ role: "USER", content: "Move lunch later." }],
+      events: [
+        {
+          type: "tool.completed",
+          payload: {
+            name: "create_itinerary",
+            output: {
+              itinerary: {
+                id: "itinerary-live",
+                days: [{ id: "day-1", dayNumber: 1, title: "Day 1", items: [{ id: "item-1", sortOrder: 1, title: "Old lunch spot" }] }]
+              }
+            }
+          }
+        }
+      ]
+    } as any;
+  }
+
+  function liveItinerary(status: string) {
+    return {
+      id: "itinerary-live",
+      status,
+      days: [{ id: "day-1", dayNumber: 1, title: "Day 1", items: [{ id: "item-1", sortOrder: 1, title: "Edited by hand" }] }]
+    };
+  }
+
+  async function runWith(status: string) {
+    const { service } = createFakeAgentService();
+    service.getThread = async () => threadWithSnapshot();
+    const prompts: string[] = [];
+    const modelProvider: ModelProvider = {
+      async complete(input) {
+        prompts.push(input.messages.map((message) => message.content).join("\n"));
+        return { content: "Done." };
+      }
+    };
+    const loadCurrentItinerary = vi.fn(async () => liveItinerary(status));
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([]),
+      loadCurrentItinerary
+    });
+
+    await orchestrator.run(createRunInput());
+
+    return { prompts: prompts.join("\n"), loadCurrentItinerary };
+  }
+
+  it("shows the agent the itinerary as stored now, not the thread's last snapshot", async () => {
+    const { prompts, loadCurrentItinerary } = await runWith("NEEDS_REVIEW");
+
+    expect(loadCurrentItinerary).toHaveBeenCalledWith({
+      agencyId: "agency-1",
+      userId: "user-1",
+      itineraryId: "itinerary-live"
+    });
+    expect(prompts).toContain("title = Edited by hand");
+    expect(prompts).not.toContain("title = Old lunch spot");
+  });
+
+  it("tells the agent an approved itinerary is locked", async () => {
+    const { prompts } = await runWith("APPROVED_INTERNAL");
+
+    expect(prompts).toContain("Reopen for edits");
+  });
+});
