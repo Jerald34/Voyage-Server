@@ -279,6 +279,34 @@ describe("describeHourlyForAgent", () => {
     ).toBe("rain 6 AM-9 AM");
   });
 
+  it("warns of a high chance of showers on a day with no rain coded, from 50%", () => {
+    const dryCodes = (peak: number) =>
+      summarizeHourlyDay(hoursWith({}, 10, { 12: peak }), [])!;
+
+    expect(describeHourlyForAgent(dryCodes(49))).toBe("dry from 6 AM to 10 PM");
+    expect(describeHourlyForAgent(dryCodes(50))).toBe(
+      "no rain coded from 6 AM to 10 PM, but up to 50% chance of showers"
+    );
+    expect(describeHourlyForAgent(dryCodes(79))).toBe(
+      "no rain coded from 6 AM to 10 PM, but up to 79% chance of showers"
+    );
+  });
+
+  it("keeps saying dry when the chance is unknown, and does not repeat the chance beside a wet window", () => {
+    expect(
+      describeHourlyForAgent({
+        firstWetHour: null,
+        wetWindow: null,
+        lastWetHour: null,
+        maxDaytimePrecipitationProbabilityPct: null,
+        stops: []
+      })
+    ).toBe("dry from 6 AM to 10 PM");
+    expect(describeHourlyForAgent(summarizeHourlyDay(hoursWith({ 10: 61 }, 10, { 12: 90 }), [])!)).toBe(
+      "dry until 10 AM; rain 10 AM-11 AM"
+    );
+  });
+
   it("names when the whole wet spell ends only when the worst weather ends sooner", () => {
     // Storms 12-2 PM, then rain and drizzle until 6 PM.
     const stormThenDrizzle = summarizeHourlyDay(hoursWith({ 12: 95, 13: 95, 14: 61, 15: 61, 16: 51, 17: 51 }), []);

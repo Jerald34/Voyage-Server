@@ -174,11 +174,20 @@ function formatHour(hour: number) {
 /**
  * The day's timing in one line for the agent, e.g. "dry until 11 AM; thunderstorms
  * 2 PM-8 PM; wet until 9 PM". The last part appears when lighter rain outlasts the
- * worst weather, so the model knows when the whole spell is over.
+ * worst weather, so the model knows when the whole spell is over. A day with no wet
+ * hours still reports a high chance of showers rather than a flat "dry".
  */
 export function describeHourlyForAgent(outlook: HourlyDayOutlook): string {
   const window = outlook.wetWindow;
-  if (!window) return `dry from ${formatHour(DAYTIME_START_HOUR)} to ${formatHour(DAYTIME_END_HOUR)}`;
+  if (!window) {
+    const daytime = `from ${formatHour(DAYTIME_START_HOUR)} to ${formatHour(DAYTIME_END_HOUR)}`;
+    const chance = outlook.maxDaytimePrecipitationProbabilityPct;
+    // The hours are coded dry, but a high chance of rain is still worth saying: "dry" alone would overstate it.
+    if (chance !== null && chance >= SHOWER_CHANCE_PCT) {
+      return `no rain coded ${daytime}, but up to ${chance}% chance of showers`;
+    }
+    return `dry ${daytime}`;
+  }
   const parts: string[] = [];
   if (outlook.firstWetHour !== null && outlook.firstWetHour > DAYTIME_START_HOUR) {
     parts.push(`dry until ${formatHour(outlook.firstWetHour)}`);

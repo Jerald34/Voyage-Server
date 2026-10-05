@@ -153,7 +153,10 @@ describe("weather_forecast tool", () => {
     // An overcast hour with a 79% chance: no wet window, but still a rain risk.
     weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(79));
     const risky = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
-    expect(risky).toMatchObject({ days: [{ rainRisk: true, timing: "dry from 6 AM to 10 PM" }] });
+    const showerTiming = "no rain coded from 6 AM to 10 PM, but up to 79% chance of showers";
+    expect(risky).toMatchObject({
+      days: [{ rainRisk: true, timing: showerTiming, summary: expect.stringContaining(`; ${showerTiming}`) }]
+    });
 
     // The floor is the daily rule's 60%: 60 counts, 59 does not.
     weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(60));
