@@ -1,6 +1,6 @@
 import { ApiError } from "../../http/errors";
 import { redactSecrets } from "../../utils/redaction";
-import type { GeoPoint, RawDailyWeather, WeatherProvider } from "./types";
+import type { GeoPoint, RawDailyWeather, RawHourlyWeather, WeatherProvider } from "./types";
 
 export const OPEN_METEO_FORECAST_URL = "https://api.open-meteo.com/v1/forecast";
 export const OPEN_METEO_ARCHIVE_URL = "https://archive-api.open-meteo.com/v1/archive";
@@ -27,6 +27,12 @@ const HISTORY_DAILY_FIELDS = [
   "precipitation_sum",
   "wind_speed_10m_max"
 ] as const;
+
+// Just what the timing needs: the condition and the chance of rain, per hour.
+const FORECAST_HOURLY_FIELDS = ["weather_code", "precipitation_probability"] as const;
+
+/** Open-Meteo's hourly timestamps with timezone=auto: local "YYYY-MM-DDTHH:00". */
+const LOCAL_HOUR = /^(\d{4}-\d{2}-\d{2})T(\d{2}):00$/;
 
 type OpenMeteoProviderOptions = {
   fetchImpl?: typeof fetch;
@@ -74,6 +80,38 @@ export function parseOpenMeteoDaily(body: unknown): RawDailyWeather[] {
       precipitationMm: at("precipitation_sum", index),
       windSpeedMaxKph: at("wind_speed_10m_max", index),
       uvIndexMax: at("uv_index_max", index)
+    });
+  });
+  return rows;
+}
+
+/** Converts Open-Meteo's column-oriented `hourly` block into one row per local hour. */
+export function parseOpenMeteoHourly(body: unknown): RawHourlyWeather[] {
+  if (typeof body !== "object" || body === null || Array.isArray(body)) {
+    throw weatherUnavailable("Weather provider returned an invalid payload.");
+  }
+  const hourly = (body as { hourly?: unknown }).hourly;
+  if (typeof hourly !== "object" || hourly === null || Array.isArray(hourly)) {
+    throw weatherUnavailable("Weather provider returned no hourly data.");
+  }
+
+  const columns = hourly as Record<string, unknown>;
+  const at = (name: string, index: number) => {
+    const values = columns[name];
+    return Array.isArray(values) ? finiteOrNull(values[index]) : null;
+  };
+  // Same reason as the daily parser: an empty result would be cached for hours.
+  if (!Array.isArray(columns.time)) throw weatherUnavailable("Weather provider returned no hourly times.");
+
+  const rows: RawHourlyWeather[] = [];
+  columns.time.forEach((time, index) => {
+    const match = typeof time === "string" ? LOCAL_HOUR.exec(time) : null;
+    if (!match) return;
+    rows.push({
+      date: match[1],
+      hour: Number(match[2]),
+      weatherCode: at("weather_code", index),
+      precipitationProbabilityPct: at("precipitation_probability", index)
     });
   });
   return rows;
@@ -130,6 +168,14 @@ export function createOpenMeteoProvider(options: OpenMeteoProviderOptions = {}):
       url.searchParams.set("daily", FORECAST_DAILY_FIELDS.join(","));
       url.searchParams.set("forecast_days", String(FORECAST_DAYS));
       return parseOpenMeteoDaily(await getJson(fetchImpl, url, timeoutMs));
+    },
+
+    async getHourlyForecast(location) {
+      const url = new URL(forecastUrl);
+      setCoordinates(url, location);
+      url.searchParams.set("hourly", FORECAST_HOURLY_FIELDS.join(","));
+      url.searchParams.set("forecast_days", String(FORECAST_DAYS));
+      return parseOpenMeteoHourly(await getJson(fetchImpl, url, timeoutMs));
     },
 
     async getDailyHistory(location, startDate, endDate) {

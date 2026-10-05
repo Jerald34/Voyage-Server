@@ -29,6 +29,16 @@ export type RawDailyWeather = {
   uvIndexMax: number | null;
 };
 
+/** One forecast hour in the location's own local time. The row covers the hour that starts at `hour`. */
+export type RawHourlyWeather = {
+  /** Local calendar date, YYYY-MM-DD. */
+  date: string;
+  /** Local hour of day, 0-23. */
+  hour: number;
+  weatherCode: number | null;
+  precipitationProbabilityPct: number | null;
+};
+
 export type DailyWeatherKind = "FORECAST" | "TYPICAL";
 
 export type DailyWeather = {
@@ -57,6 +67,8 @@ export type WeatherProvider = {
   readonly name: "open-meteo";
   /** Daily forecast starting at the location's local today (16 days). */
   getDailyForecast(location: GeoPoint): Promise<RawDailyWeather[]>;
+  /** Hourly forecast for the same 16 days, in the location's local time. */
+  getHourlyForecast(location: GeoPoint): Promise<RawHourlyWeather[]>;
   /** Observed daily weather for a past, inclusive date range. */
   getDailyHistory(location: GeoPoint, startDate: string, endDate: string): Promise<RawDailyWeather[]>;
 };

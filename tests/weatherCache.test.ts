@@ -59,6 +59,23 @@ describe("createCachedWeatherProvider", () => {
     expect(inner.getDailyHistory).toHaveBeenCalledTimes(2);
   });
 
+  it("caches hourly forecasts per ~1 km cell, separately from the daily forecast", async () => {
+    const inner = {
+      name: "open-meteo" as const,
+      getDailyForecast: vi.fn(async () => []),
+      getHourlyForecast: vi.fn(async () => []),
+      getDailyHistory: vi.fn(async () => [])
+    };
+    const cached = createCachedWeatherProvider(inner);
+
+    await cached.getHourlyForecast({ latitude: 16.4023, longitude: 120.5961 });
+    await cached.getHourlyForecast({ latitude: 16.4049, longitude: 120.5951 });
+    await cached.getDailyForecast({ latitude: 16.4023, longitude: 120.5961 });
+
+    expect(inner.getHourlyForecast).toHaveBeenCalledTimes(1);
+    expect(inner.getDailyForecast).toHaveBeenCalledTimes(1);
+  });
+
   it("shares one inner call between concurrent requests for points in the same rounded cell", async () => {
     let release: (rows: never[]) => void = () => undefined;
     const inner = {

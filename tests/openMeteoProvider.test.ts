@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { ApiError } from "../src/http/errors";
-import { createOpenMeteoProvider, parseOpenMeteoDaily } from "../src/services/weather/openMeteo";
+import { createOpenMeteoProvider, parseOpenMeteoDaily, parseOpenMeteoHourly } from "../src/services/weather/openMeteo";
 
 function jsonResponse(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json" } });
@@ -19,6 +19,17 @@ const forecastBody = {
     precipitation_sum: [12.6, 0],
     wind_speed_10m_max: [14.2, 9.8],
     uv_index_max: [5.1, 8.4]
+  }
+};
+
+const hourlyBody = {
+  latitude: 16.41,
+  longitude: 120.59,
+  timezone: "Asia/Manila",
+  hourly: {
+    time: ["2026-10-08T00:00", "2026-10-08T14:00", "not-a-time"],
+    weather_code: [1, 95, 0],
+    precipitation_probability: [3, 96, 0]
   }
 };
 
@@ -68,6 +79,40 @@ describe("Open-Meteo provider", () => {
         uvIndexMax: 8.4
       }
     ]);
+  });
+
+  it("requests a 16-day local-time hourly forecast and parses one row per hour", async () => {
+    const urls: URL[] = [];
+    const provider = createOpenMeteoProvider({
+      fetchImpl: async (url) => {
+        urls.push(new URL(String(url)));
+        return jsonResponse(hourlyBody);
+      }
+    });
+
+    const rows = await provider.getHourlyForecast({ latitude: 16.4023, longitude: 120.596 });
+
+    expect(`${urls[0].origin}${urls[0].pathname}`).toBe("https://api.open-meteo.com/v1/forecast");
+    expect(urls[0].searchParams.get("timezone")).toBe("auto");
+    expect(urls[0].searchParams.get("forecast_days")).toBe("16");
+    expect(urls[0].searchParams.get("hourly")).toBe("weather_code,precipitation_probability");
+    expect(urls[0].searchParams.get("daily")).toBeNull();
+    // The malformed timestamp is skipped, not guessed.
+    expect(rows).toEqual([
+      { date: "2026-10-08", hour: 0, weatherCode: 1, precipitationProbabilityPct: 3 },
+      { date: "2026-10-08", hour: 14, weatherCode: 95, precipitationProbabilityPct: 96 }
+    ]);
+  });
+
+  it("treats an hourly payload without hourly times as unavailable", async () => {
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const provider = createOpenMeteoProvider({ fetchImpl: async () => jsonResponse({ hourly: {} }) });
+
+    await expect(provider.getHourlyForecast({ latitude: 1, longitude: 2 })).rejects.toMatchObject({
+      statusCode: 503,
+      code: "WEATHER_PROVIDER_UNAVAILABLE"
+    } satisfies Partial<ApiError>);
+    expect(() => parseOpenMeteoHourly({})).toThrow();
   });
 
   it("requests archive history for an inclusive date range", async () => {
