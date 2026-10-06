@@ -5,6 +5,8 @@ import { canonicalToolName } from "../src/modules/agent/agentParser";
 import { buildVoyageSystemPrompt } from "../src/modules/agent/agentPrompts";
 import { createAgentToolRegistry, type AgentToolService } from "../src/modules/agent/agentTools";
 import { createWeatherForecastTool } from "../src/modules/agent/tools/weatherTools";
+import type { RawHourlyWeather } from "../src/services/weather/types";
+import { baguioHours } from "./baguioHourlyFixture";
 
 const context = { agencyId: "agency-1", threadId: "thread-1", runId: "run-1", userId: "user-1" };
 
@@ -52,6 +54,7 @@ function buildTool() {
         uvIndexMax: 5
       }
     ]),
+    getHourlyForecast: vi.fn(async (): Promise<RawHourlyWeather[]> => []),
     getDailyHistory: vi.fn(async () => [])
   };
   const tool = createWeatherForecastTool({
@@ -96,6 +99,117 @@ describe("weather_forecast tool", () => {
       expect.objectContaining({ id: "run-1" }),
       [expect.objectContaining({ sourceType: "WEB", url: "https://open-meteo.com/", provider: "open_meteo" })]
     );
+  });
+
+  it("adds hour-by-hour timing to forecast days", async () => {
+    const { tool, weather } = buildTool();
+    weather.getHourlyForecast.mockResolvedValue(baguioHours("2026-10-10"));
+
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    // The same rounded point the daily lookup uses, so both resolve to one grid cell.
+    expect(weather.getHourlyForecast).toHaveBeenCalledWith({ latitude: 16.4, longitude: 120.6 });
+    expect(weather.getDailyForecast).toHaveBeenCalledWith({ latitude: 16.4, longitude: 120.6 });
+    expect(result).toMatchObject({
+      days: [
+        {
+          summary: "Rain, 16-23°C, 85% chance of rain; dry until 11 AM; thunderstorms 2 PM-8 PM; wet until 9 PM",
+          timing: "dry until 11 AM; thunderstorms 2 PM-8 PM; wet until 9 PM",
+          rainRisk: true
+        }
+      ]
+    });
+  });
+
+  it("takes rainRisk from the hourly timing, so a night-only storm is not a rain risk", async () => {
+    const { tool, weather } = buildTool();
+    // The daily code says rain (85%), but the only wet hours are 2-3 AM (at 95%); the daytime is dry at 20%.
+    weather.getHourlyForecast.mockResolvedValue(
+      Array.from({ length: 24 }, (_, hour) => ({
+        date: "2026-10-10",
+        hour,
+        weatherCode: hour === 2 || hour === 3 ? 95 : 1,
+        precipitationProbabilityPct: hour === 2 || hour === 3 ? 95 : 20
+      }))
+    );
+
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    expect(result).toMatchObject({
+      days: [{ kind: "FORECAST", condition: "RAIN", rainRisk: false, timing: "dry from 6 AM to 10 PM" }]
+    });
+  });
+
+  it("keeps a rain-chance floor on rainRisk when the daytime codes are dry", async () => {
+    const { tool, weather } = buildTool();
+    const dryDayWithPeak = (peak: number) =>
+      Array.from({ length: 24 }, (_, hour) => ({
+        date: "2026-10-10",
+        hour,
+        weatherCode: 3,
+        precipitationProbabilityPct: hour === 12 ? peak : 10
+      }));
+
+    // An overcast hour with a 79% chance: no wet window, but still a rain risk.
+    weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(79));
+    const risky = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+    const showerTiming = "no rain coded from 6 AM to 10 PM, but up to 79% chance of showers";
+    expect(risky).toMatchObject({
+      days: [{ rainRisk: true, timing: showerTiming, summary: expect.stringContaining(`; ${showerTiming}`) }]
+    });
+
+    // The floor is the daily rule's 60%: 60 counts, 59 does not.
+    weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(60));
+    expect(await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" })).toMatchObject({
+      days: [{ rainRisk: true }]
+    });
+    weather.getHourlyForecast.mockResolvedValue(dryDayWithPeak(59));
+    expect(await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" })).toMatchObject({
+      days: [{ rainRisk: false }]
+    });
+  });
+
+  it("keeps the daily rainRisk when a forecast day has no hourly timing", async () => {
+    const { tool, weather } = buildTool();
+    // Rows for another date only: this day has no outlook.
+    weather.getHourlyForecast.mockResolvedValue(baguioHours("2026-10-11"));
+
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    expect(result).toMatchObject({ days: [{ kind: "FORECAST", rainRisk: true }] });
+    expect(result).not.toHaveProperty("days.0.timing");
+  });
+
+  it("calls a snow day a rain risk and says snow", async () => {
+    const { tool, weather } = buildTool();
+    weather.getHourlyForecast.mockResolvedValue(
+      Array.from({ length: 24 }, (_, hour) => ({
+        date: "2026-10-10",
+        hour,
+        weatherCode: hour === 10 || hour === 11 ? 73 : 1,
+        precipitationProbabilityPct: 10
+      }))
+    );
+
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    expect(result).toMatchObject({ days: [{ rainRisk: true, timing: "dry until 10 AM; snow 10 AM-12 PM" }] });
+  });
+
+  it("skips the hourly request without forecast days and survives its failure", async () => {
+    const { tool, weather } = buildTool();
+
+    // Two months out: typical weather only.
+    await tool.execute(context, { placeName: "Baguio City", startDate: "2026-12-01" });
+    expect(weather.getHourlyForecast).not.toHaveBeenCalled();
+
+    vi.spyOn(console, "error").mockImplementation(() => undefined);
+    weather.getHourlyForecast.mockRejectedValue(new Error("hourly down"));
+    const result = await tool.execute(context, { placeName: "Baguio City", startDate: "2026-10-10" });
+
+    expect(result).toMatchObject({ days: [{ summary: "Rain, 16-23°C, 85% chance of rain" }] });
+    expect(result).not.toHaveProperty("days.0.timing");
+    vi.restoreAllMocks();
   });
 
   it("rejects impossible dates and ranges over 14 days through the registry", async () => {
@@ -242,6 +356,7 @@ describe("weather_forecast wiring", () => {
 
     expect(prompt).toContain("weather_forecast:");
     expect(prompt).toContain('{"tool": "weather_forecast"');
+    expect(prompt).toContain("When a day also has timing");
     expect(buildVoyageSystemPrompt("weather_forecast, add_itinerary_item")).toBe(prompt);
   });
 });

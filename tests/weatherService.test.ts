@@ -22,6 +22,7 @@ function forecastProvider() {
         uvIndexMax: 6
       }
     ]),
+    getHourlyForecast: vi.fn(async () => []),
     getDailyHistory: vi.fn(async () => [])
   };
 }

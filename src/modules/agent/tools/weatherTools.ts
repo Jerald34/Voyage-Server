@@ -1,8 +1,15 @@
 import { z } from "zod";
 import type { MapsProvider } from "../../../services/maps";
-import { WEATHER_ATTRIBUTION, isWetCondition, type DailyWeather, type WeatherProvider } from "../../../services/weather";
+import {
+  WEATHER_ATTRIBUTION,
+  isWetCondition,
+  type DailyWeather,
+  type RawHourlyWeather,
+  type WeatherProvider
+} from "../../../services/weather";
 import { addDays, daysBetween, isIsoDate, toIsoDate } from "../../../services/weather/dates";
-import { getWeatherForDates } from "../../../services/weather/weatherOutlook";
+import { describeHourlyForAgent, groupHoursByDate, summarizeHourlyDay } from "../../../services/weather/hourlyWeather";
+import { getWeatherForDates, roundPoint } from "../../../services/weather/weatherOutlook";
 import type { AgentTool, AgentToolService } from "../agentTools";
 import { createRunRecord, toCompactMetadata } from "./toolUtils";
 
@@ -79,8 +86,11 @@ export function describeWeatherForAgent(weather: DailyWeather): string {
   return parts.join(", ");
 }
 
+/** A day with at least this chance of rain (daily, or any daytime hour) counts as a rain risk. */
+export const RAIN_RISK_CHANCE_PCT = 60;
+
 export function isRainRisk(weather: DailyWeather): boolean {
-  return isWetCondition(weather.condition) || (weather.precipitationProbabilityPct ?? 0) >= 60;
+  return isWetCondition(weather.condition) || (weather.precipitationProbabilityPct ?? 0) >= RAIN_RISK_CHANCE_PCT;
 }
 
 export function createWeatherForecastTool(options: {
@@ -114,6 +124,22 @@ export function createWeatherForecastTool(options: {
         typicalYears: options.typicalYears
       });
 
+      // Hour-by-hour timing turns "Thunderstorms" into "dry until 11 AM; thunderstorms 2 PM-8 PM",
+      // so the model can put outdoor stops in the dry hours. Forecast days only; supplementary.
+      const hasForecast = dates.some((date) => {
+        const lookup = lookups.get(date);
+        return lookup?.status === "OK" && lookup.weather.kind === "FORECAST";
+      });
+      let hoursByDate = new Map<string, RawHourlyWeather[]>();
+      if (hasForecast) {
+        try {
+          // The same rounded point the daily lookup uses: both resolve to one grid cell and share cache entries.
+          hoursByDate = groupHoursByDate(await options.weather.getHourlyForecast(roundPoint(place.location)));
+        } catch (error) {
+          console.error("[Weather] Hourly forecast lookup failed.", error instanceof Error ? error.message : error);
+        }
+      }
+
       const days = dates.map((date) => {
         const lookup = lookups.get(date);
         if (!lookup || lookup.status !== "OK") return { date, status: lookup?.status ?? "UNAVAILABLE" };
@@ -129,7 +155,24 @@ export function createWeatherForecastTool(options: {
           temperatureMaxC: weather.temperatureMaxC
         };
         if (weather.kind === "FORECAST") {
-          return { ...base, precipitationProbabilityPct: weather.precipitationProbabilityPct };
+          const hours = hoursByDate.get(date);
+          const outlook = hours ? summarizeHourlyDay(hours, []) : null;
+          const timing = outlook ? describeHourlyForAgent(outlook) : null;
+          return {
+            ...base,
+            // With hour-by-hour timing, the risk follows the daytime hours the model is told about:
+            // a storm at 2 AM must not read "rainRisk: true" beside "dry from 6 AM to 10 PM".
+            // A high daytime chance on dry-coded hours still counts, like the daily rule's floor.
+            ...(outlook
+              ? {
+                  rainRisk:
+                    outlook.wetWindow !== null ||
+                    (outlook.maxDaytimePrecipitationProbabilityPct ?? 0) >= RAIN_RISK_CHANCE_PCT
+                }
+              : {}),
+            ...(timing ? { summary: `${base.summary}; ${timing}`, timing } : {}),
+            precipitationProbabilityPct: weather.precipitationProbabilityPct
+          };
         }
         // A TYPICAL day's internal percentage is the share of past years that were wet.
         // Exposing it as a probability invites "40% chance of rain", so it is withheld

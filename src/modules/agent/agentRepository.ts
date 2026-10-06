@@ -72,6 +72,36 @@ async function nextRunEventSequence(client: Prisma.TransactionClient, runId: str
   return (aggregate._max.sequence ?? 0) + 1;
 }
 
+// A reply belongs to the itinerary its run last touched. The live chat tags the reply from
+// the run's itinerary SSE events, so a reload reads those same events back instead of
+// guessing from the reply text. Raw SQL so only the id leaves the database: an
+// itinerary.created payload carries the whole itinerary.
+async function findRunItineraryIds(
+  client: PrismaClient,
+  messages: Array<{ role: string; runId: string | null }>
+): Promise<Map<string, string>> {
+  const runIds = [
+    ...new Set(
+      messages
+        .filter((message) => message.role === "ASSISTANT" && message.runId)
+        .map((message) => message.runId as string)
+    )
+  ];
+  if (runIds.length === 0) return new Map();
+
+  const rows = await client.$queryRaw<Array<{ runId: string; itineraryId: string }>>(
+    Prisma.sql`
+      SELECT DISTINCT ON (e."runId") e."runId" AS "runId", e."payload"->>'itineraryId' AS "itineraryId"
+      FROM "AgentRunEvent" e
+      WHERE e."runId" = ANY(${runIds}::uuid[])
+        AND e."type" LIKE 'itinerary.%'
+        AND e."payload"->>'itineraryId' IS NOT NULL
+      ORDER BY e."runId", e."sequence" DESC, e."createdAt" DESC
+    `
+  );
+  return new Map(rows.map((row) => [row.runId, row.itineraryId]));
+}
+
 export function createPrismaAgentRepository(client: PrismaClient = prisma): AgentRepository {
   return {
     async createThread(data) {
@@ -702,8 +732,13 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
         select: { id: true, role: true, content: true, createdAt: true, runId: true, metadata: true },
       });
       const hasMore = rows.length > limit;
-      const messages = hasMore ? rows.slice(0, limit) : rows;
+      const page = hasMore ? rows.slice(0, limit) : rows;
       const nextCursor = hasMore ? rows[limit - 1]?.id ?? null : null;
+      const itineraryByRun = await findRunItineraryIds(client, page);
+      const messages = page.map((message) => {
+        const itineraryId = message.runId ? itineraryByRun.get(message.runId) : undefined;
+        return itineraryId ? { ...message, itineraryId } : message;
+      });
       return { messages, nextCursor };
     },
 

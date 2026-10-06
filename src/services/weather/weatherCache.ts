@@ -1,4 +1,4 @@
-import type { GeoPoint, RawDailyWeather, WeatherProvider } from "./types";
+import type { GeoPoint, RawDailyWeather, RawHourlyWeather, WeatherProvider } from "./types";
 
 type Entry<T> = { value: Promise<T>; expiresAt: number };
 
@@ -59,6 +59,11 @@ export function createCachedWeatherProvider(
     maxEntries: MAX_CACHE_ENTRIES,
     now: options.now
   });
+  const hourlyForecasts = createTtlCache<RawHourlyWeather[]>({
+    ttlMs: FORECAST_CACHE_TTL_MS,
+    maxEntries: MAX_CACHE_ENTRIES,
+    now: options.now
+  });
   const history = createTtlCache<RawDailyWeather[]>({
     ttlMs: HISTORY_CACHE_TTL_MS,
     maxEntries: MAX_CACHE_ENTRIES,
@@ -69,6 +74,9 @@ export function createCachedWeatherProvider(
     name: provider.name,
     getDailyForecast(location) {
       return forecasts.get(cellKey(location), () => provider.getDailyForecast(location));
+    },
+    getHourlyForecast(location) {
+      return hourlyForecasts.get(cellKey(location), () => provider.getHourlyForecast(location));
     },
     getDailyHistory(location, startDate, endDate) {
       return history.get(`${cellKey(location)}:${startDate}:${endDate}`, () =>

@@ -1,4 +1,5 @@
 import { structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
+import { normalizeClockTime, parseClockTimeToMinutes } from "../../utils/clockTime";
 import type { ParsedModelOutput } from "./agentParser";
 
 export function looksLikeItineraryText(content: string) {
@@ -81,18 +82,6 @@ export function getInputDestination(input: Record<string, unknown>) {
   return getStringValue(trip.destinationSummary) || getStringValue(trip.title).replace(/^\d+[-\s]+day\s+/i, "").replace(/\s+trip$/i, "");
 }
 
-export function normalizeClockTime(value: string) {
-  const match = value.trim().match(/^(\d{1,2})(?::(\d{2}))?\s*(AM|PM)?$/i);
-  if (!match) {
-    return value.trim();
-  }
-
-  const hour = Number(match[1]);
-  const minute = match[2] ?? "00";
-  const meridiem = match[3]?.toUpperCase();
-  return meridiem ? `${hour}:${minute} ${meridiem}` : `${hour}:${minute}`;
-}
-
 export function inferTimeRange(userContent: string) {
   const match =
     userContent.match(/\bfrom\s+(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\s*(?:to|-)\s*(\d{1,2}(?::\d{2})?\s*(?:AM|PM)?)\b/i) ??
@@ -119,25 +108,6 @@ export function inferDurationDays(userContent: string) {
   }
 
   return null;
-}
-
-function parseClockTimeToMinutes(value: string) {
-  const normalized = normalizeClockTime(value);
-  const match = normalized.match(/^(\d{1,2}):(\d{2})\s*(AM|PM)?$/i);
-  if (!match) {
-    return null;
-  }
-
-  let hour = Number(match[1]);
-  const minute = Number(match[2]);
-  const meridiem = match[3]?.toUpperCase();
-  if (meridiem === "PM" && hour < 12) {
-    hour += 12;
-  }
-  if (meridiem === "AM" && hour === 12) {
-    hour = 0;
-  }
-  return hour * 60 + minute;
 }
 
 function formatClockTimeFromMinutes(value: number) {

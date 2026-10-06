@@ -1,9 +1,11 @@
 import { addDays, isIsoDate, toIsoDate } from "./dates";
-import { getWeatherForDates } from "./weatherOutlook";
+import { groupHoursByDate, summarizeHourlyDay, type HourlyDayOutlook } from "./hourlyWeather";
+import { getWeatherForDates, roundPoint } from "./weatherOutlook";
 import {
   WEATHER_ATTRIBUTION,
   type DailyWeather,
   type GeoPoint,
+  type RawHourlyWeather,
   type WeatherLookup,
   type WeatherProvider
 } from "./types";
@@ -13,7 +15,12 @@ export type WeatherDayInput = {
   id: string;
   dayNumber: number;
   date: Date | string | null;
-  items: Array<{ placeSnapshot: { latitude: number | null; longitude: number | null } | null }>;
+  items: Array<{
+    id?: string | null;
+    startTime?: string | null;
+    endTime?: string | null;
+    placeSnapshot: { latitude: number | null; longitude: number | null } | null;
+  }>;
 };
 
 export type DayWeatherStatus = "OK" | "NO_DATE" | "NO_LOCATION" | "PAST" | "UNAVAILABLE";
@@ -24,6 +31,8 @@ export type DayWeatherEntry = {
   date: string | null;
   status: DayWeatherStatus;
   weather: DailyWeather | null;
+  /** Forecast days whose hourly lookup answered: when the rain falls, and each timed stop's weather. */
+  hourly?: HourlyDayOutlook;
 };
 
 export type ItineraryWeather = {
@@ -42,8 +51,14 @@ function locationKey(location: GeoPoint) {
   return `${location.latitude.toFixed(2)},${location.longitude.toFixed(2)}`;
 }
 
-function entry(day: WeatherDayInput, date: string | null, status: DayWeatherStatus, weather: DailyWeather | null = null): DayWeatherEntry {
-  return { dayId: day.id, dayNumber: day.dayNumber, date, status, weather };
+function entry(
+  day: WeatherDayInput,
+  date: string | null,
+  status: DayWeatherStatus,
+  weather: DailyWeather | null = null,
+  hourly: HourlyDayOutlook | null = null
+): DayWeatherEntry {
+  return { dayId: day.id, dayNumber: day.dayNumber, date, status, weather, ...(hourly ? { hourly } : {}) };
 }
 
 /** The day's own date, else trip start + (dayNumber - 1): the client day cards use the same rule. */
@@ -142,6 +157,26 @@ export async function buildItineraryWeather(options: {
     })
   );
 
+  // Hour-by-hour timing for forecast days: one more (cached) request per location.
+  // Supplementary like the rest: on failure a day keeps its daily summary.
+  const hoursByGroup = new Map<string, Map<string, RawHourlyWeather[]>>();
+  await Promise.all(
+    [...groups.entries()].map(async ([key, group]) => {
+      const groupLookups = lookups.get(key);
+      const hasForecast = group.dates.some((date) => {
+        const lookup = groupLookups?.get(date);
+        return lookup?.status === "OK" && lookup.weather.kind === "FORECAST";
+      });
+      if (!hasForecast) return;
+      try {
+        // The same rounded point the daily lookup uses: both resolve to one grid cell and share cache entries.
+        hoursByGroup.set(key, groupHoursByDate(await provider.getHourlyForecast(roundPoint(group.location))));
+      } catch (error) {
+        console.error("[Weather] Hourly forecast lookup failed.", error instanceof Error ? error.message : error);
+      }
+    })
+  );
+
   return {
     provider: provider.name,
     attribution: { ...WEATHER_ATTRIBUTION },
@@ -151,7 +186,10 @@ export async function buildItineraryWeather(options: {
       if (!point) return entry(day, date, "NO_LOCATION");
       const lookup = lookups.get(locationKey(point))?.get(date);
       if (!lookup) return entry(day, date, "UNAVAILABLE");
-      return lookup.status === "OK" ? entry(day, date, "OK", lookup.weather) : entry(day, date, lookup.status);
+      if (lookup.status !== "OK") return entry(day, date, lookup.status);
+      const hours = lookup.weather.kind === "FORECAST" ? hoursByGroup.get(locationKey(point))?.get(date) : undefined;
+      const hourly = hours ? summarizeHourlyDay(hours, day.items ?? []) : null;
+      return entry(day, date, "OK", lookup.weather, hourly);
     })
   };
 }

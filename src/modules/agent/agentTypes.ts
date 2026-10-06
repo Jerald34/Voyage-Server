@@ -338,6 +338,8 @@ export interface AgentRepository {
       createdAt: Date;
       runId: string | null;
       metadata: unknown;
+      /** The itinerary this reply's run last touched, when it touched one. */
+      itineraryId?: string;
     }>;
     nextCursor: string | null;
   }>;
