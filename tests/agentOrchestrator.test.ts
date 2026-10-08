@@ -7,6 +7,7 @@ import {
 import {
   createAddItineraryItemTool,
   createAgentToolRegistry,
+  createAskUserTool,
   createCreateItineraryTool,
   createEstimateRouteTool,
   createGetGooglePlaceDetailsTool,
@@ -25,6 +26,7 @@ import { createItineraryService } from "../src/modules/itineraries/itineraryServ
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
 import type { ModelProvider } from "../src/services/modelProvider";
+import { ASK_USER_RESUME_BLOCK, DEFAULT_ASK_USER_LEAD_IN, normalizeAskUserInput } from "../src/modules/agent/askUser";
 
 function createRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
   return {
@@ -86,7 +88,7 @@ function createFakeAgentService(run = createRun()) {
   }> = [];
   // Captures every completeRun invocation (incl. the optional usage summary) so tests
   // can assert the orchestrator forwards accumulated model usage.
-  const completeRunCalls: Array<{ runId: string; assistantContent: string; usage: unknown }> = [];
+  const completeRunCalls: Array<{ runId: string; assistantContent: string; usage: unknown; options?: any }> = [];
   const service: AgentOrchestratorAgentService = {
     async getThread() {
       return {
@@ -211,13 +213,17 @@ function createFakeAgentService(run = createRun()) {
       }
       return created;
     },
-    async completeRun(runId, assistantContent, usage) {
-      completeRunCalls.push({ runId, assistantContent, usage });
+    async completeRun(runId, assistantContent, usage, options) {
+      completeRunCalls.push({ runId, assistantContent, usage, ...(options ? { options } : {}) });
       run.status = "COMPLETED";
       run.completedAt = new Date("2026-04-28T00:00:00.000Z");
       events.push({
         type: "message.completed",
-        payload: { messageId: "message-1", content: assistantContent }
+        payload: {
+          messageId: "message-1",
+          content: assistantContent,
+          ...(options?.askUser ? { askUser: options.askUser } : {})
+        }
       });
       events.push({
         type: "run.completed",
@@ -3011,5 +3017,155 @@ describe("live itinerary at run start", () => {
     const { prompts } = await runWith("APPROVED_INTERNAL");
 
     expect(prompts).toContain("Reopen for edits");
+  });
+});
+
+describe("ask_user", () => {
+  const askCall = JSON.stringify({
+    tool: "ask_user",
+    questions: [
+      { header: "Transport", question: "How will the travelers get around?", options: ["Private car", "Public transit"] },
+      { header: "Trip length", question: "How many days should I plan?", options: ["2 days", "3 days"] }
+    ]
+  });
+
+  function createAskOrchestrator(
+    service: AgentOrchestratorAgentService,
+    provider: ModelProvider,
+    extra: Partial<Parameters<typeof createAgentOrchestrator>[0]> = {}
+  ) {
+    return createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["ask_user", "record_agent_task"],
+      toolRegistry: createAgentToolRegistry([createAskUserTool(), createRecordAgentTaskTool({ agentService: service as any })]),
+      ...extra
+    });
+  }
+
+  it("ends the run with the questions as the reply and no synthesis pass", async () => {
+    const { service, events, run, completeRunCalls } = createFakeAgentService();
+    const provider = createModelProvider([`${askCall}\nA couple of details before I draft the itinerary.`, "SYNTHESIS SHOULD NOT RUN"]);
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    expect(provider.calls).toHaveLength(1);
+    expect(completeRunCalls).toHaveLength(1);
+    expect(completeRunCalls[0].assistantContent).toBe("A couple of details before I draft the itinerary.");
+    expect(completeRunCalls[0].options.askUser.questions.map((question: any) => question.id)).toEqual(["q1", "q2"]);
+    expect(events.map((event) => event.type)).toEqual([
+      "run.started",
+      "tool.started",
+      "tool.completed",
+      "message.delta",
+      "message.completed",
+      "run.completed"
+    ]);
+  });
+
+  it("uses a default sentence when the model writes none", async () => {
+    const { service, completeRunCalls } = createFakeAgentService();
+
+    await createAskOrchestrator(service, createModelProvider(askCall)).run(createRunInput());
+
+    expect(completeRunCalls[0].assistantContent).toBe(DEFAULT_ASK_USER_LEAD_IN);
+  });
+
+  it("can ask mid-build: stops the loop, skips synthesis, and still enriches the draft", async () => {
+    const { service, completeRunCalls, tasks } = createFakeAgentService();
+    service.getThread = async () =>
+      ({
+        messages: [{ role: "USER", content: "Plan Kyoto" }],
+        events: [
+          {
+            type: "tool.completed",
+            payload: {
+              name: "create_itinerary",
+              output: { itinerary: { id: "itinerary-1", days: [{ id: "day-1", dayNumber: 1, title: "Day 1", items: [] }] } }
+            }
+          }
+        ]
+      }) as any;
+    const onBeforeRunComplete = vi.fn(async () => {});
+    const provider = createModelProvider([
+      '{"tool": "record_agent_task", "label": "Drafting Kyoto", "status": "RUNNING"}',
+      `${askCall}\nDay 3 looks rainy, so one question first.`,
+      "SYNTHESIS SHOULD NOT RUN"
+    ]);
+
+    await createAskOrchestrator(service, provider, { onBeforeRunComplete }).run(createRunInput());
+
+    expect(tasks).toHaveLength(1);
+    expect(provider.calls).toHaveLength(2);
+    expect(completeRunCalls[0].assistantContent).toBe("Day 3 looks rainy, so one question first.");
+    expect(onBeforeRunComplete).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips tool calls that come after ask_user in the same reply", async () => {
+    const { service, tasks, completeRunCalls } = createFakeAgentService();
+    const provider = createModelProvider(
+      JSON.stringify({
+        assistantMessage: "Quick check first.",
+        toolCalls: [
+          { name: "ask_user", input: { questions: JSON.parse(askCall).questions } },
+          { name: "record_agent_task", input: { label: "Should not run", status: "RUNNING" } }
+        ]
+      })
+    );
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    expect(tasks).toHaveLength(0);
+    expect(completeRunCalls[0].assistantContent).toBe("Quick check first.");
+  });
+
+  it("lets the model fix an invalid ask_user call", async () => {
+    const { service, completeRunCalls } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "ask_user", "question": "Car or train?", "options": ["Car"]}',
+      `${askCall}\nTwo quick questions.`
+    ]);
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    expect(provider.calls[1].messages.at(-1)?.content).toContain("AGENT_TOOL_INPUT_INVALID");
+    expect(completeRunCalls[0].assistantContent).toBe("Two quick questions.");
+    expect(completeRunCalls[0].options.askUser.questions).toHaveLength(2);
+  });
+
+  it("shows the model what it asked and tells it to carry on after the answer", async () => {
+    const { service } = createFakeAgentService();
+    const askUser = normalizeAskUserInput(JSON.parse(askCall));
+    service.getThread = async () => ({
+      messages: [
+        { role: "USER", content: "Plan Kyoto" },
+        { role: "ASSISTANT", content: "A couple of details first.", metadata: { askUser } },
+        {
+          role: "USER",
+          content: "Transport: Public transit\nTrip length: 3 days",
+          metadata: { answers: { messageId: "message-2", items: [] } }
+        }
+      ]
+    });
+    const provider = createModelProvider("Thanks, drafting now.");
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    const messages = provider.calls[0].messages;
+    const asked = messages.find((message) => message.role === "assistant");
+    expect(asked?.content).toBe(
+      `${JSON.stringify({ tool: "ask_user", questions: askUser.questions.map(({ id, ...rest }) => rest) })}\nA couple of details first.`
+    );
+    expect(messages.at(-1)?.content).toContain(ASK_USER_RESUME_BLOCK);
+  });
+
+  it("does not add the resume hint to an ordinary message", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider("Hello.");
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    expect(provider.calls[0].messages.at(-1)?.content).not.toContain(ASK_USER_RESUME_BLOCK);
   });
 });
