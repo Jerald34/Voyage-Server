@@ -9,6 +9,7 @@ import {
   resolveAskUserAnswers
 } from "../src/modules/agent/askUser";
 import { DEFAULT_TOOL_CALL_MESSAGE, canonicalToolName } from "../src/modules/agent/agentParser";
+import { createAgentToolRegistry, createAskUserTool } from "../src/modules/agent/agentTools";
 
 const transport = {
   header: "Transport",
@@ -191,5 +192,25 @@ describe("resolveAskUserAnswers", () => {
       code: "ASK_USER_ANSWERS_INVALID",
       statusCode: 400
     });
+  });
+});
+
+describe("ask_user tool", () => {
+  const context = { agencyId: "agency-1", threadId: "thread-1", runId: "run-1", userId: "user-1" };
+
+  it("returns the normalized questions", async () => {
+    const registry = createAgentToolRegistry([createAskUserTool()]);
+
+    const output = await registry.execute("ask_user", context, { questions: [transport] });
+
+    expect(output).toEqual(normalizeAskUserInput({ questions: [transport] }));
+  });
+
+  it("reports bad input as AGENT_TOOL_INPUT_INVALID so the model can fix it", async () => {
+    const registry = createAgentToolRegistry([createAskUserTool()]);
+
+    await expect(
+      registry.execute("ask_user", context, { questions: [{ ...transport, options: [] }] })
+    ).rejects.toMatchObject({ code: "AGENT_TOOL_INPUT_INVALID", statusCode: 400 });
   });
 });
