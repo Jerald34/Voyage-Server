@@ -1314,6 +1314,22 @@ describe("ask_user replies", () => {
 
     expect((result.message.metadata as any).process.activeLabel).toMatch(/^Asked for your input · /);
   });
+
+  it("does not use the asked label when ask_user failed and the run ended without questions", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+    await service.recordRunEvent(run, { type: "tool.started", payload: { name: "ask_user", input: {} } });
+    await service.recordRunEvent(run, {
+      type: "tool.failed",
+      payload: { name: "ask_user", code: "AGENT_TOOL_INPUT_INVALID", message: "Invalid input" }
+    });
+
+    const result = await service.completeRun(run.id, "Here is your itinerary.");
+
+    expect((result.message.metadata as any).process.activeLabel).not.toMatch(/^Asked for your input/);
+  });
 });
 
 describe("answering ask_user questions", () => {

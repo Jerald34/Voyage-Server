@@ -752,7 +752,8 @@ export function createAgentOrchestrator(options: {
             travelerNeedsBlock,
             buildRunDateBlock(now()),
             weatherBlock,
-            continuationTaskBlock
+            continuationTaskBlock,
+            answeredQuestions ? ASK_USER_RESUME_BLOCK : ""
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
           const omittedToolResults = Math.max(0, toolResults.length - recentToolResults.length);

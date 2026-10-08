@@ -63,7 +63,11 @@ function humanizeToolName(name: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number | null): string {
+function summarizeTimeline(
+  timeline: ProcessTimelineEntry[],
+  durationMs: number | null,
+  endedWithQuestions = false
+): string {
   const durationStr =
     durationMs != null ? (durationMs / 1000).toFixed(1) + "s" : "-";
 
@@ -73,7 +77,8 @@ function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number 
     return `Thought for ${durationStr}`;
   }
 
-  if (toolEntries.some((e) => e.name === ASK_USER_TOOL_NAME)) {
+  // Only when the run really ended with questions; a failed ask_user call does not count.
+  if (endedWithQuestions && toolEntries.some((e) => e.name === ASK_USER_TOOL_NAME)) {
     return `Asked for your input · ${durationStr}`;
   }
 
@@ -97,7 +102,8 @@ function buildProcessSnapshot(
   runEvents: AgentRunEventRecord[],
   startedAt: Date | null,
   completedAt: Date,
-  tasks: AgentTaskRecord[] = []
+  tasks: AgentTaskRecord[] = [],
+  endedWithQuestions = false
 ): ProcessSnapshot | null {
   const timeline: ProcessTimelineEntry[] = [];
   let currentThoughtText: string | null = null;
@@ -173,7 +179,7 @@ function buildProcessSnapshot(
 
   return {
     status: "done",
-    activeLabel: summarizeTimeline(timeline, durationMs),
+    activeLabel: summarizeTimeline(timeline, durationMs, endedWithQuestions),
     timeline,
     tasks: tasksForSnapshot,
     durationMs,
@@ -538,7 +544,13 @@ export function createAgentService(options: {
         } catch {
           // best-effort
         }
-        processSnapshot = buildProcessSnapshot(runEvents, run.startedAt, completedAt, tasks);
+        processSnapshot = buildProcessSnapshot(
+          runEvents,
+          run.startedAt,
+          completedAt,
+          tasks,
+          Boolean(completion.askUser)
+        );
       } catch {
         // Best-effort: don't let snapshot failure block message persistence.
       }

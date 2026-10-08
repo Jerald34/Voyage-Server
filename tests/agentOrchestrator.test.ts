@@ -3160,6 +3160,73 @@ describe("ask_user", () => {
     expect(messages.at(-1)?.content).toContain(ASK_USER_RESUME_BLOCK);
   });
 
+  it("keeps the resume hint on continuation turns of an answering run", async () => {
+    const { service } = createFakeAgentService();
+    const askUser = normalizeAskUserInput(JSON.parse(askCall));
+    service.getThread = async () => ({
+      messages: [
+        { role: "USER", content: "Plan Kyoto" },
+        { role: "ASSISTANT", content: "A couple of details first.", metadata: { askUser } },
+        {
+          role: "USER",
+          content: "Transport: Public transit\nTrip length: 3 days",
+          metadata: { answers: { messageId: "message-2", items: [] } }
+        }
+      ]
+    });
+    const provider = createModelProvider([
+      '{"tool": "record_agent_task", "label": "Drafting Kyoto", "status": "RUNNING"}',
+      "Thanks, drafting now.",
+      "Thanks, drafting now."
+    ]);
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    expect(provider.calls.length).toBeGreaterThanOrEqual(2);
+    expect(provider.calls[0].messages.at(-1)?.content).toContain(ASK_USER_RESUME_BLOCK);
+    expect(provider.calls[1].messages.at(-1)?.content).toContain(ASK_USER_RESUME_BLOCK);
+  });
+
+  it("does not add the resume hint to an ordinary run's continuation turns", async () => {
+    const { service } = createFakeAgentService();
+    const provider = createModelProvider([
+      '{"tool": "record_agent_task", "label": "Drafting Kyoto", "status": "RUNNING"}',
+      "Done.",
+      "Done."
+    ]);
+
+    await createAskOrchestrator(service, provider).run(createRunInput());
+
+    expect(provider.calls.length).toBeGreaterThanOrEqual(2);
+    expect(provider.calls[1].messages.at(-1)?.content).not.toContain(ASK_USER_RESUME_BLOCK);
+  });
+
+  it("asks from a continuation turn after an itinerary tool ran: no synthesis, no further turn", async () => {
+    const { service, completeRunCalls, run } = createFakeAgentService();
+    const addItem = vi.fn(async () => ({ ok: true }));
+    const provider = createModelProvider([
+      '{"tool": "add_itinerary_item", "dayNumber": 1, "title": "Fushimi Inari"}',
+      `${askCall}\nDay 2 is open, one question first.`,
+      "SYNTHESIS SHOULD NOT RUN",
+      "NO FURTHER TURN"
+    ]);
+    const orchestrator = createAgentOrchestrator({
+      modelProvider: provider,
+      agentService: service,
+      availableToolNames: ["ask_user", "add_itinerary_item"],
+      toolRegistry: createAgentToolRegistry([createAskUserTool(), { name: "add_itinerary_item", execute: addItem }])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(addItem).toHaveBeenCalledTimes(1);
+    expect(provider.calls).toHaveLength(2);
+    expect(run.status).toBe("COMPLETED");
+    expect(completeRunCalls).toHaveLength(1);
+    expect(completeRunCalls[0].assistantContent).toBe("Day 2 is open, one question first.");
+    expect(completeRunCalls[0].options.askUser.questions).toHaveLength(2);
+  });
+
   it("does not add the resume hint to an ordinary message", async () => {
     const { service } = createFakeAgentService();
     const provider = createModelProvider("Hello.");
