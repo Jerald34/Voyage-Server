@@ -16,6 +16,7 @@ import {
 } from "./agentThreadTitler";
 import type {
   AgentRepository,
+  AgentMessageRecord,
   AgentRunRecord,
   AgentRunEventRecord,
   AgentToolCallInput,
@@ -27,7 +28,13 @@ import type {
   CompleteRunUsage,
   CompleteRunOptions
 } from "./agentTypes";
-import { ASK_USER_TOOL_NAME } from "./askUser";
+import {
+  ASK_USER_TOOL_NAME,
+  parseStoredAskUser,
+  questionNotPendingError,
+  resolveAskUserAnswers,
+  type AskUserAnswersInput
+} from "./askUser";
 import { createPrismaAgentRepository } from "./agentRepository";
 
 // ---------------------------------------------------------------------------
@@ -172,6 +179,14 @@ function buildProcessSnapshot(
     durationMs,
     defaultOpen: false
   };
+}
+
+/** The questions being answered must be an assistant reply in this thread that asked them. */
+function resolveAnswersForThread(messages: AgentMessageRecord[], answers: AskUserAnswersInput) {
+  const question = messages.find((message) => message.id === answers.messageId && message.role === "ASSISTANT");
+  const askUser = question ? parseStoredAskUser(question.metadata) : null;
+  if (!askUser) throw questionNotPendingError();
+  return resolveAskUserAnswers(askUser, answers);
 }
 
 const TERMINAL_RUN_STATUSES: AgentRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
@@ -348,17 +363,23 @@ export function createAgentService(options: {
       userId: string,
       content: string,
       imageUrls?: string[],
-      travelerNeeds?: TravelerNeeds
+      travelerNeeds?: TravelerNeeds,
+      answers?: AskUserAnswersInput
     ) {
-      const parsed = createMessageSchema.parse({ content, imageUrls, travelerNeeds });
-      await this.getThread(agencyId, threadId);
-      const metadata = parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : undefined;
+      const parsed = createMessageSchema.parse({ content, imageUrls, travelerNeeds, answers });
+      const thread = await this.getThread(agencyId, threadId);
+      const storedAnswers = parsed.answers ? resolveAnswersForThread(thread.messages, parsed.answers) : undefined;
+      const metadata = {
+        ...(parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : {}),
+        ...(storedAnswers ? { answers: storedAnswers } : {})
+      };
       const result = await options.repository.createUserMessageAndRun({
         agencyId,
         threadId,
         authorUserId: userId,
         content: parsed.content,
-        metadata,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        ...(storedAnswers ? { answersTo: storedAnswers.messageId } : {}),
         travelerNeeds: parsed.travelerNeeds,
         modelProvider,
         modelName

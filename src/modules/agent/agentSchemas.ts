@@ -9,6 +9,7 @@ import {
   uuidSchema
 } from "../../http/requestSchemas";
 import { travelerNeedsSchema } from "./travelerNeeds";
+import { askUserAnswersSchema } from "./askUser";
 
 export const createThreadSchema = z.object({
   title: optionalTextSchema(200),
@@ -18,7 +19,8 @@ export const createThreadSchema = z.object({
 export const createMessageSchema = z.object({
   content: z.preprocess((value) => (typeof value === "string" ? value.trim() : value), z.string().min(1).max(12000)),
   imageUrls: z.array(z.string().url()).max(3).optional(),
-  travelerNeeds: travelerNeedsSchema.optional()
+  travelerNeeds: travelerNeedsSchema.optional(),
+  answers: askUserAnswersSchema.optional()
 }).strict();
 
 const optionalNullableDateSchema = z.preprocess(

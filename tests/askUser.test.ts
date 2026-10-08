@@ -10,6 +10,7 @@ import {
 } from "../src/modules/agent/askUser";
 import { DEFAULT_TOOL_CALL_MESSAGE, canonicalToolName } from "../src/modules/agent/agentParser";
 import { createAgentToolRegistry, createAskUserTool } from "../src/modules/agent/agentTools";
+import { createMessageSchema } from "../src/modules/agent/agentSchemas";
 
 const transport = {
   header: "Transport",
@@ -212,5 +213,25 @@ describe("ask_user tool", () => {
     await expect(
       registry.execute("ask_user", context, { questions: [{ ...transport, options: [] }] })
     ).rejects.toMatchObject({ code: "AGENT_TOOL_INPUT_INVALID", statusCode: 400 });
+  });
+});
+
+describe("message schema answers", () => {
+  it("accepts answers on a new message", () => {
+    const parsed = createMessageSchema.parse({
+      content: "Transport: Walking",
+      answers: { messageId: "message-2", items: [{ questionId: "q1", selected: ["Walking"] }] }
+    });
+
+    expect(parsed.answers?.items[0].selected).toEqual(["Walking"]);
+  });
+
+  it("rejects unknown keys inside an answer", () => {
+    expect(() =>
+      createMessageSchema.parse({
+        content: "Transport: Walking",
+        answers: { messageId: "message-2", items: [{ questionId: "q1", selected: [], header: "Transport" }] }
+      })
+    ).toThrow();
   });
 });

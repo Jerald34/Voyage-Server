@@ -2,6 +2,7 @@ import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { hasTravelerNeeds } from "./travelerNeeds";
+import { questionNotPendingError } from "./askUser";
 import type {
   AgentRepository,
   AgentThreadRecord,
@@ -362,6 +363,20 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
 
     async createUserMessageAndRun(data) {
       return client.$transaction(async (tx) => {
+        if (data.answersTo) {
+          // One answer per question: serialize answers on this thread and accept one
+          // only while its question is still the newest chat message. Without this a
+          // second tab could answer the same question and start a second run.
+          await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtext(${`answers:${data.threadId}`})::bigint)`;
+          const latest = await tx.agentMessage.findFirst({
+            where: { threadId: data.threadId, role: { in: ["USER", "ASSISTANT"] } },
+            orderBy: { createdAt: "desc" },
+            select: { id: true }
+          });
+          if (latest?.id !== data.answersTo) {
+            throw questionNotPendingError();
+          }
+        }
         if (data.travelerNeeds !== undefined) {
           // Needs travel with the message that set them, in the same transaction,
           // so the run that starts next reads them from the thread.

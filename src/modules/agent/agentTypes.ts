@@ -262,6 +262,8 @@ export interface AgentRepository {
     authorUserId: string;
     content: string;
     metadata?: unknown;
+    /** Id of the assistant reply whose questions this message answers. */
+    answersTo?: string;
     travelerNeeds?: TravelerNeeds;
     modelProvider: string;
     modelName: string;
