@@ -15,6 +15,7 @@ import {
   type AgentThreadRecord
 } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
+import { normalizeAskUserInput } from "../src/modules/agent/askUser";
 
 function createMemoryRepository(): AgentRepository & {
   threads: AgentThreadRecord[];
@@ -438,21 +439,24 @@ function createMemoryRepository(): AgentRepository & {
       run.status = "COMPLETED";
       run.completedAt = data.completedAt;
       run.updatedAt = data.completedAt;
+      const metadata = {
+        ...(data.processSnapshot != null ? { process: data.processSnapshot } : {}),
+        ...(data.askUser ? { askUser: data.askUser } : {})
+      };
       const message = await this.createMessage({
         threadId: run.threadId,
         runId: run.id,
         role: "ASSISTANT",
         content: data.assistantContent,
-        metadata: data.processSnapshot != null ? { process: data.processSnapshot } : null
+        metadata: Object.keys(metadata).length > 0 ? metadata : null
       });
-      const processPayload = data.processSnapshot != null ? { process: data.processSnapshot } : {};
       const completedEvents: AgentRunEventRecord[] = [
         {
           id: `event-${events.length + 1}`,
           runId: run.id,
           threadId: run.threadId,
           type: "message.completed",
-          payload: { messageId: message.id, content: data.assistantContent, ...processPayload },
+          payload: { messageId: message.id, content: data.assistantContent, ...metadata },
           sequence: events.filter((event) => event.runId === run.id).length + 1,
           createdAt: now
         },
@@ -1264,6 +1268,42 @@ describe("saveItineraryThread — status transitions", () => {
       code: "THREAD_ALREADY_BOUND",
       statusCode: 409
     } satisfies Partial<ApiError>);
+  });
+});
+
+describe("ask_user replies", () => {
+  const askUser = normalizeAskUserInput({
+    questions: [
+      { header: "Transport", question: "How will the travelers get around?", options: ["Private car", "Public transit"] }
+    ]
+  });
+
+  it("stores the questions on the reply and sends them with message.completed", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+
+    const result = await service.completeRun(run.id, "A couple of details first.", undefined, { askUser });
+
+    expect(result.message).toMatchObject({ content: "A couple of details first.", metadata: { askUser } });
+    expect(repository.events.find((event) => event.type === "message.completed")?.payload).toMatchObject({
+      content: "A couple of details first.",
+      askUser
+    });
+  });
+
+  it("summarizes a run that asked as asking for input", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+    await service.recordRunEvent(run, { type: "tool.started", payload: { name: "ask_user", input: {} } });
+    await service.recordRunEvent(run, { type: "tool.completed", payload: { name: "ask_user", output: askUser } });
+
+    const result = await service.completeRun(run.id, "A couple of details first.", undefined, { askUser });
+
+    expect((result.message.metadata as any).process.activeLabel).toMatch(/^Asked for your input · /);
   });
 });
 

@@ -1,6 +1,7 @@
 import type { AgentEvent } from "./agentSchemas";
 import type { UsageSummary } from "./agentRunUsage";
 import type { TravelerNeeds } from "./travelerNeeds";
+import type { AskUserPayload } from "./askUser";
 
 export interface CompleteRunUsage {
   promptTokens: number;
@@ -192,11 +193,19 @@ export type AgentOrchestrator = {
   toolRegistry: AgentToolRegistry;
 };
 
+export type CompleteRunOptions = {
+  /** Questions the run ended with; stored on the reply as `metadata.askUser`. */
+  askUser?: AskUserPayload;
+};
+
 export type AgentOrchestratorAgentService = {
   getThread(
     agencyId: string | null,
     threadId: string
-  ): Promise<{ messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string }>; travelerNeeds?: unknown }>;
+  ): Promise<{
+    messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string; metadata?: unknown }>;
+    travelerNeeds?: unknown;
+  }>;
   startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
   recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<AgentRunEventRecord>;
   recordToolCallStarted(
@@ -209,7 +218,8 @@ export type AgentOrchestratorAgentService = {
   completeRun(
     runId: string,
     assistantContent: string,
-    usage?: CompleteRunUsage
+    usage?: CompleteRunUsage,
+    options?: CompleteRunOptions
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] }>;
   failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
   listOpenTasksForThread(threadId: string): Promise<Array<{ id: string; label: string; status: string }>>;
@@ -314,6 +324,7 @@ export interface AgentRepository {
       completedAt: Date;
       processSnapshot?: Record<string, unknown>;
       usage?: CompleteRunUsage;
+      askUser?: AskUserPayload;
     }
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] } | null>;
   failRunIfOpen(

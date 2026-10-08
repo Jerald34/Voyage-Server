@@ -651,15 +651,17 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           return null;
         }
 
+        const metadata = {
+          ...(data.processSnapshot != null ? { process: data.processSnapshot } : {}),
+          ...(data.askUser ? { askUser: data.askUser } : {})
+        };
         const message = (await tx.agentMessage.create({
           data: {
             threadId: run.threadId,
             runId: run.id,
             role: "ASSISTANT",
             content: data.assistantContent,
-            ...(data.processSnapshot != null
-              ? { metadata: toJsonInput({ process: data.processSnapshot }) }
-              : {})
+            ...(Object.keys(metadata).length > 0 ? { metadata: toJsonInput(metadata) } : {})
           }
         })) as AgentMessageRecord;
 
@@ -674,7 +676,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
               payload: toJsonInput({
                 messageId: message.id,
                 content: data.assistantContent,
-                ...(data.processSnapshot != null ? { process: data.processSnapshot } : {})
+                ...metadata
               }) as Prisma.InputJsonValue
             }
           })) as AgentRunEventRecord,

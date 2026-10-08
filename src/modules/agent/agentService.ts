@@ -24,8 +24,10 @@ import type {
   AgentTaskRecord,
   AgentSourceInput,
   AgentRunStatus,
-  CompleteRunUsage
+  CompleteRunUsage,
+  CompleteRunOptions
 } from "./agentTypes";
+import { ASK_USER_TOOL_NAME } from "./askUser";
 import { createPrismaAgentRepository } from "./agentRepository";
 
 // ---------------------------------------------------------------------------
@@ -62,6 +64,10 @@ function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number 
 
   if (toolEntries.length === 0) {
     return `Thought for ${durationStr}`;
+  }
+
+  if (toolEntries.some((e) => e.name === ASK_USER_TOOL_NAME)) {
+    return `Asked for your input · ${durationStr}`;
   }
 
   const hasMapPinpoint = toolEntries.some((e) => e.name === "map_pinpoint");
@@ -490,7 +496,12 @@ export function createAgentService(options: {
       return created;
     },
 
-    async completeRun(runId: string, assistantContent: string, usage?: CompleteRunUsage) {
+    async completeRun(
+      runId: string,
+      assistantContent: string,
+      usage?: CompleteRunUsage,
+      completion: CompleteRunOptions = {}
+    ) {
       agentLogger.agentResponse(runId, assistantContent);
       const run = await getRun(runId);
       assertRunOpen(run);
@@ -515,7 +526,8 @@ export function createAgentService(options: {
         assistantContent,
         completedAt,
         processSnapshot: processSnapshot ?? undefined,
-        usage
+        usage,
+        askUser: completion.askUser
       });
       if (!completed) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
