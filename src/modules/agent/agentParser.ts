@@ -22,6 +22,9 @@ export type ParsedModelOutput =
     toolCalls: Array<{ name: string; input: Record<string, unknown> }>;
   };
 
+/** What the parser says for a tool call that came with no text of its own. */
+export const DEFAULT_TOOL_CALL_MESSAGE = "Working on that now.";
+
 export function canonicalToolName(name: string) {
   const normalized = name.trim().toLowerCase().replace(/[\s\-]+/g, "_");
   const aliases: Record<string, string> = {
@@ -53,7 +56,11 @@ export function canonicalToolName(name: string) {
     getweatherforecast: "weather_forecast",
     map_pinpoint_tool: "map_pinpoint",
     route_logistics_tool: "route_logistics",
-    place_insights_tool: "place_insights"
+    place_insights_tool: "place_insights",
+    askuser: "ask_user",
+    askuserquestion: "ask_user",
+    ask_user_question: "ask_user",
+    ask_question: "ask_user"
   };
   return aliases[normalized] ?? normalized;
 }
@@ -214,7 +221,7 @@ function parseXmlToolCallOutput(content: string): ParsedModelOutput | null {
     return null;
   }
 
-  const assistantMessage = content.slice(0, match.index).trim() || "Working on that now.";
+  const assistantMessage = content.slice(0, match.index).trim() || DEFAULT_TOOL_CALL_MESSAGE;
   return {
     type: "json",
     assistantMessage,
@@ -267,7 +274,7 @@ function parseToolCallTagOutput(content: string): ParsedModelOutput | null {
       ? (parsedInput.input as Record<string, unknown>)
       : parsedInput;
 
-  const assistantMessage = trimmed.slice(0, callPrefixMatch.index).trim() || "Working on that now.";
+  const assistantMessage = trimmed.slice(0, callPrefixMatch.index).trim() || DEFAULT_TOOL_CALL_MESSAGE;
 
   return {
     type: "json",
@@ -365,7 +372,7 @@ function parseFlatToolCallJson(content: string): ParsedModelOutput | null {
   const jsonStart = content.indexOf(jsonText);
   const textBefore = content.slice(0, jsonStart).replace(/```json\s*/g, "").replace(/```/g, "").trim();
   const textAfter = content.slice(jsonStart + jsonText.length).replace(/```/g, "").trim();
-  const assistantMessage = [textBefore, textAfter].filter(Boolean).join("\n\n") || "Working on that now.";
+  const assistantMessage = [textBefore, textAfter].filter(Boolean).join("\n\n") || DEFAULT_TOOL_CALL_MESSAGE;
 
   console.log(`[Agent] Recovered flat JSON tool call: ${toolName}`, { toolInput, assistantMessage });
 
@@ -418,7 +425,7 @@ export function parseModelOutput(content: string): ParsedModelOutput {
     console.log(`[Agent] Detected Standard JSON output with ${parsed.toolCalls.length} tool calls`);
     return {
       type: "json" as const,
-      assistantMessage: parsed.assistantMessage ?? "Working on that now.",
+      assistantMessage: parsed.assistantMessage ?? DEFAULT_TOOL_CALL_MESSAGE,
       toolCalls: parsed.toolCalls
     };
   } catch (error) {

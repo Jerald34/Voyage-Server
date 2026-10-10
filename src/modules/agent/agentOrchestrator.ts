@@ -14,6 +14,14 @@ import {
   weatherLocationKey
 } from "./weatherContextBlock";
 import { overlayPlaceAdvisories } from "../itineraries/savedPlaceAdvisories";
+import {
+  ASK_USER_RESUME_BLOCK,
+  ASK_USER_TOOL_NAME,
+  askUserLeadIn,
+  assistantHistoryContent,
+  hasAskUserAnswers,
+  type AskUserPayload
+} from "./askUser";
 import type {
   AgentOrchestrator,
   AgentOrchestratorRunInput,
@@ -146,13 +154,18 @@ export function createAgentOrchestrator(options: {
   async function streamAndComplete(
     run: AgentRunRecord,
     assistantMessage: string,
-    usageSummary: ReturnType<ReturnType<typeof createUsageAccumulator>["summary"]>
+    usageSummary: ReturnType<ReturnType<typeof createUsageAccumulator>["summary"]>,
+    askUser?: AskUserPayload
   ) {
     await options.agentService.recordRunEvent(run, {
       type: "message.delta",
       payload: { delta: assistantMessage }
     });
-    await options.agentService.completeRun(run.id, assistantMessage, usageSummary);
+    if (askUser) {
+      await options.agentService.completeRun(run.id, assistantMessage, usageSummary, { askUser });
+    } else {
+      await options.agentService.completeRun(run.id, assistantMessage, usageSummary);
+    }
   }
 
   return {
@@ -179,6 +192,8 @@ export function createAgentOrchestrator(options: {
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
         // Per-thread traveler needs, formatted once per run for the runtime context.
         let travelerNeedsBlock = "";
+        // True when the triggering message answers ask_user questions.
+        let answeredQuestions = false;
         // One session per run, created after the run's agency is established. A
         // failure here must not fail the run: without a session, tools simply
         // perform no place checks, which is the pre-feature behavior.
@@ -250,18 +265,29 @@ export function createAgentOrchestrator(options: {
           }
         }
 
+        /** Photos and ratings land in the DB before the client re-fetches on completion. */
+        async function enrichBeforeComplete() {
+          if (activeItineraryContext?.itinerary && options.onBeforeRunComplete) {
+            try { await options.onBeforeRunComplete(activeItineraryContext.itinerary); } catch { /* best-effort */ }
+          }
+        }
+
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
           activeItineraryContext = await refreshActiveItinerary(buildActiveItineraryContext(thread));
           travelerNeedsBlock = buildTravelerNeedsBlock(parseStoredTravelerNeeds(thread.travelerNeeds));
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
+          // The newest user message triggered this run; if it answers ask_user
+          // questions, the agent is told to carry on with the work it paused.
+          const triggerMessage = [...recentMessages].reverse().find((message: any) => message.role === "USER");
+          answeredQuestions = hasAskUserAnswers(triggerMessage?.metadata);
           conversationHistory = recentMessages
             .map((message: any) => {
               if (message.role === "USER") {
                 return { role: "user" as const, content: message.content };
               }
               if (message.role === "ASSISTANT") {
-                return { role: "assistant" as const, content: message.content };
+                return { role: "assistant" as const, content: assistantHistoryContent(message.content, message.metadata) };
               }
               return { role: "system" as const, content: message.content };
             })
@@ -318,7 +344,8 @@ export function createAgentOrchestrator(options: {
             buildRuntimeContextBlock(activeItineraryContext, await currentPlaceAdvisoryBlock()),
             travelerNeedsBlock,
             buildRunDateBlock(now()),
-            taskBlock
+            taskBlock,
+            answeredQuestions ? ASK_USER_RESUME_BLOCK : ""
           ].filter(Boolean).join("\n\n---\n\n");
           // Inject first, then attach images, so an image message's text part
           // carries the runtime context (Vertex sends only `parts`).
@@ -455,6 +482,8 @@ export function createAgentOrchestrator(options: {
         let unknownToolFailures = 0;
         // Set when the tool loop must end now and go straight to synthesis.
         let stopToolLoop = false;
+        // Set when the agent calls ask_user: the run ends with these questions as its reply.
+        const asked: { payload: AskUserPayload | null; leadIn: string } = { payload: null, leadIn: "" };
         const toolResults: Array<{ name: string; output: unknown }> = [];
         // Recent usable weather_forecast results, one per place (oldest first), rendered
         // compactly. The raw results scroll out of the continuation tail after a plan and
@@ -568,6 +597,12 @@ export function createAgentOrchestrator(options: {
                   payload: { name: toolCall.name, output }
                 })
               ]);
+              if (toolCall.name === ASK_USER_TOOL_NAME) {
+                // Asking ends the turn: later calls in this reply are skipped and the loop stops.
+                asked.payload = output as AskUserPayload;
+                stopToolLoop = true;
+                return;
+              }
             } catch (error) {
               agentLogger.error(`Tool Execution Failed: ${toolCall.name}`, input.runId, error);
               const details = errorDetails(error);
@@ -659,6 +694,9 @@ export function createAgentOrchestrator(options: {
           await failRun(input, error);
           return;
         }
+        if (asked.payload) {
+          asked.leadIn = askUserLeadIn(parsedOutput.assistantMessage);
+        }
 
         // Approach B continuation loop: when the agent invoked an itinerary-building tool, give it more turns
         // so it can keep streaming items left-to-right (plan_itinerary -> add_itinerary_item x N -> ...).
@@ -714,7 +752,8 @@ export function createAgentOrchestrator(options: {
             travelerNeedsBlock,
             buildRunDateBlock(now()),
             weatherBlock,
-            continuationTaskBlock
+            continuationTaskBlock,
+            answeredQuestions ? ASK_USER_RESUME_BLOCK : ""
           ].filter(Boolean).join("\n\n---\n\n");
           const recentToolResults = toolResults.slice(-CONTINUATION_TOOL_RESULTS_TAIL);
           const omittedToolResults = Math.max(0, toolResults.length - recentToolResults.length);
@@ -825,6 +864,10 @@ export function createAgentOrchestrator(options: {
             await failRun(input, error);
             return;
           }
+          if (asked.payload) {
+            asked.leadIn = askUserLeadIn(nextParsed.assistantMessage);
+            break;
+          }
           lastInvokedItineraryTool = nextParsed.toolCalls.some((c: { name: string }) =>
             GRANULAR_ITINERARY_TOOL_NAMES.has(c.name)
           );
@@ -836,6 +879,13 @@ export function createAgentOrchestrator(options: {
 
         // Update the assistantMessage seed used by synthesis to the last continuation if we ran one.
         parsedOutput = { ...parsedOutput, assistantMessage: lastAssistantMessage };
+
+        if (asked.payload) {
+          // The questions are the reply, so there is no synthesis pass.
+          await enrichBeforeComplete();
+          await streamAndComplete(run, asked.leadIn, usage.summary(), asked.payload);
+          return;
+        }
 
         if (toolResults.length === 0) {
           await streamAndComplete(run, parsedOutput.assistantMessage, usage.summary());
@@ -942,9 +992,7 @@ export function createAgentOrchestrator(options: {
         }
         // Enrich PlaceSnapshots (photos, ratings) BEFORE completing the run
         // so the client's post-completion re-fetch gets fully populated data.
-        if (activeItineraryContext?.itinerary && options.onBeforeRunComplete) {
-          try { await options.onBeforeRunComplete(activeItineraryContext.itinerary); } catch { /* best-effort */ }
-        }
+        await enrichBeforeComplete();
 
         await options.agentService.completeRun(run.id, synthesizedMessage, usage.summary());
 

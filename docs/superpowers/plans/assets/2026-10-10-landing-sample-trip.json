@@ -1,0 +1,463 @@
+{
+  "_source": "Real Voyage output: the agent-planned \"2-Day Baguio Itinerary\" (Lakbay agency) and its Open-Meteo forecast, exported 2026-10-10 in the public share-page shape. Edits: staff-only fields dropped; raw Google place types (Premise, Route, Sublocality Level 2) cleared on 3 stops. Day 1 has no weather because its date had passed at export.",
+  "brand": {
+    "type": "agency",
+    "name": "Lakbay",
+    "logoUrl": null
+  },
+  "trip": {
+    "title": "2-Day Baguio Itinerary",
+    "startDate": "2026-10-09",
+    "endDate": "2026-10-10",
+    "travelerCount": null
+  },
+  "itinerary": {
+    "id": "72f0e7a4-bd5a-499a-a978-2b61b4cb49e2",
+    "title": "2-Day Baguio Itinerary",
+    "summary": "A relaxed 2-day trip to Baguio, focusing on indoor and covered attractions due to expected rain, with travel by private car.",
+    "version": 1,
+    "days": [
+      {
+        "id": "1559bcfa-4519-4322-84cb-4bdf50aea570",
+        "dayNumber": 1,
+        "date": "2026-10-09T00:00:00.000Z",
+        "title": "City Exploration & Art",
+        "summary": "Explore Baguio's city center and enjoy some art, keeping the afternoon drizzle in mind.",
+        "items": [
+          {
+            "id": "39ce15f8-ebcc-4623-b471-a543d9c89931",
+            "sortOrder": 1,
+            "type": "ACTIVITY",
+            "title": "Baguio Botanical Garden",
+            "description": null,
+            "startTime": "09:00",
+            "endTime": "10:00",
+            "clientNotes": "Enjoy a leisurely stroll before the afternoon drizzle.",
+            "placeSnapshot": {
+              "id": "6cfe07b6-99d2-43b5-8530-21519775982d",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJJ3IMHFShkTMR0mgoul-AOmc",
+              "name": "Baguio Botanical Garden",
+              "formattedAddress": "37 Leonard Wood Rd, Baguio, 2600 Benguet, Philippines",
+              "latitude": 16.4150118,
+              "longitude": 120.61290640000001,
+              "rating": 4.5,
+              "websiteUrl": null,
+              "phoneNumber": null,
+              "businessStatus": "OPERATIONAL",
+              "businessStatusCheckedAt": "2026-10-08T15:39:24.329Z",
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475421/voyage/place-photos/ChIJJ3IMHFShkTMR0mgoul-AOmc.jpg"
+                ],
+                "googleTypes": [
+                  "botanical_garden",
+                  "tourist_attraction",
+                  "park",
+                  "point_of_interest",
+                  "establishment"
+                ],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:39:24.469Z",
+                  "wheelchairAccessibleParking": true,
+                  "wheelchairAccessibleEntrance": true,
+                  "wheelchairAccessibleRestroom": true
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475421/voyage/place-photos/ChIJJ3IMHFShkTMR0mgoul-AOmc.jpg",
+                "userRatingCount": 8362
+              }
+            }
+          },
+          {
+            "id": "984a37dd-7733-40f9-8340-504af7c94db9",
+            "sortOrder": 2,
+            "type": "ACTIVITY",
+            "title": "The Mansion",
+            "description": null,
+            "startTime": "10:15",
+            "endTime": "11:00",
+            "clientNotes": "A brief stop at the official summer residence of the President of the Philippines.",
+            "placeSnapshot": {
+              "id": "55aee6c5-a4b4-495b-9707-4a4a05562f77",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJobXs6qymkTMRluHL5rcRpeM",
+              "name": "The Mansion",
+              "formattedAddress": "The Mansion, Romulo Dr, Baguio, Benguet, Philippines",
+              "latitude": 16.4123678,
+              "longitude": 120.62147270000001,
+              "rating": null,
+              "websiteUrl": null,
+              "phoneNumber": null,
+              "businessStatus": null,
+              "businessStatusCheckedAt": null,
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475421/voyage/place-photos/ChIJobXs6qymkTMRluHL5rcRpeM.jpg"
+                ],
+                "googleTypes": [],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:41:49.819Z"
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475421/voyage/place-photos/ChIJobXs6qymkTMRluHL5rcRpeM.jpg",
+                "userRatingCount": null
+              }
+            }
+          },
+          {
+            "id": "86b85150-74e0-425c-ad7d-24f2281379c9",
+            "sortOrder": 3,
+            "type": "MEAL",
+            "title": "Lunch at Cafe by the Ruins",
+            "description": null,
+            "startTime": "12:00",
+            "endTime": "13:00",
+            "clientNotes": "Enjoy a delicious lunch at this iconic Baguio restaurant.",
+            "placeSnapshot": {
+              "id": "a62a8b14-4c72-4e57-88a6-ee9ea9fcdd51",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJQcYyqWihkTMRfwVT1rfW_gc",
+              "name": "Café by the Ruins",
+              "formattedAddress": "25 Shuntug Rd, Baguio, Benguet, Philippines",
+              "latitude": 16.4129239,
+              "longitude": 120.5916486,
+              "rating": 4.1,
+              "websiteUrl": "https://www.facebook.com/cafebytheruinsph",
+              "phoneNumber": "(074) 442 4010",
+              "businessStatus": "OPERATIONAL",
+              "businessStatusCheckedAt": "2026-10-08T15:39:56.230Z",
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1779679768/voyage/place-photos/ChIJQcYyqWihkTMRfwVT1rfW_gc.jpg"
+                ],
+                "googleTypes": [
+                  "asian_fusion_restaurant",
+                  "fusion_restaurant",
+                  "asian_restaurant",
+                  "bakery",
+                  "coffee_shop",
+                  "cafe",
+                  "food_store",
+                  "restaurant",
+                  "food",
+                  "point_of_interest",
+                  "store",
+                  "establishment"
+                ],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:39:56.335Z",
+                  "wheelchairAccessibleSeating": true,
+                  "wheelchairAccessibleEntrance": true,
+                  "wheelchairAccessibleRestroom": true
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779679768/voyage/place-photos/ChIJQcYyqWihkTMRfwVT1rfW_gc.jpg",
+                "userRatingCount": 2245
+              }
+            }
+          },
+          {
+            "id": "9ab15f21-fc3b-4e38-bbdc-53cf572b86b3",
+            "sortOrder": 4,
+            "type": "ACTIVITY",
+            "title": "Baguio Museum",
+            "description": null,
+            "startTime": "13:30",
+            "endTime": "14:30",
+            "clientNotes": "Discover the rich history and culture of the Cordillera region.",
+            "placeSnapshot": {
+              "id": "57629a1f-692d-4b42-aa76-5a1bc671cc71",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJ-Z4cIEKhkTMRAkDMgmqq3UQ",
+              "name": "Baguio Museum",
+              "formattedAddress": "Dot-PTA Complex, Gov. Pack Rd, Baguio, 2600 Benguet, Philippines",
+              "latitude": 16.4070408,
+              "longitude": 120.59843810000001,
+              "rating": 4.3,
+              "websiteUrl": null,
+              "phoneNumber": "(063) 444 7451",
+              "businessStatus": "OPERATIONAL",
+              "businessStatusCheckedAt": "2026-10-08T15:40:05.861Z",
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1791270810/voyage/place-photos/ChIJ-Z4cIEKhkTMRAkDMgmqq3UQ.jpg"
+                ],
+                "googleTypes": [
+                  "art_museum",
+                  "tourist_attraction",
+                  "museum",
+                  "point_of_interest",
+                  "establishment"
+                ],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:40:06.124Z",
+                  "wheelchairAccessibleEntrance": false,
+                  "wheelchairAccessibleRestroom": true
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1791270810/voyage/place-photos/ChIJ-Z4cIEKhkTMRAkDMgmqq3UQ.jpg",
+                "userRatingCount": 594
+              }
+            }
+          },
+          {
+            "id": "db6f1974-32b1-4d9e-ae08-b2d1d4e36cb2",
+            "sortOrder": 5,
+            "type": "ACTIVITY",
+            "title": "Explore Session Road",
+            "description": null,
+            "startTime": "15:00",
+            "endTime": "16:30",
+            "clientNotes": "Take a leisurely stroll along Baguio's main commercial street, with options for shopping and coffee.",
+            "placeSnapshot": {
+              "id": "1bc925b2-3397-4ab0-8bba-8a30c406b284",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJVXnY3EKhkTMRtk1WbiYlVpY",
+              "name": "Session Road",
+              "formattedAddress": "Session Rd, Salud Mitra, Baguio, Benguet, Philippines",
+              "latitude": 16.4107412,
+              "longitude": 120.5994532,
+              "rating": null,
+              "websiteUrl": null,
+              "phoneNumber": null,
+              "businessStatus": null,
+              "businessStatusCheckedAt": null,
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475423/voyage/place-photos/ChIJVXnY3EKhkTMRtk1WbiYlVpY.jpg"
+                ],
+                "googleTypes": [],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:41:49.451Z"
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475423/voyage/place-photos/ChIJVXnY3EKhkTMRtk1WbiYlVpY.jpg",
+                "userRatingCount": null
+              }
+            }
+          }
+        ]
+      },
+      {
+        "id": "b723ded7-5dc3-41a9-b01c-d67e6ce3d943",
+        "dayNumber": 2,
+        "date": "2026-10-10T00:00:00.000Z",
+        "title": "Views & Shopping",
+        "summary": "Take in scenic views and enjoy indoor activities, especially during the afternoon thunderstorms.",
+        "items": [
+          {
+            "id": "f4c5ca44-8cf2-4b94-af7c-e4cb4a83528d",
+            "sortOrder": 1,
+            "type": "ACTIVITY",
+            "title": "Mines View Park",
+            "description": null,
+            "startTime": "09:00",
+            "endTime": "10:00",
+            "clientNotes": "Enjoy panoramic views of the Cordillera mountains.",
+            "placeSnapshot": {
+              "id": "721eaf78-c704-48ef-8814-b01c870c5cf7",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJT8QveAOkkTMRsukWY41vhig",
+              "name": "Mines View Park",
+              "formattedAddress": "Mines View Park, Baguio, Benguet, Philippines",
+              "latitude": 16.4216262,
+              "longitude": 120.63005670000001,
+              "rating": null,
+              "websiteUrl": null,
+              "phoneNumber": null,
+              "businessStatus": null,
+              "businessStatusCheckedAt": null,
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "\"https://res.cloudinary.com/dseh3ykul/image/upload/v1779475422/voyage/place-photos/ChIJT8QveAOkkTMRsukWY41vhig.jpg\""
+                ],
+                "googleTypes": [],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:41:49.440Z"
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475422/voyage/place-photos/ChIJT8QveAOkkTMRsukWY41vhig.jpg",
+                "userRatingCount": null
+              }
+            }
+          },
+          {
+            "id": "e6dbd110-4d92-4a38-ad00-416eeb0ad9aa",
+            "sortOrder": 2,
+            "type": "ACTIVITY",
+            "title": "Good Shepherd Convent",
+            "description": null,
+            "startTime": "10:15",
+            "endTime": "11:00",
+            "clientNotes": "Visit for their famous ube jam and other local delicacies.",
+            "placeSnapshot": null
+          },
+          {
+            "id": "db8aca59-7aa3-4256-80c4-88b19703ba21",
+            "sortOrder": 3,
+            "type": "MEAL",
+            "title": "Lunch at Oh My Gulay!",
+            "description": null,
+            "startTime": "12:00",
+            "endTime": "13:00",
+            "clientNotes": "Enjoy a unique vegetarian meal in an art-filled, indoor setting.",
+            "placeSnapshot": {
+              "id": "7bac37da-e1a2-44c5-a51a-a5ed1ccabc35",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJl8-xsEKhkTMR4gCFVQq27DI",
+              "name": "Oh My Gulay",
+              "formattedAddress": "5th floor, 108 Session Rd, Baguio, 2600 Benguet, Philippines",
+              "latitude": 16.4117572,
+              "longitude": 120.5981474,
+              "rating": 4.4,
+              "websiteUrl": "https://www.facebook.com/OhMyGulayArtistCafeBaguio/",
+              "phoneNumber": "0939 912 7266",
+              "businessStatus": "OPERATIONAL",
+              "businessStatusCheckedAt": "2026-10-08T15:41:19.332Z",
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1779516073/voyage/place-photos/ChIJl8-xsEKhkTMR4gCFVQq27DI.jpg"
+                ],
+                "googleTypes": [
+                  "restaurant",
+                  "food",
+                  "point_of_interest",
+                  "establishment"
+                ],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:41:19.455Z",
+                  "wheelchairAccessibleParking": false,
+                  "wheelchairAccessibleSeating": false,
+                  "wheelchairAccessibleEntrance": false
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779516073/voyage/place-photos/ChIJl8-xsEKhkTMR4gCFVQq27DI.jpg",
+                "userRatingCount": 1049
+              }
+            }
+          },
+          {
+            "id": "1b7a0b40-662d-4bca-9d8c-93baca09736c",
+            "sortOrder": 4,
+            "type": "ACTIVITY",
+            "title": "SM City Baguio",
+            "description": null,
+            "startTime": "13:30",
+            "endTime": "15:00",
+            "clientNotes": "Enjoy some indoor shopping or catch a movie at the mall.",
+            "placeSnapshot": {
+              "id": "4a25231f-35a8-4564-b6ed-72fcb89da600",
+              "provider": "GOOGLE_MAPS",
+              "providerPlaceId": "ChIJd5wuUEKhkTMR2M1ll8O2f1U",
+              "name": "SM City Baguio",
+              "formattedAddress": "Luneta Hill, Upper Session Rd, Baguio, Benguet, Philippines",
+              "latitude": 16.4088516,
+              "longitude": 120.5998022,
+              "rating": 4.4,
+              "websiteUrl": "https://www.smsupermalls.com/mall-directory/sm-city-baguio/information/?utm_source=GMB&utm_medium=directory&utm_campaign=mall_hours",
+              "phoneNumber": null,
+              "businessStatus": "OPERATIONAL",
+              "businessStatusCheckedAt": "2026-10-08T15:41:25.603Z",
+              "metadata": {
+                "types": [],
+                "photoUrls": [
+                  "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475424/voyage/place-photos/ChIJd5wuUEKhkTMR2M1ll8O2f1U.jpg"
+                ],
+                "googleTypes": [
+                  "shopping_mall",
+                  "point_of_interest",
+                  "establishment"
+                ],
+                "accessibility": {
+                  "source": "GOOGLE_PLACES",
+                  "checkedAt": "2026-10-08T15:41:26.066Z",
+                  "wheelchairAccessibleParking": true,
+                  "wheelchairAccessibleEntrance": true,
+                  "wheelchairAccessibleRestroom": true
+                },
+                "primaryPhotoUrl": "https://res.cloudinary.com/dseh3ykul/image/upload/v1779475424/voyage/place-photos/ChIJd5wuUEKhkTMR2M1ll8O2f1U.jpg",
+                "userRatingCount": 16060
+              }
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "weather": {
+    "provider": "open-meteo",
+    "attribution": {
+      "text": "Weather data by Open-Meteo.com",
+      "url": "https://open-meteo.com/"
+    },
+    "days": [
+      {
+        "dayId": "1559bcfa-4519-4322-84cb-4bdf50aea570",
+        "dayNumber": 1,
+        "date": "2026-10-09",
+        "status": "PAST",
+        "weather": null
+      },
+      {
+        "dayId": "b723ded7-5dc3-41a9-b01c-d67e6ce3d943",
+        "dayNumber": 2,
+        "date": "2026-10-10",
+        "status": "OK",
+        "weather": {
+          "date": "2026-10-10",
+          "kind": "FORECAST",
+          "condition": "RAIN",
+          "weatherCode": 80,
+          "temperatureMaxC": 25.6,
+          "temperatureMinC": 15.7,
+          "precipitationProbabilityPct": 100,
+          "precipitationMm": 3.7,
+          "windSpeedMaxKph": 4.8,
+          "uvIndexMax": 7.85,
+          "sampleYears": null,
+          "wetYears": null
+        },
+        "hourly": {
+          "firstWetHour": 11,
+          "wetWindow": {
+            "condition": "RAIN",
+            "fromHour": 13,
+            "toHour": 14
+          },
+          "lastWetHour": 17,
+          "maxDaytimePrecipitationProbabilityPct": 100,
+          "stops": [
+            {
+              "itemId": "f4c5ca44-8cf2-4b94-af7c-e4cb4a83528d",
+              "outlook": "DRY",
+              "maxPrecipitationProbabilityPct": 3
+            },
+            {
+              "itemId": "e6dbd110-4d92-4a38-ad00-416eeb0ad9aa",
+              "outlook": "DRY",
+              "maxPrecipitationProbabilityPct": 0
+            },
+            {
+              "itemId": "db8aca59-7aa3-4256-80c4-88b19703ba21",
+              "outlook": "SHOWERS",
+              "maxPrecipitationProbabilityPct": 32
+            },
+            {
+              "itemId": "1b7a0b40-662d-4bca-9d8c-93baca09736c",
+              "outlook": "RAIN",
+              "maxPrecipitationProbabilityPct": 94
+            }
+          ]
+        }
+      }
+    ]
+  }
+}

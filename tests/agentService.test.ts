@@ -15,6 +15,7 @@ import {
   type AgentThreadRecord
 } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
+import { normalizeAskUserInput } from "../src/modules/agent/askUser";
 
 function createMemoryRepository(): AgentRepository & {
   threads: AgentThreadRecord[];
@@ -234,11 +235,20 @@ function createMemoryRepository(): AgentRepository & {
       return run;
     },
     async createUserMessageAndRun(data) {
+      if (data.answersTo) {
+        const latest = messages
+          .filter((message) => message.threadId === data.threadId && (message.role === "USER" || message.role === "ASSISTANT"))
+          .at(-1);
+        if (latest?.id !== data.answersTo) {
+          throw new ApiError(409, "QUESTION_NOT_PENDING", "This question was already answered.");
+        }
+      }
       const message = await this.createMessage({
         threadId: data.threadId,
         authorUserId: data.authorUserId,
         role: "USER",
-        content: data.content
+        content: data.content,
+        metadata: data.metadata
       });
       const run = await this.createRun({
         threadId: data.threadId,
@@ -438,21 +448,24 @@ function createMemoryRepository(): AgentRepository & {
       run.status = "COMPLETED";
       run.completedAt = data.completedAt;
       run.updatedAt = data.completedAt;
+      const metadata = {
+        ...(data.processSnapshot != null ? { process: data.processSnapshot } : {}),
+        ...(data.askUser ? { askUser: data.askUser } : {})
+      };
       const message = await this.createMessage({
         threadId: run.threadId,
         runId: run.id,
         role: "ASSISTANT",
         content: data.assistantContent,
-        metadata: data.processSnapshot != null ? { process: data.processSnapshot } : null
+        metadata: Object.keys(metadata).length > 0 ? metadata : null
       });
-      const processPayload = data.processSnapshot != null ? { process: data.processSnapshot } : {};
       const completedEvents: AgentRunEventRecord[] = [
         {
           id: `event-${events.length + 1}`,
           runId: run.id,
           threadId: run.threadId,
           type: "message.completed",
-          payload: { messageId: message.id, content: data.assistantContent, ...processPayload },
+          payload: { messageId: message.id, content: data.assistantContent, ...metadata },
           sequence: events.filter((event) => event.runId === run.id).length + 1,
           createdAt: now
         },
@@ -1264,6 +1277,144 @@ describe("saveItineraryThread — status transitions", () => {
       code: "THREAD_ALREADY_BOUND",
       statusCode: 409
     } satisfies Partial<ApiError>);
+  });
+});
+
+describe("ask_user replies", () => {
+  const askUser = normalizeAskUserInput({
+    questions: [
+      { header: "Transport", question: "How will the travelers get around?", options: ["Private car", "Public transit"] }
+    ]
+  });
+
+  it("stores the questions on the reply and sends them with message.completed", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+
+    const result = await service.completeRun(run.id, "A couple of details first.", undefined, { askUser });
+
+    expect(result.message).toMatchObject({ content: "A couple of details first.", metadata: { askUser } });
+    expect(repository.events.find((event) => event.type === "message.completed")?.payload).toMatchObject({
+      content: "A couple of details first.",
+      askUser
+    });
+  });
+
+  it("summarizes a run that asked as asking for input", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+    await service.recordRunEvent(run, { type: "tool.started", payload: { name: "ask_user", input: {} } });
+    await service.recordRunEvent(run, { type: "tool.completed", payload: { name: "ask_user", output: askUser } });
+
+    const result = await service.completeRun(run.id, "A couple of details first.", undefined, { askUser });
+
+    expect((result.message.metadata as any).process.activeLabel).toMatch(/^Asked for your input · /);
+  });
+
+  it("does not use the asked label when ask_user failed and the run ended without questions", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+    await service.recordRunEvent(run, { type: "tool.started", payload: { name: "ask_user", input: {} } });
+    await service.recordRunEvent(run, {
+      type: "tool.failed",
+      payload: { name: "ask_user", code: "AGENT_TOOL_INPUT_INVALID", message: "Invalid input" }
+    });
+
+    const result = await service.completeRun(run.id, "Here is your itinerary.");
+
+    expect((result.message.metadata as any).process.activeLabel).not.toMatch(/^Asked for your input/);
+  });
+});
+
+describe("answering ask_user questions", () => {
+  const askUser = normalizeAskUserInput({
+    questions: [
+      { header: "Transport", question: "How will the travelers get around?", options: ["Private car", "Public transit"] },
+      { header: "Trip length", question: "How many days should I plan?", options: ["2 days", "3 days"] }
+    ]
+  });
+
+  async function threadWithQuestion() {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+    const { message } = await service.completeRun(run.id, "A couple of details first.", undefined, { askUser });
+    return { service, thread, questionId: message.id };
+  }
+
+  const answersFor = (messageId: string) => ({
+    messageId,
+    items: [
+      { questionId: "q1", selected: ["Public transit"] },
+      { questionId: "q2", selected: [], other: "4 days" }
+    ]
+  });
+
+  it("saves the answers with their headers and starts a run", async () => {
+    const { service, thread, questionId } = await threadWithQuestion();
+
+    const result = await service.appendUserMessageAndCreateRun(
+      "agency-1",
+      thread.id,
+      "user-1",
+      "Transport: Public transit\nTrip length: 4 days",
+      undefined,
+      undefined,
+      answersFor(questionId)
+    );
+
+    expect(result.message.metadata).toEqual({
+      answers: {
+        messageId: questionId,
+        items: [
+          { questionId: "q1", header: "Transport", question: "How will the travelers get around?", selected: ["Public transit"] },
+          { questionId: "q2", header: "Trip length", question: "How many days should I plan?", selected: [], other: "4 days" }
+        ]
+      }
+    });
+    expect(result.run.status).toBe("QUEUED");
+  });
+
+  it("refuses an answer that is not one of the options", async () => {
+    const { service, thread, questionId } = await threadWithQuestion();
+
+    await expect(
+      service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Transport: Boat", undefined, undefined, {
+        messageId: questionId,
+        items: [
+          { questionId: "q1", selected: ["Boat"] },
+          { questionId: "q2", selected: ["3 days"] }
+        ]
+      })
+    ).rejects.toMatchObject({ code: "ASK_USER_ANSWERS_INVALID", statusCode: 400 });
+  });
+
+  it("refuses a second answer to the same question", async () => {
+    const { service, thread, questionId } = await threadWithQuestion();
+    await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "First", undefined, undefined, answersFor(questionId));
+
+    await expect(
+      service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Second", undefined, undefined, answersFor(questionId))
+    ).rejects.toMatchObject({ code: "QUESTION_NOT_PENDING", statusCode: 409 });
+  });
+
+  it("refuses answers to a reply that asked nothing", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Kyoto" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Kyoto");
+    const { message } = await service.completeRun(run.id, "Here is the plan.");
+
+    await expect(
+      service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Answer", undefined, undefined, answersFor(message.id))
+    ).rejects.toMatchObject({ code: "QUESTION_NOT_PENDING", statusCode: 409 });
   });
 });
 
