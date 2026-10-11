@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createAgencySchema, updateAgencySettingsSchema } from "../src/modules/agencies/agencySchemas";
 import {
   createAgencyService,
@@ -758,5 +758,88 @@ describe("createAgencyApplication account-type side effects", () => {
       validAgencyInput()
     );
     expect(repository.findUserAccountTypeForTest("u-1")).toBe("AGENCY_USER");
+  });
+});
+
+describe("registration notifications", () => {
+  const application = {
+    name: "Hillside Travel",
+    businessPhone: "639001112222",
+    businessEmail: "hello@hillside.test",
+    country: "Philippines",
+    city: "Baguio"
+  };
+  const admin = () => createUser({ id: "admin-1", role: "SUPER_ADMIN" });
+
+  function createNotifiedService() {
+    const repository = createMemoryAgencyRepository();
+    const notifier = {
+      applicationSubmitted: vi.fn(async (_agencyId: string) => {}),
+      agencyApproved: vi.fn(async (_agencyId: string) => {}),
+      agencyRejected: vi.fn(async (_agencyId: string) => {})
+    };
+    const service = createAgencyService({
+      repository,
+      now: () => new Date("2026-04-27T12:00:00.000Z"),
+      notifier
+    });
+    return { service, repository, notifier };
+  }
+
+  it("announces a new application after it is saved", async () => {
+    const { service, repository, notifier } = createNotifiedService();
+    notifier.applicationSubmitted.mockImplementation(async (agencyId) => {
+      expect(repository.memberships.some((membership) => membership.agencyId === agencyId)).toBe(true);
+    });
+
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+
+    expect(notifier.applicationSubmitted).toHaveBeenCalledWith(agency.id);
+  });
+
+  it("announces an approval after it is saved", async () => {
+    const { service, repository, notifier } = createNotifiedService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+    let statusWhenNotified: string | undefined;
+    notifier.agencyApproved.mockImplementation(async (agencyId) => {
+      statusWhenNotified = repository.agencies.find((candidate) => candidate.id === agencyId)?.status;
+    });
+
+    await service.approveAgency(admin(), agency.id);
+
+    expect(notifier.agencyApproved).toHaveBeenCalledWith(agency.id);
+    expect(statusWhenNotified).toBe("VERIFIED");
+  });
+
+  it("announces a rejection after its reason is saved", async () => {
+    const { service, repository, notifier } = createNotifiedService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+    let reasonWhenNotified: string | null | undefined;
+    notifier.agencyRejected.mockImplementation(async (agencyId) => {
+      reasonWhenNotified = repository.agencies.find((candidate) => candidate.id === agencyId)?.rejectionReason;
+    });
+
+    await service.rejectAgency(admin(), agency.id, { reason: "Business permit missing" });
+
+    expect(notifier.agencyRejected).toHaveBeenCalledWith(agency.id);
+    expect(reasonWhenNotified).toBe("Business permit missing");
+  });
+
+  it("sends no registration email for a suspension", async () => {
+    const { service, notifier } = createNotifiedService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+    await service.approveAgency(admin(), agency.id);
+    notifier.agencyApproved.mockClear();
+
+    await service.suspendAgency(admin(), agency.id, { reason: "Chargebacks" });
+
+    expect(notifier.agencyApproved).not.toHaveBeenCalled();
+    expect(notifier.agencyRejected).not.toHaveBeenCalled();
+  });
+
+  it("still works with no notifier", async () => {
+    const { service } = createService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+    await expect(service.approveAgency(admin(), agency.id)).resolves.toMatchObject({ status: "VERIFIED" });
   });
 });

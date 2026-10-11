@@ -2,6 +2,7 @@ import { ApiError } from "../../http/errors";
 import type { AgencyUser, AgencyRepository, AgencyMembershipRecord } from "./agencyTypes";
 
 import { createPrismaAgencyRepository } from "./agencyRepository";
+import { createAgencyNotifier, noopAgencyNotifier, type AgencyNotifier } from "./agencyNotifications";
 
 export { createPrismaAgencyRepository } from "./agencyRepository";
 export type {
@@ -65,8 +66,10 @@ function assertAgencyAdminMembership(membership: AgencyMembershipRecord | null) 
   }
 }
 
-export function createAgencyService(options: { repository: AgencyRepository; now?: () => Date }) {
+export function createAgencyService(options: { repository: AgencyRepository; now?: () => Date; notifier?: AgencyNotifier }) {
   const now = options.now ?? (() => new Date());
+  // Emails about registration. Called only after the change is saved; it never throws.
+  const notifier = options.notifier ?? noopAgencyNotifier;
 
   async function findRequiredAgency(agencyId: string) {
     const agency = await options.repository.findAgencyById(agencyId);
@@ -113,6 +116,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         await options.repository.updateUser(user.id, { accountType: "AGENCY_USER" });
       }
 
+      await notifier.applicationSubmitted(agency.id);
       return agency;
     },
 
@@ -176,6 +180,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         targetId: agencyId,
         reason: null
       });
+      await notifier.agencyApproved(agencyId);
       return agency;
     },
 
@@ -199,6 +204,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         targetId: agencyId,
         reason
       });
+      await notifier.agencyRejected(agencyId);
       return agency;
     },
 
@@ -285,4 +291,8 @@ export function createAgencyService(options: { repository: AgencyRepository; now
   };
 }
 
-export const agencyService = createAgencyService({ repository: createPrismaAgencyRepository() });
+const prismaAgencyRepository = createPrismaAgencyRepository();
+export const agencyService = createAgencyService({
+  repository: prismaAgencyRepository,
+  notifier: createAgencyNotifier({ repository: prismaAgencyRepository })
+});
