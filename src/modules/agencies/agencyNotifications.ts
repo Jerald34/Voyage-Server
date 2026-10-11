@@ -86,7 +86,7 @@ export function createAgencyNotifier(options: {
           .map((part) => part?.trim())
           .filter(Boolean)
           .join(", ") || null;
-      // One at a time: Resend rate-limits (~2 req/s), and a 429 must not drop an alert.
+      // One at a time to stay under Resend's ~2 req/s limit (there is no retry).
       for (const admin of admins) {
         await attempt("new application alert", agencyId, () =>
           emailSender.sendNewAgencyApplicationEmail({
