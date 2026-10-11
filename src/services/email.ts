@@ -22,6 +22,38 @@ export type AgencyInvitationEmailPayload = {
   acceptUrl: string;
 };
 
+export type AgencyApplicationReceivedEmailPayload = {
+  to: string;
+  displayName: string;
+  agencyName: string;
+  statusUrl: string;
+};
+
+export type AgencyApprovedEmailPayload = {
+  to: string;
+  displayName: string;
+  agencyName: string;
+  workspaceUrl: string;
+};
+
+export type AgencyRejectedEmailPayload = {
+  to: string;
+  displayName: string;
+  agencyName: string;
+  reason: string;
+  statusUrl: string;
+};
+
+export type NewAgencyApplicationEmailPayload = {
+  to: string;
+  agencyName: string;
+  ownerName: string;
+  ownerEmail: string;
+  /** "City, Country", or null when the application gave neither. */
+  location: string | null;
+  reviewUrl: string;
+};
+
 type Mail = { to: string; subject: string; html: string; text?: string; logMessage: string };
 
 let smtpTransporter: Transporter | null = null;
@@ -367,5 +399,140 @@ export async function sendAgencyInvitationEmail(payload: AgencyInvitationEmailPa
       "If you weren't expecting this invitation, you can ignore this email."
     ]),
     logMessage: "Agency invitation email delivery skipped because no provider is configured."
+  });
+}
+
+// The pending screen promises the same review time (AgencyStatusScreen.jsx).
+const AGENCY_REVIEW_TIME = "1–2 business days";
+
+export async function sendAgencyApplicationReceivedEmail(payload: AgencyApplicationReceivedEmailPayload) {
+  const subject = `We received your application for ${payload.agencyName}`;
+  const agencyName = escapeHtmlText(payload.agencyName);
+  await sendMail({
+    to: payload.to,
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: `We review new agencies within ${AGENCY_REVIEW_TIME} and will email you when it's done.`,
+      recipient: payload.to,
+      headingHtml: "We received your application",
+      bodyHtml:
+        paragraph(`Hi ${escapeHtmlText(payload.displayName)},`) +
+        paragraph(
+          `Thanks for registering <strong>${agencyName}</strong> on Voyage. Our team reviews every new agency before it can plan trips, usually within ${AGENCY_REVIEW_TIME}.`
+        ) +
+        paragraph(
+          `We&rsquo;ll email <strong>${escapeHtmlText(payload.to)}</strong> as soon as it&rsquo;s reviewed. You can also sign in any time to check its status.`
+        ),
+      action: { label: "Check application status", url: payload.statusUrl },
+      noticeHtml:
+        "You&rsquo;re receiving this because you registered an agency on Voyage. If that wasn&rsquo;t you, you can ignore this email."
+    }),
+    text: renderText([
+      `Hi ${payload.displayName},`,
+      "",
+      `Thanks for registering ${payload.agencyName} on Voyage. Our team reviews every new agency before it can plan trips, usually within ${AGENCY_REVIEW_TIME}.`,
+      "",
+      `We'll email ${payload.to} as soon as it's reviewed. Check its status any time: ${payload.statusUrl}`
+    ]),
+    logMessage: "Agency application email delivery skipped because no provider is configured."
+  });
+}
+
+export async function sendAgencyApprovedEmail(payload: AgencyApprovedEmailPayload) {
+  const subject = `${payload.agencyName} is approved on Voyage`;
+  const agencyName = escapeHtmlText(payload.agencyName);
+  await sendMail({
+    to: payload.to,
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: "Your agency workspace is ready. Sign in to start planning client trips.",
+      recipient: payload.to,
+      headingHtml: "Your agency is approved",
+      bodyHtml:
+        paragraph(`Hi ${escapeHtmlText(payload.displayName)},`) +
+        paragraph(
+          `Good news: <strong>${agencyName}</strong> has been approved. Your workspace is ready, so you and your team can start planning client trips.`
+        ),
+      action: { label: "Open your workspace", url: payload.workspaceUrl },
+      noticeHtml: `You&rsquo;re receiving this because you registered ${agencyName} on Voyage.`
+    }),
+    text: renderText([
+      `Hi ${payload.displayName},`,
+      "",
+      `Good news: ${payload.agencyName} has been approved. Your workspace is ready, so you and your team can start planning client trips.`,
+      "",
+      `Open your workspace: ${payload.workspaceUrl}`
+    ]),
+    logMessage: "Agency approval email delivery skipped because no provider is configured."
+  });
+}
+
+export async function sendAgencyRejectedEmail(payload: AgencyRejectedEmailPayload) {
+  const subject = `Update on your Voyage application for ${payload.agencyName}`;
+  const agencyName = escapeHtmlText(payload.agencyName);
+  const reason = payload.reason.trim();
+  const nextStep = "If you think this is a mistake, or you've fixed the issue, sign in and choose Contact support to reach our team.";
+  await sendMail({
+    to: payload.to,
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: "Your agency application wasn't approved. See why and what you can do next.",
+      recipient: payload.to,
+      headingHtml: "Your application wasn&rsquo;t approved",
+      bodyHtml:
+        paragraph(`Hi ${escapeHtmlText(payload.displayName)},`) +
+        paragraph(`We reviewed <strong>${agencyName}</strong> and couldn&rsquo;t approve it this time.`) +
+        (reason ? paragraph(`<strong>Reason:</strong> ${escapeHtmlText(reason)}`) : "") +
+        paragraph(escapeHtmlText(nextStep)),
+      action: { label: "View your application", url: payload.statusUrl },
+      noticeHtml: `You&rsquo;re receiving this because you registered ${agencyName} on Voyage.`
+    }),
+    text: renderText([
+      `Hi ${payload.displayName},`,
+      "",
+      `We reviewed ${payload.agencyName} and couldn't approve it this time.`,
+      ...(reason ? ["", `Reason: ${reason}`] : []),
+      "",
+      nextStep,
+      "",
+      `View your application: ${payload.statusUrl}`
+    ]),
+    logMessage: "Agency rejection email delivery skipped because no provider is configured."
+  });
+}
+
+export async function sendNewAgencyApplicationEmail(payload: NewAgencyApplicationEmailPayload) {
+  const subject = `New agency waiting for review: ${payload.agencyName}`;
+  const agencyName = escapeHtmlText(payload.agencyName);
+  const whereHtml = payload.location ? ` in ${escapeHtmlText(payload.location)}` : "";
+  const whereText = payload.location ? ` in ${payload.location}` : "";
+  await sendMail({
+    to: payload.to,
+    subject,
+    html: renderEmail({
+      subject,
+      preheader: `${payload.ownerName} registered ${payload.agencyName}. Review it in the admin Agencies tab.`,
+      recipient: payload.to,
+      headingHtml: "New agency waiting for review",
+      bodyHtml:
+        paragraph("Hi,") +
+        paragraph(
+          `<strong>${escapeHtmlText(payload.ownerName)}</strong> (${escapeHtmlText(payload.ownerEmail)}) registered <strong>${agencyName}</strong>${whereHtml}.`
+        ) +
+        paragraph("It&rsquo;s waiting in the admin Agencies tab for your approval."),
+      action: { label: "Review agency", url: payload.reviewUrl },
+      noticeHtml: "You&rsquo;re receiving this because you&rsquo;re a Voyage super admin."
+    }),
+    text: renderText([
+      "Hi,",
+      "",
+      `${payload.ownerName} (${payload.ownerEmail}) registered ${payload.agencyName}${whereText}.`,
+      "",
+      `Review it in the admin Agencies tab: ${payload.reviewUrl}`
+    ]),
+    logMessage: "New agency alert email delivery skipped because no provider is configured."
   });
 }
