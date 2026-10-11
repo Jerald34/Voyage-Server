@@ -65,7 +65,11 @@ function getSmtpTransporter(): Transporter | null {
     host: env.SMTP_HOST,
     port: env.SMTP_PORT,
     secure: env.SMTP_SECURE,
-    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } : undefined
+    auth: env.SMTP_USER ? { user: env.SMTP_USER, pass: env.SMTP_PASSWORD } : undefined,
+    // Nodemailer's defaults run to minutes; a dead provider must fail fast.
+    connectionTimeout: 10_000,
+    greetingTimeout: 10_000,
+    socketTimeout: 15_000
   });
   return smtpTransporter;
 }
@@ -113,7 +117,8 @@ async function sendViaResend(mail: Mail): Promise<boolean> {
       subject: mail.subject,
       html: mail.html,
       text: mail.text
-    })
+    }),
+    signal: AbortSignal.timeout(10_000)
   });
   if (!response.ok) {
     const body = await response.json().catch(() => null);

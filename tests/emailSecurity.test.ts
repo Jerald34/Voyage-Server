@@ -186,3 +186,42 @@ describe("email branding and delivery", () => {
     expect(mailMocks.sendMail).not.toHaveBeenCalled();
   });
 });
+
+describe("email transport timeouts", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    setSmtpEnv();
+  });
+
+  it("bounds the SMTP transport so a dead provider fails fast", async () => {
+    const { sendPasswordResetEmail } = await loadEmailService();
+
+    await sendPasswordResetEmail({
+      to: "recipient@example.com",
+      displayName: "Ana",
+      resetUrl: "https://app.example.com/reset-password?token=abc"
+    });
+
+    expect(mailMocks.createTransport).toHaveBeenCalledWith(
+      expect.objectContaining({ connectionTimeout: 10_000, greetingTimeout: 10_000, socketTimeout: 15_000 })
+    );
+  });
+
+  it("gives the Resend request an abort signal", async () => {
+    process.env.SMTP_HOST = "";
+    process.env.RESEND_API_KEY = "re_test_key";
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue(new Response(JSON.stringify({ id: "email_1" }), { status: 200 }));
+    vi.stubGlobal("fetch", fetchMock);
+    const { sendPasswordResetEmail } = await loadEmailService();
+
+    await sendPasswordResetEmail({
+      to: "recipient@example.com",
+      displayName: "Ana",
+      resetUrl: "https://app.example.com/reset-password?token=abc"
+    });
+
+    expect(fetchMock.mock.calls.at(-1)?.[1]?.signal).toBeInstanceOf(AbortSignal);
+  });
+});

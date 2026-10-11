@@ -793,6 +793,7 @@ describe("registration notifications", () => {
     });
 
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(notifier.applicationSubmitted).toHaveBeenCalledWith(agency.id);
   });
@@ -806,6 +807,7 @@ describe("registration notifications", () => {
     });
 
     await service.approveAgency(admin(), agency.id);
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(notifier.agencyApproved).toHaveBeenCalledWith(agency.id);
     expect(statusWhenNotified).toBe("VERIFIED");
@@ -820,6 +822,7 @@ describe("registration notifications", () => {
     });
 
     await service.rejectAgency(admin(), agency.id, { reason: "Business permit missing" });
+    await new Promise((resolve) => setImmediate(resolve));
 
     expect(notifier.agencyRejected).toHaveBeenCalledWith(agency.id);
     expect(reasonWhenNotified).toBe("Business permit missing");
@@ -835,6 +838,23 @@ describe("registration notifications", () => {
 
     expect(notifier.agencyApproved).not.toHaveBeenCalled();
     expect(notifier.agencyRejected).not.toHaveBeenCalled();
+  });
+
+  it("still approves when the notifier rejects", async () => {
+    const { service, notifier } = createNotifiedService();
+    const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+    notifier.agencyApproved.mockRejectedValue(new Error("mail provider down"));
+
+    await expect(service.approveAgency(admin(), agency.id)).resolves.toMatchObject({ status: "VERIFIED" });
+  });
+
+  it("does not wait for a notifier that never finishes", async () => {
+    const { service, notifier } = createNotifiedService();
+    notifier.applicationSubmitted.mockImplementation(() => new Promise<void>(() => {}));
+
+    await expect(service.createAgencyApplication(createUser({ id: "owner-1" }), application)).resolves.toMatchObject({
+      name: "Hillside Travel"
+    });
   });
 
   it("still works with no notifier", async () => {

@@ -68,7 +68,7 @@ function assertAgencyAdminMembership(membership: AgencyMembershipRecord | null) 
 
 export function createAgencyService(options: { repository: AgencyRepository; now?: () => Date; notifier?: AgencyNotifier }) {
   const now = options.now ?? (() => new Date());
-  // Emails about registration. Called only after the change is saved; it never throws.
+  // Emails about registration. Called only after the change is saved, not awaited; it never throws.
   const notifier = options.notifier ?? noopAgencyNotifier;
 
   async function findRequiredAgency(agencyId: string) {
@@ -116,7 +116,8 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         await options.repository.updateUser(user.id, { accountType: "AGENCY_USER" });
       }
 
-      await notifier.applicationSubmitted(agency.id);
+      // Emails go out after the save and never hold up or fail the response.
+      void notifier.applicationSubmitted(agency.id).catch(() => {});
       return agency;
     },
 
@@ -180,7 +181,8 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         targetId: agencyId,
         reason: null
       });
-      await notifier.agencyApproved(agencyId);
+      // Emails go out after the save and never hold up or fail the response.
+      void notifier.agencyApproved(agencyId).catch(() => {});
       return agency;
     },
 
@@ -204,7 +206,8 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         targetId: agencyId,
         reason
       });
-      await notifier.agencyRejected(agencyId);
+      // Emails go out after the save and never hold up or fail the response.
+      void notifier.agencyRejected(agencyId).catch(() => {});
       return agency;
     },
 
