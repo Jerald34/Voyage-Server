@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createAgencyNotifier } from "../src/modules/agencies/agencyNotifications";
+import type { AgencyWithOwner } from "../src/modules/agencies/agencyTypes";
 
-const agency = {
+const agency: AgencyWithOwner = {
   id: "agency-1",
   name: "Hillside Travel",
-  status: "PENDING_REVIEW" as const,
+  slug: "hillside-travel",
+  status: "PENDING_REVIEW",
   ownerUserId: "owner-1",
   submittedAt: new Date("2026-10-11T00:00:00.000Z"),
   verifiedAt: null,
   verifiedByAdminUserId: null,
   rejectedAt: null,
   rejectedByAdminUserId: null,
-  rejectionReason: null as string | null,
+  rejectionReason: null,
   suspendedAt: null,
   suspendedByAdminUserId: null,
   suspensionReason: null,
@@ -22,7 +24,7 @@ const agency = {
   ownerUser: { id: "owner-1", email: "owner@hillside.test", displayName: "Ana" }
 };
 
-function setup(overrides: { agency?: typeof agency | null; admins?: Array<{ id: string; email: string; displayName: string }> } = {}) {
+function setup(overrides: { agency?: AgencyWithOwner | null; admins?: Array<{ id: string; email: string; displayName: string }> } = {}) {
   const repository = {
     findAgencyByIdWithOwner: vi.fn().mockResolvedValue(overrides.agency === undefined ? agency : overrides.agency),
     listActiveSuperAdmins: vi.fn().mockResolvedValue(
@@ -131,10 +133,62 @@ describe("agency notifier", () => {
   });
 
   it("leaves the location out when the application has no city or country", async () => {
-    const { notifier, emailSender } = setup({ agency: { ...agency, city: null as never, country: "  " } });
+    const { notifier, emailSender } = setup({ agency: { ...agency, city: null, country: "  " } });
 
     await notifier.applicationSubmitted("agency-1");
 
     expect(emailSender.sendNewAgencyApplicationEmail).toHaveBeenCalledWith(expect.objectContaining({ location: null }));
+  });
+
+  it("trims the city and country before joining them", async () => {
+    const { notifier, emailSender } = setup({ agency: { ...agency, city: " Baguio ", country: " Philippines " } });
+
+    await notifier.applicationSubmitted("agency-1");
+
+    expect(emailSender.sendNewAgencyApplicationEmail).toHaveBeenCalledWith(expect.objectContaining({ location: "Baguio, Philippines" }));
+  });
+
+  it("still alerts the second admin when the first admin's email fails, and logs it", async () => {
+    const { notifier, emailSender, logError } = setup();
+    emailSender.sendNewAgencyApplicationEmail.mockRejectedValueOnce(new Error("429"));
+
+    await expect(notifier.applicationSubmitted("agency-1")).resolves.toBeUndefined();
+
+    expect(emailSender.sendNewAgencyApplicationEmail).toHaveBeenCalledTimes(2);
+    expect(emailSender.sendNewAgencyApplicationEmail).toHaveBeenLastCalledWith(expect.objectContaining({ to: "ben@voyage.test" }));
+    expect(logError).toHaveBeenCalledWith(
+      "[agencyNotifications] new application alert failed",
+      expect.objectContaining({ agencyId: "agency-1" })
+    );
+  });
+
+  it("sends admin alerts one at a time", async () => {
+    const { notifier, emailSender } = setup();
+    let inFlight = 0;
+    let maxInFlight = 0;
+    emailSender.sendNewAgencyApplicationEmail.mockImplementation(async () => {
+      inFlight += 1;
+      maxInFlight = Math.max(maxInFlight, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      inFlight -= 1;
+    });
+
+    await notifier.applicationSubmitted("agency-1");
+
+    expect(maxInFlight).toBe(1);
+  });
+
+  it("still confirms to the owner when the super admin lookup fails, and logs it", async () => {
+    const { notifier, repository, emailSender, logError } = setup();
+    repository.listActiveSuperAdmins.mockRejectedValueOnce(new Error("db down"));
+
+    await expect(notifier.applicationSubmitted("agency-1")).resolves.toBeUndefined();
+
+    expect(emailSender.sendAgencyApplicationReceivedEmail).toHaveBeenCalledTimes(1);
+    expect(emailSender.sendNewAgencyApplicationEmail).not.toHaveBeenCalled();
+    expect(logError).toHaveBeenCalledWith(
+      "[agencyNotifications] super admin lookup failed",
+      expect.objectContaining({ agencyId: "agency-1" })
+    );
   });
 });

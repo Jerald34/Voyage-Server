@@ -82,21 +82,23 @@ export function createAgencyNotifier(options: {
 
       const admins = (await attempt("super admin lookup", agencyId, () => options.repository.listActiveSuperAdmins())) ?? [];
       const location =
-        [agency.city, agency.country].filter((part): part is string => Boolean(part?.trim())).join(", ") || null;
-      await Promise.all(
-        admins.map((admin) =>
-          attempt("new application alert", agencyId, () =>
-            emailSender.sendNewAgencyApplicationEmail({
-              to: admin.email,
-              agencyName: agency.name,
-              ownerName: agency.ownerUser.displayName,
-              ownerEmail: agency.ownerUser.email,
-              location,
-              reviewUrl: adminUrl
-            })
-          )
-        )
-      );
+        [agency.city, agency.country]
+          .map((part) => part?.trim())
+          .filter(Boolean)
+          .join(", ") || null;
+      // One at a time: Resend rate-limits (~2 req/s), and a 429 must not drop an alert.
+      for (const admin of admins) {
+        await attempt("new application alert", agencyId, () =>
+          emailSender.sendNewAgencyApplicationEmail({
+            to: admin.email,
+            agencyName: agency.name,
+            ownerName: agency.ownerUser.displayName,
+            ownerEmail: agency.ownerUser.email,
+            location,
+            reviewUrl: adminUrl
+          })
+        );
+      }
     },
 
     async agencyApproved(agencyId) {
