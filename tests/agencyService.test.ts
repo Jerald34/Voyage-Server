@@ -788,14 +788,16 @@ describe("registration notifications", () => {
 
   it("announces a new application after it is saved", async () => {
     const { service, repository, notifier } = createNotifiedService();
+    let savedWhenNotified: boolean | undefined;
     notifier.applicationSubmitted.mockImplementation(async (agencyId) => {
-      expect(repository.memberships.some((membership) => membership.agencyId === agencyId)).toBe(true);
+      savedWhenNotified = repository.memberships.some((membership) => membership.agencyId === agencyId);
     });
 
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
     await new Promise((resolve) => setImmediate(resolve));
 
     expect(notifier.applicationSubmitted).toHaveBeenCalledWith(agency.id);
+    expect(savedWhenNotified).toBe(true);
   });
 
   it("announces an approval after it is saved", async () => {

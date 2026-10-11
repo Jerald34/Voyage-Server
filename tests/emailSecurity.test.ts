@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mailMocks = vi.hoisted(() => {
   const sendMail = vi.fn().mockResolvedValue(undefined);
@@ -191,6 +191,10 @@ describe("email transport timeouts", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     setSmtpEnv();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
   });
 
   it("bounds the SMTP transport so a dead provider fails fast", async () => {
