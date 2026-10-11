@@ -99,6 +99,9 @@ function createMemoryAgencyRepository(): AgencyRepository & {
     },
     async findUserById(_userId: string) {
       return { id: _userId, accountType: "AGENCY_USER" } as any;
+    },
+    async listActiveSuperAdmins() {
+      return [];
     }
   };
 }
@@ -714,6 +717,9 @@ function createServiceWithUser(opts: { accountType: "PENDING" | "PERSONAL" | "AG
     },
     async findUserById(userId: string) {
       return { id: userId, accountType: accountTypeByUserId.get(userId) } as any;
+    },
+    async listActiveSuperAdmins() {
+      return [];
     },
     findUserAccountTypeForTest(userId: string) {
       return accountTypeByUserId.get(userId);
