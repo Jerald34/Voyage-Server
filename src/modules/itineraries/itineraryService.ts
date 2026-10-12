@@ -365,6 +365,14 @@ export function createItineraryService(options: { repository: ItineraryRepositor
 
     async reopenTrip(agencyId: string, tripId: string) {
       return options.repository.reopenTrip(tripId, agencyId);
+    },
+
+    async duplicateTrip(agencyId: string, tripId: string, userId: string) {
+      return options.repository.duplicateTrip({ tripId, agencyId, createdByUserId: userId });
+    },
+
+    async findTripLatestItineraryId(agencyId: string, tripId: string) {
+      return options.repository.findTripLatestItineraryId(tripId, agencyId);
     }
   };
 }

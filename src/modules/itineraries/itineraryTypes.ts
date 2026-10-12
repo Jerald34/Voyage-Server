@@ -175,6 +175,22 @@ export interface ItineraryRepository {
     tripId: string,
     agencyId: string
   ): Promise<{ trip: ClientTripRecord; itinerary: { id: string; status: string } | null }>;
+  /**
+   * Copy a trip as another option for the same client: a new trip and itinerary with the
+   * same days and stops, in review (still editable), and a fresh chat carrying the trip's
+   * traveler needs. Shares, comments, ratings and chat history stay with the original.
+   */
+  duplicateTrip(data: {
+    tripId: string;
+    agencyId: string;
+    createdByUserId: string;
+  }): Promise<{
+    trip: ClientTripRecord;
+    itinerary: { id: string; status: string; version: number };
+    thread: { id: string; tripId: string | null; title: string; travelerNeeds: unknown; createdAt: Date };
+  }>;
+  /** The id of the trip's newest itinerary, or null when it has none. */
+  findTripLatestItineraryId(tripId: string, agencyId: string): Promise<string | null>;
 }
 
 import { z } from "zod";

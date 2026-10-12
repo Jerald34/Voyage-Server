@@ -227,3 +227,17 @@ itineraryRoutes.post("/trips/:tripId/reopen", async (request, response, next) =>
     next(error);
   }
 });
+
+// Copy a trip as another option for the same client: a new trip in review with the same
+// days and stops, and a fresh Planner chat. Same access rule as changing the trip.
+itineraryRoutes.post("/trips/:tripId/duplicate", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { tripId } = tripIdParamsSchema.parse(request.params);
+    await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
+    const result = await itineraryService.duplicateTrip(agencyId, tripId, request.authUser!.id);
+    response.status(201).json(result);
+  } catch (error) {
+    next(error);
+  }
+});

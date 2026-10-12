@@ -772,6 +772,101 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
         return { trip: updatedTrip as unknown as ClientTripRecord, itinerary };
       });
+    },
+
+    async duplicateTrip({ tripId, agencyId, createdByUserId }) {
+      return client.$transaction(async (tx) => {
+        const source = await tx.clientTrip.findFirst({
+          where: { id: tripId, agencyId },
+          include: {
+            itineraries: { orderBy: { createdAt: "desc" as const }, take: 1, include: includeItineraryDetails() },
+            agentThreads: { orderBy: { createdAt: "desc" as const }, take: 1, select: { travelerNeeds: true } }
+          }
+        });
+        if (!source) {
+          throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+        }
+        const sourceItinerary = source.itineraries[0];
+        if (!sourceItinerary) {
+          throw new ApiError(409, "ITINERARY_REQUIRED", "This trip has no itinerary to copy yet.");
+        }
+
+        const trip = await tx.clientTrip.create({
+          data: {
+            agencyId,
+            createdByUserId,
+            assignedOrganizerUserId: source.assignedOrganizerUserId,
+            title: source.title,
+            destinationSummary: source.destinationSummary,
+            clientName: source.clientName,
+            startDate: source.startDate,
+            endDate: source.endDate,
+            travelerCount: source.travelerCount,
+            budgetLevel: source.budgetLevel,
+            // In review, like a saved draft: listed on the Itineraries page, editable until approved.
+            status: "IN_REVIEW"
+          }
+        });
+
+        const itinerary = await tx.itinerary.create({
+          data: {
+            agencyId,
+            tripId: trip.id,
+            createdByUserId,
+            title: sourceItinerary.title,
+            summary: sourceItinerary.summary,
+            status: "NEEDS_REVIEW",
+            days: {
+              create: sourceItinerary.days.map((day) => ({
+                dayNumber: day.dayNumber,
+                date: day.date,
+                title: day.title,
+                summary: day.summary,
+                items: {
+                  // Same place snapshots, so the copy costs no new Google lookups.
+                  create: day.items.map((item) => ({
+                    sortOrder: item.sortOrder,
+                    type: item.type,
+                    title: item.title,
+                    description: item.description,
+                    startTime: item.startTime,
+                    endTime: item.endTime,
+                    placeSnapshotId: item.placeSnapshotId,
+                    routeFromPrevious:
+                      item.routeFromPrevious === null ? undefined : (item.routeFromPrevious as Prisma.InputJsonValue),
+                    staffNotes: item.staffNotes,
+                    clientNotes: item.clientNotes
+                  }))
+                }
+              }))
+            }
+          },
+          select: { id: true, status: true, version: true }
+        });
+
+        const travelerNeeds = source.agentThreads[0]?.travelerNeeds;
+        const thread = await tx.agentThread.create({
+          data: {
+            agencyId,
+            tripId: trip.id,
+            createdByUserId,
+            title: `${source.clientName ?? source.title} (another option)`,
+            ...(travelerNeeds ? { travelerNeeds: travelerNeeds as Prisma.InputJsonValue } : {})
+          },
+          select: { id: true, tripId: true, title: true, travelerNeeds: true, createdAt: true }
+        });
+
+        return { trip: trip as unknown as ClientTripRecord, itinerary, thread };
+      });
+    },
+
+    async findTripLatestItineraryId(tripId, agencyId) {
+      const row = await client.itinerary.findFirst({
+        where: { tripId, agencyId },
+        orderBy: { createdAt: "desc" },
+        select: { id: true }
+      });
+      return row?.id ?? null;
     }
   };
 }

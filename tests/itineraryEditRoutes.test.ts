@@ -22,6 +22,7 @@ const mocks = vi.hoisted(() => ({
   replaceDraft: vi.fn(),
   approveTrip: vi.fn(),
   reopenTrip: vi.fn(),
+  duplicateTrip: vi.fn(),
   createPlaceSession: vi.fn()
 }));
 
@@ -43,7 +44,8 @@ vi.mock("../src/modules/itineraries/itineraryService", () => ({
     moveItem: mocks.moveItem,
     replaceDraft: mocks.replaceDraft,
     approveTrip: mocks.approveTrip,
-    reopenTrip: mocks.reopenTrip
+    reopenTrip: mocks.reopenTrip,
+    duplicateTrip: mocks.duplicateTrip
   }
 }));
 vi.mock("../src/services/places/placeServices", () => ({
@@ -226,6 +228,35 @@ describe("POST /trips/:tripId/reopen", () => {
 
     expect(res.status).toBe(404);
     expect(mocks.reopenTrip).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /trips/:tripId/duplicate", () => {
+  it("checks trip access, then copies the trip for the signed-in user", async () => {
+    const copied = { trip: { id: "trip-2" }, itinerary: { id: "itin-2", status: "NEEDS_REVIEW", version: 1 }, thread: { id: "thread-2" } };
+    mocks.duplicateTrip.mockResolvedValue(copied);
+
+    const res = await request(createApp()).post(`${base}/trips/${TRIP_ID}/duplicate`);
+
+    expect(res.status).toBe(201);
+    expect(res.body).toEqual(copied);
+    expect(mocks.requireTripAccess).toHaveBeenCalledWith(staffUser, AGENCY_ID, TRIP_ID);
+    expect(mocks.duplicateTrip).toHaveBeenCalledWith(AGENCY_ID, TRIP_ID, "user-staff");
+  });
+
+  it("refuses staff who aren't assigned to the trip", async () => {
+    mocks.requireTripAccess.mockRejectedValue(notAssigned());
+
+    const res = await request(createApp()).post(`${base}/trips/${TRIP_ID}/duplicate`);
+
+    expect(res.status).toBe(404);
+    expect(mocks.duplicateTrip).not.toHaveBeenCalled();
+  });
+
+  it("rejects a malformed trip id", async () => {
+    const res = await request(createApp()).post(`${base}/trips/not-a-uuid/duplicate`);
+    expect(res.status).toBe(400);
+    expect(mocks.duplicateTrip).not.toHaveBeenCalled();
   });
 });
 
