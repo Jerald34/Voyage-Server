@@ -3022,8 +3022,8 @@ describe("live itinerary at run start", () => {
 
 describe("trip itinerary fallback at run start", () => {
   // A copied option's fresh chat is bound to a trip but has no itinerary events yet.
-  function tripThread(tripId: string | null) {
-    return { tripId, messages: [{ role: "USER", content: "Make it cheaper." }], events: [] } as any;
+  function tripThread(tripId: string | null, events: unknown[] = []) {
+    return { tripId, messages: [{ role: "USER", content: "Make it cheaper." }], events } as any;
   }
 
   function tripItinerary(status: string) {
@@ -3034,9 +3034,13 @@ describe("trip itinerary fallback at run start", () => {
     };
   }
 
-  async function runWith(tripId: string | null, loadTripItinerary: (input: any) => Promise<unknown>) {
+  async function runWith(
+    tripId: string | null,
+    loadTripItinerary: (input: any) => Promise<unknown>,
+    events: unknown[] = []
+  ) {
     const { service } = createFakeAgentService();
-    service.getThread = async () => tripThread(tripId);
+    service.getThread = async () => tripThread(tripId, events);
     const prompts: string[] = [];
     const modelProvider: ModelProvider = {
       async complete(input) {
@@ -3095,9 +3099,37 @@ describe("trip itinerary fallback at run start", () => {
 
       expect(prompts).toContain("Make it cheaper.");
       expect(prompts).not.toContain("title = Copied stop");
+      expect(errorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("Failed to load the trip's itinerary"),
+        expect.any(Error)
+      );
     } finally {
       errorSpy.mockRestore();
     }
+  });
+
+  it("prefers the chat's own itinerary events over the trip's newest itinerary", async () => {
+    const loadTripItinerary = vi.fn(async () => tripItinerary("NEEDS_REVIEW"));
+    const ownEvents = [
+      {
+        type: "tool.completed",
+        payload: {
+          name: "create_itinerary",
+          output: {
+            itinerary: {
+              id: "itinerary-own",
+              days: [{ id: "day-1", dayNumber: 1, title: "Day 1", items: [{ id: "item-1", sortOrder: 1, title: "Own stop" }] }]
+            }
+          }
+        }
+      }
+    ];
+
+    const prompts = await runWith("trip-2", loadTripItinerary, ownEvents);
+
+    expect(loadTripItinerary).not.toHaveBeenCalled();
+    expect(prompts).toContain("title = Own stop");
+    expect(prompts).not.toContain("title = Copied stop");
   });
 });
 

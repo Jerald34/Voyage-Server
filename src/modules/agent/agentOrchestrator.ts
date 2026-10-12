@@ -295,7 +295,7 @@ export function createAgentOrchestrator(options: {
           const eventContext = buildActiveItineraryContext(thread);
           activeItineraryContext = eventContext
             ? await refreshActiveItinerary(eventContext)
-            : await loadTripItineraryContext((thread as { tripId?: string | null }).tripId ?? null);
+            : await loadTripItineraryContext(thread.tripId ?? null);
           travelerNeedsBlock = buildTravelerNeedsBlock(parseStoredTravelerNeeds(thread.travelerNeeds));
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
           // The newest user message triggered this run; if it answers ask_user

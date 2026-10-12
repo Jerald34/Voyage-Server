@@ -143,6 +143,7 @@ describe("workspaceService.getBootstrap", () => {
 
     expect(result.threads[0].itineraryId).toBe("itin-2");
     expect(result.itinerarySummaries["itin-2"]).toBeDefined();
+    expect(itineraryFindManyMock.mock.calls[0][0].where.id.in).toContain("itin-2");
   });
 
   it("keeps the itinerary named by the chat's own events", async () => {
