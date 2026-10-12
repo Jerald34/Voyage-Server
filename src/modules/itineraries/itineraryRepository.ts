@@ -1,4 +1,4 @@
-import type { Prisma, PrismaClient } from "@prisma/client";
+import { Prisma, type PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
 import { assertUuid } from "./itineraryService";
@@ -780,11 +780,23 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
           where: { id: tripId, agencyId },
           include: {
             itineraries: { orderBy: { createdAt: "desc" as const }, take: 1, include: includeItineraryDetails() },
-            agentThreads: { orderBy: { createdAt: "desc" as const }, take: 1, select: { travelerNeeds: true } }
+            // The most recent chat that actually has traveler needs, not just the newest chat:
+            // a trip can have several, and the newest may have none.
+            agentThreads: {
+              where: { travelerNeeds: { not: Prisma.AnyNull } },
+              orderBy: { updatedAt: "desc" as const },
+              take: 1,
+              select: { travelerNeeds: true }
+            }
           }
         });
         if (!source) {
           throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
+        }
+        // Only saved trips can be copied; the copy starts in review, so a draft or archived
+        // source would skip the save step.
+        if (source.status === "DRAFT" || source.status === "ARCHIVED") {
+          throw new ApiError(409, "TRIP_NOT_SAVED", "Save this trip before making another option.");
         }
         const sourceItinerary = source.itineraries[0];
         if (!sourceItinerary) {

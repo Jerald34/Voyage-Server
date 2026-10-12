@@ -1,3 +1,4 @@
+import { Prisma } from "@prisma/client";
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("../src/db/prisma", () => ({ prisma: {} }));
@@ -59,12 +60,16 @@ function sourceTrip(overrides: Record<string, unknown> = {}) {
 
 function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
   const calls: Record<string, any> = {};
-  const client: any = {
-    async $transaction(fn: (tx: unknown) => unknown) {
-      return fn(client);
-    },
+  // Everything duplicateTrip writes must go through the transaction's own client, so the
+  // outer client's writers throw: calling `client.x` instead of `tx.x` fails the test.
+  const outsideTransaction = (name: string) => async () => {
+    throw new Error(`${name} was called outside the transaction`);
+  };
+  const tx: any = {
     clientTrip: {
-      async findFirst({ where }: any) {
+      async findFirst(args: any) {
+        calls.tripQuery = args;
+        const { where } = args;
         return source && where.id === source.id && where.agencyId === source.agencyId ? source : null;
       },
       async create({ data }: any) {
@@ -76,10 +81,6 @@ function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
       async create(args: any) {
         calls.itinerary = args;
         return { id: "itin-2", status: args.data.status, version: 1 };
-      },
-      async findFirst(args: any) {
-        calls.latest = args;
-        return { id: "itin-9" };
       }
     },
     agentThread: {
@@ -87,6 +88,27 @@ function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
         calls.thread = args;
         return { id: "thread-2", tripId: args.data.tripId, title: args.data.title, travelerNeeds: args.data.travelerNeeds ?? null, createdAt: new Date() };
       }
+    }
+  };
+  const client: any = {
+    async $transaction(fn: (tx: unknown) => unknown) {
+      calls.transactions = (calls.transactions ?? 0) + 1;
+      return fn(tx);
+    },
+    clientTrip: {
+      findFirst: outsideTransaction("clientTrip.findFirst"),
+      create: outsideTransaction("clientTrip.create")
+    },
+    itinerary: {
+      create: outsideTransaction("itinerary.create"),
+      // The one plain read: the newest itinerary of a trip needs no transaction.
+      async findFirst(args: any) {
+        calls.latest = args;
+        return { id: "itin-9" };
+      }
+    },
+    agentThread: {
+      create: outsideTransaction("agentThread.create")
     }
   };
   return { client, calls };
@@ -170,9 +192,50 @@ describe("duplicateTrip", () => {
     expect(calls.thread.data.title).toBe("Garcia itinerary (another option)");
   });
 
-  it("refuses a trip from another agency", async () => {
+  it("refuses a trip id that doesn't exist", async () => {
     const { client } = fakeClient(sourceTrip());
     await expect(duplicate(client, "trip-other")).rejects.toMatchObject({ statusCode: 404, code: "TRIP_NOT_FOUND" });
+  });
+
+  it("refuses a trip that belongs to another agency", async () => {
+    const { client, calls } = fakeClient(sourceTrip());
+    await expect(
+      createPrismaItineraryRepository(client).duplicateTrip({
+        tripId: "trip-1",
+        agencyId: "agency-2",
+        createdByUserId: "staff-9"
+      })
+    ).rejects.toMatchObject({ statusCode: 404, code: "TRIP_NOT_FOUND" });
+    expect(calls.tripQuery.where).toEqual({ id: "trip-1", agencyId: "agency-2" });
+    expect(calls.trip).toBeUndefined();
+  });
+
+  it.each(["DRAFT", "ARCHIVED"])("refuses a %s trip and creates nothing", async (status) => {
+    const { client, calls } = fakeClient(sourceTrip({ status }));
+    await expect(duplicate(client)).rejects.toMatchObject({ statusCode: 409, code: "TRIP_NOT_SAVED" });
+    expect(calls.trip).toBeUndefined();
+    expect(calls.itinerary).toBeUndefined();
+    expect(calls.thread).toBeUndefined();
+  });
+
+  it("does all its reading and writing inside one transaction", async () => {
+    const { client, calls } = fakeClient(sourceTrip());
+    await duplicate(client);
+    expect(calls.transactions).toBe(1);
+    expect(calls.trip).toBeDefined();
+    expect(calls.itinerary).toBeDefined();
+    expect(calls.thread).toBeDefined();
+  });
+
+  it("takes traveler needs from the latest chat that has some, not just the newest chat", async () => {
+    const { client, calls } = fakeClient(sourceTrip());
+    await duplicate(client);
+    expect(calls.tripQuery.include.agentThreads).toEqual({
+      where: { travelerNeeds: { not: Prisma.AnyNull } },
+      orderBy: { updatedAt: "desc" },
+      take: 1,
+      select: { travelerNeeds: true }
+    });
   });
 
   it("refuses a trip with no itinerary yet", async () => {
