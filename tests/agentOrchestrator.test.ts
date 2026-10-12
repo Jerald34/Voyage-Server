@@ -3020,6 +3020,87 @@ describe("live itinerary at run start", () => {
   });
 });
 
+describe("trip itinerary fallback at run start", () => {
+  // A copied option's fresh chat is bound to a trip but has no itinerary events yet.
+  function tripThread(tripId: string | null) {
+    return { tripId, messages: [{ role: "USER", content: "Make it cheaper." }], events: [] } as any;
+  }
+
+  function tripItinerary(status: string) {
+    return {
+      id: "itinerary-2",
+      status,
+      days: [{ id: "day-1", dayNumber: 1, title: "Day 1", items: [{ id: "item-1", sortOrder: 1, title: "Copied stop" }] }]
+    };
+  }
+
+  async function runWith(tripId: string | null, loadTripItinerary: (input: any) => Promise<unknown>) {
+    const { service } = createFakeAgentService();
+    service.getThread = async () => tripThread(tripId);
+    const prompts: string[] = [];
+    const modelProvider: ModelProvider = {
+      async complete(input) {
+        prompts.push(input.messages.map((message) => message.content).join("\n"));
+        return { content: "Done." };
+      }
+    };
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([]),
+      loadTripItinerary
+    });
+
+    await orchestrator.run(createRunInput());
+
+    return prompts.join("\n");
+  }
+
+  it("shows the agent the trip's itinerary when the chat has no itinerary events", async () => {
+    const loadTripItinerary = vi.fn(async () => tripItinerary("NEEDS_REVIEW"));
+
+    const prompts = await runWith("trip-2", loadTripItinerary);
+
+    expect(loadTripItinerary).toHaveBeenCalledWith({
+      agencyId: "agency-1",
+      userId: "user-1",
+      tripId: "trip-2"
+    });
+    expect(prompts).toContain("itineraryId: itinerary-2");
+    expect(prompts).toContain("title = Copied stop");
+    expect(prompts).not.toContain("Reopen for edits");
+  });
+
+  it("tells the agent an approved trip itinerary is locked", async () => {
+    const prompts = await runWith("trip-2", async () => tripItinerary("APPROVED_INTERNAL"));
+
+    expect(prompts).toContain("Reopen for edits");
+  });
+
+  it("does not look for a trip itinerary when the thread has no trip", async () => {
+    const loadTripItinerary = vi.fn(async () => tripItinerary("NEEDS_REVIEW"));
+
+    const prompts = await runWith(null, loadTripItinerary);
+
+    expect(loadTripItinerary).not.toHaveBeenCalled();
+    expect(prompts).not.toContain("title = Copied stop");
+  });
+
+  it("starts without an itinerary when the trip itinerary cannot be loaded", async () => {
+    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      const prompts = await runWith("trip-2", async () => {
+        throw new Error("database unavailable");
+      });
+
+      expect(prompts).toContain("Make it cheaper.");
+      expect(prompts).not.toContain("title = Copied stop");
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+});
+
 describe("ask_user", () => {
   const askCall = JSON.stringify({
     tool: "ask_user",

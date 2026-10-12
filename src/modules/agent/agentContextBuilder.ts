@@ -196,12 +196,7 @@ export function applyToolResultToItineraryContext(
   }
 
   return {
-    prompt: context?.prompt ??
-      [
-        "Active itinerary draft context",
-        "The user may ask to modify this draft. Prefer the granular tools (update_itinerary_item, add_itinerary_item, remove_itinerary_item, move_itinerary_item, add/update/remove_itinerary_day) so changes stream as discrete events.",
-        "Reserve update_itinerary (full replacement) for explicit wholesale-rewrite requests."
-      ].join("\n"),
+    prompt: context?.prompt ?? ACTIVE_ITINERARY_PROMPT,
     itinerary: updatedItinerary
   };
 }
