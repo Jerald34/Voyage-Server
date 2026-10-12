@@ -79,7 +79,7 @@ What happens on day 15? During the pilot, nothing is charged and billing is not 
 - Third-party prices change; recheck Google Maps Platform, Gemini API, Railway, Vercel, Resend and Serper pricing pages and the exchange rate before quoting these numbers.
 - The app records AI cost per run, but Gemini runs currently record $0 (the model's price is missing from the cost table), so the AI figures above come from token counts × list price.
 - The Settings card's counts are live counts of this month's records, so they can go down. Deleting a chat thread removes its agent runs. Deleting an unsaved draft removes its itinerary. A billing system would need an append-only usage log.
-- "Agent requests" counts every message sent to the agent, including ones that failed.
+- "Messages to the agent" counts every message sent to the agent, including ones that failed.
 - "Itineraries created" includes copies made with "Another option". A copy reuses stored place data, so it costs almost nothing in Google lookups, and the count runs slightly ahead of the per-itinerary cost.
 
 ## Sources
