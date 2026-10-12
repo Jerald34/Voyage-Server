@@ -9,7 +9,7 @@ Prices were set from both sides:
 - **Floor (cost-plus):** what one agency costs to serve, so no plan loses money.
 - **Ceiling (market):** what agencies pay for comparable tools, so Voyage stays cheaper.
 
-All figures use **₱61 = US$1** (mid-2026 rates were ₱60.6–61.8; recheck before the defense).
+All figures use **₱61 = US$1** (mid-2026 rates were ₱60.6–61.8; recheck before the defense). At October 2026's rate (about ₱62.5), the per-itinerary cost still rounds to ₱130 and each plan's floor rises by only about ₱7, so the prices and margins hold.
 
 ## 1. Variable cost per itinerary
 
