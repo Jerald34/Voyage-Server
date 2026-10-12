@@ -11,6 +11,7 @@ export type TripSummary = {
   assignedOrganizerUserId: string | null;
   travelerCount: number | null;
   budgetLevel: string | null;
+  createdAt: Date;
   updatedAt: Date;
   itineraries: Array<{ id: string; status: string; version: number }>;
 };
@@ -75,6 +76,7 @@ export async function getBootstrap(
       assignedOrganizerUserId: true,
       travelerCount: true,
       budgetLevel: true,
+      createdAt: true,
       updatedAt: true,
       itineraries: {
         select: { id: true, status: true, version: true },
@@ -167,9 +169,13 @@ export async function getBootstrap(
     itinerarySummaries[it.id] = it as ItinerarySummary;
   }
 
+  // A chat with no itinerary events of its own (a copied option's fresh chat) works on
+  // its trip's newest itinerary. Those ids are already in `itinerarySummaries`.
+  const tripLatestItinerary = new Map(trips.map((t) => [t.id, t.itineraries[0]?.id ?? null]));
+
   const threads: ThreadSummary[] = rawThreads.map((t) => ({
     ...t,
-    itineraryId: threadItineraryMap.get(t.id) ?? null,
+    itineraryId: threadItineraryMap.get(t.id) ?? (t.tripId ? tripLatestItinerary.get(t.tripId) ?? null : null),
   }));
 
   return { trips: trips as TripSummary[], threads, itinerarySummaries };

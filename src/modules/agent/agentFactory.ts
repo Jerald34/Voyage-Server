@@ -213,6 +213,17 @@ function createAgencyAgentOrchestrator() {
         return null;
       }
     },
+    // A copied option's fresh chat has no itinerary events: read its trip's newest itinerary.
+    // Personal threads have no trips.
+    loadTripItinerary: async ({ agencyId, tripId }) => {
+      if (!agencyId) return null;
+      try {
+        const itineraryId = await itineraryService.findTripLatestItineraryId(agencyId, tripId);
+        return itineraryId ? await itineraryService.getItinerary(agencyId, itineraryId) : null;
+      } catch {
+        return null;
+      }
+    },
     createPlaceSession: (agencyId) =>
       createPlaceSession(agencyId, {
         enrich: mapsForBackfill

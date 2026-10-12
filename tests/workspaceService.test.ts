@@ -125,4 +125,47 @@ describe("workspaceService.getBootstrap", () => {
     expect(threadArgs?.select).toHaveProperty("travelerNeeds", true);
     expect(result.threads[0].travelerNeeds).toEqual({ needs: ["WHEELCHAIR"], notes: null });
   });
+
+  it("points a trip's chat with no itinerary events at the trip's newest itinerary", async () => {
+    resetMocks();
+    tripFindManyMock.mockResolvedValue([
+      { id: "trip-2", itineraries: [{ id: "itin-2", status: "NEEDS_REVIEW", version: 1 }] }
+    ]);
+    threadFindManyMock.mockResolvedValue([
+      { id: "t2", agencyId: "a1", tripId: "trip-2", title: "Garcia (another option)", status: "ACTIVE", createdByUserId: "u1", createdAt: new Date(), updatedAt: new Date(), travelerNeeds: null }
+    ]);
+    runEventFindManyMock.mockResolvedValue([]);
+    itineraryFindManyMock.mockResolvedValue([
+      { id: "itin-2", tripId: "trip-2", title: "Baguio weekend", summary: null, status: "NEEDS_REVIEW", version: 1, updatedAt: new Date() }
+    ]);
+
+    const result = await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
+
+    expect(result.threads[0].itineraryId).toBe("itin-2");
+    expect(result.itinerarySummaries["itin-2"]).toBeDefined();
+  });
+
+  it("keeps the itinerary named by the chat's own events", async () => {
+    resetMocks();
+    tripFindManyMock.mockResolvedValue([{ id: "trip-1", itineraries: [{ id: "itin-new", status: "DRAFT", version: 1 }] }]);
+    threadFindManyMock.mockResolvedValue([
+      { id: "t1", agencyId: "a1", tripId: "trip-1", title: "Plan", status: "ACTIVE", createdByUserId: "u1", createdAt: new Date(), updatedAt: new Date(), travelerNeeds: null }
+    ]);
+    runEventFindManyMock.mockResolvedValue([{ threadId: "t1", payload: { itineraryId: "itin-old" } }]);
+    itineraryFindManyMock.mockResolvedValue([]);
+
+    const result = await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
+
+    expect(result.threads[0].itineraryId).toBe("itin-old");
+  });
+
+  it("asks for each trip's creation time, so options can be numbered in order", async () => {
+    resetMocks();
+    tripFindManyMock.mockResolvedValue([]);
+    threadFindManyMock.mockResolvedValue([]);
+
+    await getBootstrap("a1", { role: "OWNER", userId: "owner-1" });
+
+    expect(tripFindManyMock.mock.calls[0][0].select.createdAt).toBe(true);
+  });
 });

@@ -55,6 +55,7 @@ import {
   GRANULAR_ITINERARY_TOOL_NAMES,
   CONTINUATION_TRIGGER_TOOL_NAMES,
   buildActiveItineraryContext,
+  buildTripItineraryContext,
   withLiveItinerary,
   applyToolResultToItineraryContext,
   countItineraryItems,
@@ -136,6 +137,11 @@ export function createAgentOrchestrator(options: {
     userId: string;
     itineraryId: string;
   }) => Promise<{ days?: unknown } | null>;
+  /**
+   * Reads a trip's newest itinerary under the run's own authorization, for a trip's chat
+   * that has no itinerary tool events yet (a copied option's fresh chat).
+   */
+  loadTripItinerary?: (input: { agencyId: string | null; userId: string; tripId: string }) => Promise<unknown>;
 }): AgentOrchestrator {
   const now = options.now ?? (() => new Date());
   // Packed Approach B with research + clustering + per-stop estimate_route fans out to ~3 tool calls per stop on a multi-day plan.
@@ -265,6 +271,18 @@ export function createAgentOrchestrator(options: {
           }
         }
 
+        async function loadTripItineraryContext(tripId: string | null) {
+          if (!tripId || !options.loadTripItinerary) return null;
+          try {
+            return buildTripItineraryContext(
+              await options.loadTripItinerary({ agencyId: input.agencyId, userId: input.userId, tripId })
+            );
+          } catch (error) {
+            console.error("[Agent] Failed to load the trip's itinerary; starting without one.", error);
+            return null;
+          }
+        }
+
         /** Photos and ratings land in the DB before the client re-fetches on completion. */
         async function enrichBeforeComplete() {
           if (activeItineraryContext?.itinerary && options.onBeforeRunComplete) {
@@ -274,7 +292,10 @@ export function createAgentOrchestrator(options: {
 
         try {
           const thread = await options.agentService.getThread(input.agencyId, input.threadId);
-          activeItineraryContext = await refreshActiveItinerary(buildActiveItineraryContext(thread));
+          const eventContext = buildActiveItineraryContext(thread);
+          activeItineraryContext = eventContext
+            ? await refreshActiveItinerary(eventContext)
+            : await loadTripItineraryContext((thread as { tripId?: string | null }).tripId ?? null);
           travelerNeedsBlock = buildTravelerNeedsBlock(parseStoredTravelerNeeds(thread.travelerNeeds));
           const recentMessages = (thread as any).messages.slice(-historyMessageLimit);
           // The newest user message triggered this run; if it answers ask_user

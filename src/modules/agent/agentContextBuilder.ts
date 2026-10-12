@@ -96,6 +96,12 @@ export function extractItineraryFromToolOutput(output: unknown) {
   return itinerary;
 }
 
+const ACTIVE_ITINERARY_PROMPT = [
+  "Active itinerary draft context",
+  "The user may ask to modify this draft. Prefer the granular tools (update_itinerary_item, add_itinerary_item, remove_itinerary_item, move_itinerary_item, add/update/remove_itinerary_day) so changes stream as discrete events.",
+  "Reserve update_itinerary (full replacement) for explicit wholesale-rewrite requests."
+].join("\n");
+
 export function buildActiveItineraryContext(thread: unknown) {
   if (!isRecordLike(thread) || !Array.isArray(thread.events)) {
     return null;
@@ -121,11 +127,7 @@ export function buildActiveItineraryContext(thread: unknown) {
     }
 
     return {
-      prompt: [
-        "Active itinerary draft context",
-        "The user may ask to modify this draft. Prefer the granular tools (update_itinerary_item, add_itinerary_item, remove_itinerary_item, move_itinerary_item, add/update/remove_itinerary_day) so changes stream as discrete events.",
-        "Reserve update_itinerary (full replacement) for explicit wholesale-rewrite requests."
-      ].join("\n"),
+      prompt: ACTIVE_ITINERARY_PROMPT,
       itinerary
     };
   }
@@ -155,6 +157,16 @@ export function withLiveItinerary(
     prompt: locked ? `${context.prompt}\n${ITINERARY_LOCKED_NOTICE}` : context.prompt,
     itinerary
   };
+}
+
+/**
+ * A trip's chat with no itinerary tool events yet (a copied option's fresh chat) works on
+ * the trip's newest itinerary, read live under the run's own authorization.
+ */
+export function buildTripItineraryContext(live: unknown) {
+  const itinerary = extractItineraryFromToolOutput(live);
+  if (!itinerary) return null;
+  return withLiveItinerary({ prompt: ACTIVE_ITINERARY_PROMPT, itinerary }, live);
 }
 
 // Update the in-memory itinerary cache after a granular tool call so the agent's next turn sees a fresh snapshot.
