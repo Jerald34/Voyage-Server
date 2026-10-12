@@ -20,17 +20,20 @@ Travelers who only open a shared itinerary link need the same browser, and no ac
 
 | | Minimum | Used in production |
 |---|---|---|
-| Runtime | Node.js 22.12 | Node.js 22 on Railway |
-| Database | PostgreSQL 15 | Railway PostgreSQL |
-| Memory | 512 MB for the API server | 1 GB |
-| Web client hosting | Any Next.js 16 host | Vercel |
+| Runtime | Node.js 22.12 (`>=22.12.0`) | Node.js 22 |
+| Database | PostgreSQL 15 | PostgreSQL |
+| Redis | Shared Redis for rate limiting (`RATE_LIMIT_REDIS_URL`), required in production | Same |
+| Production secrets | `PASSWORD_PEPPER` and `TRIP_REVIEW_SECRET` must be set in production | Same |
+| Memory | 512 MB for the API server (estimate) | 1 GB (estimate) |
+| Hosting | Any host that can run the above, and any Next.js 16 host for the web client | Deployed on Railway (server, database) and Vercel (client) |
 
 ## External services
 
 | Service | Used for | Required |
 |---|---|---|
-| Google Gemini (Vertex AI) | The planning agent | Yes |
+| AI model: Gemini on Google Vertex AI | The planning agent. Production uses Gemini on Vertex AI; the code also supports OpenRouter, Google AI and LM Studio through `MODEL_PROVIDER` | Yes; one model provider is required |
 | Google Maps Platform (Places, Routes, Maps JavaScript) | Places, photos, routes and maps | Yes; OpenStreetMap is the fallback for some lookups |
-| Resend | Account, approval and trip emails | Yes |
-| Cloudinary | Agency logos and cached place photos | Yes |
+| Email (SMTP or Resend) | Account, approval, invitation and trip emails | At least one of the two; without either, emails are skipped |
+| S3-compatible storage | Profile pictures, agency logos and itinerary images | Optional; without it, image uploads are unavailable |
+| Cloudinary | Cached place photos and chat image uploads | Optional; without it, chat image upload is unavailable and place photos are not cached |
 | Serper | Web search for the agent | Optional |
