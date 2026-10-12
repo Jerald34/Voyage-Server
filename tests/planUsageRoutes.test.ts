@@ -3,6 +3,8 @@ import request from "supertest";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const AGENCY_ID = "11111111-1111-4111-8111-111111111111";
+// Deliberately different from the URL param, so the route must use the access result's agency id.
+const RESOLVED_AGENCY_ID = "resolved-id";
 
 const mocks = vi.hoisted(() => ({
   requireAgencyOwner: vi.fn(),
@@ -38,7 +40,7 @@ function createApp(authUser?: Record<string, unknown>) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.requireAgencyOwner.mockResolvedValue({ agency: { id: AGENCY_ID }, membership: { role: "OWNER", status: "ACTIVE" } });
+  mocks.requireAgencyOwner.mockResolvedValue({ agency: { id: RESOLVED_AGENCY_ID }, membership: { role: "OWNER", status: "ACTIVE" } });
   mocks.getPlanUsage.mockResolvedValue(usage);
 });
 
@@ -49,7 +51,7 @@ describe("GET /agencies/:agencyId/dashboard/plan-usage", () => {
     expect(res.status).toBe(200);
     expect(res.body).toEqual({ usage });
     expect(mocks.requireAgencyOwner).toHaveBeenCalledWith(owner, AGENCY_ID);
-    expect(mocks.getPlanUsage).toHaveBeenCalledWith(AGENCY_ID);
+    expect(mocks.getPlanUsage).toHaveBeenCalledWith(RESOLVED_AGENCY_ID);
   });
 
   it("refuses anyone who isn't the owner", async () => {

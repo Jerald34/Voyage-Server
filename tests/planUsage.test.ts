@@ -16,6 +16,24 @@ describe("manilaMonthRange", () => {
     const { start } = manilaMonthRange(new Date("2026-10-31T17:00:00.000Z"));
     expect(start.toISOString()).toBe("2026-10-31T16:00:00.000Z");
   });
+
+  it("keeps the last millisecond before Manila midnight in the old month", () => {
+    const { start, end } = manilaMonthRange(new Date("2026-10-31T15:59:59.999Z"));
+    expect(start.toISOString()).toBe("2026-09-30T16:00:00.000Z");
+    expect(end.toISOString()).toBe("2026-10-31T16:00:00.000Z");
+  });
+
+  it("starts the new month exactly at Manila midnight", () => {
+    const { start, end } = manilaMonthRange(new Date("2026-10-31T16:00:00.000Z"));
+    expect(start.toISOString()).toBe("2026-10-31T16:00:00.000Z");
+    expect(end.toISOString()).toBe("2026-11-30T16:00:00.000Z");
+  });
+
+  it("rolls the year over at Manila New Year", () => {
+    const { start, end } = manilaMonthRange(new Date("2026-12-31T16:00:00.000Z"));
+    expect(start.toISOString()).toBe("2026-12-31T16:00:00.000Z");
+    expect(end.toISOString()).toBe("2027-01-31T16:00:00.000Z");
+  });
 });
 
 describe("getPlanUsage", () => {

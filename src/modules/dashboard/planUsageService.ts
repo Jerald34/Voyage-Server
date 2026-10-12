@@ -17,6 +17,7 @@ export function manilaMonthRange(now: Date) {
 
 export type PlanUsage = {
   periodStart: string;
+  // Exclusive: the start of the next Manila month.
   periodEnd: string;
   itinerariesCreated: number;
   agentRequests: number;
