@@ -5,6 +5,7 @@ import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { calendarService } from "./calendarService";
 import { calendarQuerySchema, dashboardQuerySchema } from "./dashboardSchemas";
 import { dashboardService } from "./dashboardService";
+import { getPlanUsage } from "./planUsageService";
 
 /**
  * Mounted at `/agencies/:agencyId/dashboard`.
@@ -16,6 +17,9 @@ import { dashboardService } from "./dashboardService";
  * GET /calendar — trips and client activity for the dashboard calendar.
  *   Query: from, to (YYYY-MM-DD local dates, inclusive, at most 42 days).
  *   STAFF get only the trips they created or organize.
+ *
+ * GET /plan-usage — this month's usage for the owner's "Plan and usage" card in Settings.
+ *   Owners only. Display only: no plan is stored or enforced.
  */
 export const dashboardRoutes: Router = Router({ mergeParams: true });
 
@@ -71,6 +75,20 @@ dashboardRoutes.get("/calendar", requireAuth, async (request, response, next) =>
     });
 
     response.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+dashboardRoutes.get("/plan-usage", requireAuth, async (request, response, next) => {
+  try {
+    const agencyId = String(request.params.agencyId ?? "");
+    if (!agencyId) {
+      throw new ApiError(400, "AGENCY_ID_REQUIRED", "agencyId is required.");
+    }
+
+    const access = await agencyAccessService.requireAgencyOwner(request.authUser!, agencyId);
+    response.json({ usage: await getPlanUsage(access.agency.id) });
   } catch (error) {
     next(error);
   }
