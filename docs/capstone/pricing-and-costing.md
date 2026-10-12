@@ -69,7 +69,7 @@ Voyage is cheaper than both at every team size, and includes the AI agent and ma
 
 ## 5. Free trial
 
-A 14-day trial with no allowance limit. A trial agency that builds 10 itineraries costs about ₱1,300, the acquisition cost of one paying Starter agency's first half-month.
+A 14-day trial with no allowance limit. A trial agency that builds 10 itineraries costs Voyage about ₱1,300 to serve (10 × ₱130), less than half of one Starter month (₱2,990).
 
 What happens on day 15? During the pilot, nothing is charged and billing is not switched on. The 14-day trial is the planned policy for when billing starts, and new agencies are also reviewed by Voyage before they can use the app.
 
