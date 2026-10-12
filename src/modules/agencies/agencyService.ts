@@ -161,7 +161,7 @@ export function createAgencyService(options: { repository: AgencyRepository; now
 
     async approveAgency(user: AgencyUser, agencyId: string) {
       assertSuperAdmin(user);
-      await findRequiredAgency(agencyId);
+      const previousStatus = (await findRequiredAgency(agencyId)).status;
       const reviewedAt = now();
       const agency = await options.repository.updateAgency(agencyId, {
         status: "VERIFIED",
@@ -182,13 +182,16 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         reason: null
       });
       // Emails go out after the save and never hold up or fail the response.
-      void notifier.agencyApproved(agencyId).catch(() => {});
+      // Only email when the decision changes the owner's status (not on re-approving VERIFIED/SUSPENDED).
+      if (previousStatus === "PENDING_REVIEW" || previousStatus === "REJECTED") {
+        void notifier.agencyApproved(agencyId).catch(() => {});
+      }
       return agency;
     },
 
     async rejectAgency(user: AgencyUser, agencyId: string, input: { reason: string }) {
       assertSuperAdmin(user);
-      await findRequiredAgency(agencyId);
+      const previousStatus = (await findRequiredAgency(agencyId)).status;
       const reason = input.reason.trim();
       if (!reason) {
         throw new ApiError(400, "REJECTION_REASON_REQUIRED", "Rejection reason is required.");
@@ -207,7 +210,10 @@ export function createAgencyService(options: { repository: AgencyRepository; now
         reason
       });
       // Emails go out after the save and never hold up or fail the response.
-      void notifier.agencyRejected(agencyId).catch(() => {});
+      // Only email when the status actually changes to REJECTED (not on re-rejecting with a new reason).
+      if (previousStatus !== "REJECTED") {
+        void notifier.agencyRejected(agencyId).catch(() => {});
+      }
       return agency;
     },
 

@@ -830,6 +830,52 @@ describe("registration notifications", () => {
     expect(reasonWhenNotified).toBe("Business permit missing");
   });
 
+  describe("only emails when the decision changes the owner's status", () => {
+    async function seed(status: "PENDING_REVIEW" | "VERIFIED" | "REJECTED" | "SUSPENDED") {
+      const ctx = createNotifiedService();
+      const agency = await ctx.service.createAgencyApplication(createUser({ id: "owner-1" }), application);
+      ctx.repository.agencies.find((candidate) => candidate.id === agency.id)!.status = status;
+      ctx.notifier.applicationSubmitted.mockClear();
+      return { ...ctx, agency };
+    }
+    const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+    it("does not re-send approval for an already VERIFIED agency", async () => {
+      const { service, notifier, agency } = await seed("VERIFIED");
+      await service.approveAgency(admin(), agency.id);
+      await flush();
+      expect(notifier.agencyApproved).not.toHaveBeenCalled();
+    });
+
+    it("sends approval when approving a PENDING_REVIEW agency", async () => {
+      const { service, notifier, agency } = await seed("PENDING_REVIEW");
+      await service.approveAgency(admin(), agency.id);
+      await flush();
+      expect(notifier.agencyApproved).toHaveBeenCalledWith(agency.id);
+    });
+
+    it("sends approval when approving a REJECTED agency", async () => {
+      const { service, notifier, agency } = await seed("REJECTED");
+      await service.approveAgency(admin(), agency.id);
+      await flush();
+      expect(notifier.agencyApproved).toHaveBeenCalledWith(agency.id);
+    });
+
+    it("does not re-send rejection for an already REJECTED agency", async () => {
+      const { service, notifier, agency } = await seed("REJECTED");
+      await service.rejectAgency(admin(), agency.id, { reason: "Updated reason" });
+      await flush();
+      expect(notifier.agencyRejected).not.toHaveBeenCalled();
+    });
+
+    it("sends rejection when rejecting a PENDING_REVIEW agency", async () => {
+      const { service, notifier, agency } = await seed("PENDING_REVIEW");
+      await service.rejectAgency(admin(), agency.id, { reason: "Business permit missing" });
+      await flush();
+      expect(notifier.agencyRejected).toHaveBeenCalledWith(agency.id);
+    });
+  });
+
   it("sends no registration email for a suspension", async () => {
     const { service, notifier } = createNotifiedService();
     const agency = await service.createAgencyApplication(createUser({ id: "owner-1" }), application);
