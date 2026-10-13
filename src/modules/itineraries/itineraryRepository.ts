@@ -267,6 +267,14 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
 
         let tripDeleted = false;
         if (opts.deleteTrip && existing.tripId) {
+          // The chat is usually the one the agent is running in, so it is kept and detached, not
+          // deleted (the user-initiated deleteTrip below removes chats; this agent path must not).
+          // The thread-to-trip link is NoAction, so a chat still pointing at the trip would make
+          // Postgres reject the delete (P2003) and roll the whole transaction back.
+          await tx.agentThread.updateMany({
+            where: { tripId: existing.tripId, agencyId },
+            data: { tripId: null }
+          });
           // Use compound unique [id, agencyId] to keep the agency boundary.
           await tx.clientTrip.delete({
             where: { id_agencyId: { id: existing.tripId, agencyId } }
