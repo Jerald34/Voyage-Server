@@ -3582,3 +3582,44 @@ Expected: no matches.
 - [ ] **Step 5: Record the results**
 
 Append a "Results (date)" section to this plan with the suite counts, build status and QA outcome, and commit it on the server.
+
+---
+
+## Results (2026-10-13)
+
+Executed subagent-driven on `feat/capstone-panel-fixes` in both repos (Haiku for Tasks 1, 3, 17; Sonnet for the rest; every task reviewed on Opus, spec then quality, plus a final whole-branch review). All 19 tasks done.
+
+**Final verification (both repos at their last commit):**
+- Server `npm test`: 1426 passed, 11 failed. The 11 are exactly the known stale ones (agentLogger 1, agentOrchestrator 4, modelProvider 2, webSearchProvider 4). `npm run build`: exit 0.
+- Client `npm test`: 1748 passed, 1 failed (stale agent-command-center-places), plus the 6 files that fail to load because `app/components/icons/index.js` has JSX in a `.js` file. `npm run build`: exit 0.
+- `grep -rni "command center" app tests` (client): only the guard test in `tests/tutorial-steps.test.js` that asserts the name is gone.
+
+**Changes beyond the written tasks (from reviews, or decided by the user during execution):**
+- Tour: copy matched to the real Dashboard ("Your work", Needs you categories); welcome card centred with CSS so it survives resize and rotation; focus starts on "Start tour"; the spotlight follows targets that change size; a replayed tour starts on the welcome card and closes the mobile sidebar.
+- Another option:
+  - The copy refuses unsaved or archived trips (409 `TRIP_NOT_SAVED`) and keeps the traveler needs from the chat that has them.
+  - Option tabs sit side by side, oldest first.
+  - The Planner picker shows the same "Option N · place" labels.
+  - There is a phone control.
+  - Dashboards refresh after copy, approve, reopen and delete.
+- User decisions (2026-10-13):
+  - A copied itinerary is titled "{title} (option N)"; numbers never repeat.
+  - Each unapproved option of a client with 2+ trips has "Remove option" (confirm dialog).
+  - Deleting a trip also deletes its Planner chats (Remove option and Delete client). Delete client's confirm now says what it deletes.
+  - The agent's "discard draft" path detaches the chat instead of failing.
+- Pricing:
+  - Owner card is below Team, says which month it covers, labels the fitting plan "Fits this month", and uses "Messages to the agent".
+  - Landing footnote: "Voyage is free during the pilot; billing isn't switched on yet."
+- Requirements: the banner is a labelled region and isn't printed. The Settings table fits phones. Settings panel headings use the sans type and readable greys.
+- Manuscript docs were checked against official price pages and the code; they now compare at full team sizes, use Tern's annual price, give the 5-agency break-even, and show prices hold at October's ₱62.5 rate.
+
+**Spun off (not done here):** staff per-trip access on agent routes plus `assignedOrganizerUserId` never being written; the star rating focus ring (`ring-[--rating-star]` compiles to invalid CSS); `tests/home-page.test.jsx` still tests the old tour and will need updating once the icons file loads in tests.
+
+**Hands-on QA (for the user; Docker DB running, backend restarted):** steps 1–7 above, plus:
+- 6b. After "Another option", the new itinerary's title ends in "(option 2)" on the Itineraries header, the dashboard calendar and the PDF.
+- 6c. "Remove option" on the copy: confirm, the tab disappears, focus lands on the client name, and after a reload no "(another option)" draft chat appears in the Planner.
+- 8 (replaces the console step). In Firefox, set `about:config` → `layout.css.properties-and-values.enabled` to `false`, clear session storage, reload: the banner shows; Dismiss hides it until the tab closes. Alternatively, test in Firefox 115 ESR or Chrome 109. Safari/iOS older than 16.4 can't run the app at all, so it shows no banner.
+- One manual copy on the dev database confirms traveler needs carry over (the needs filter is only covered by mocked tests).
+- Demo prep: the tour reopens once for every account (new per-account key), so click through it once on the demo browser. Check the Itineraries header line on the projector laptop (it wraps around 1330–1440 px). Approval is desktop-only.
+
+QA outcome: pending the user's hands-on run.
