@@ -23,7 +23,8 @@ const mocks = vi.hoisted(() => ({
   approveTrip: vi.fn(),
   reopenTrip: vi.fn(),
   duplicateTrip: vi.fn(),
-  createPlaceSession: vi.fn()
+  createPlaceSession: vi.fn(),
+  invalidateAgencyDashboards: vi.fn()
 }));
 
 vi.mock("../src/db/prisma", () => ({ prisma: {} }));
@@ -53,6 +54,9 @@ vi.mock("../src/services/places/placeServices", () => ({
   getPlaceRefreshScheduler: vi.fn(() => "scheduler")
 }));
 vi.mock("../src/modules/weather/weatherService", () => ({ itineraryWeatherService: {} }));
+vi.mock("../src/modules/dashboard/dashboardFreshness", () => ({
+  invalidateAgencyDashboards: mocks.invalidateAgencyDashboards
+}));
 
 import { ApiError, errorHandler, notFoundHandler } from "../src/http/errors";
 import { itineraryRoutes } from "../src/modules/itineraries/itineraryRoutes";
@@ -221,6 +225,24 @@ describe("POST /trips/:tripId/reopen", () => {
     expect(mocks.reopenTrip).toHaveBeenCalledWith(AGENCY_ID, TRIP_ID);
   });
 
+  it("drops the cached dashboards once the trip is reopened", async () => {
+    mocks.reopenTrip.mockResolvedValue({ trip: { id: TRIP_ID }, itinerary: { id: ITINERARY_ID } });
+
+    await request(createApp()).post(`${base}/trips/${TRIP_ID}/reopen`);
+
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledWith(AGENCY_ID);
+  });
+
+  it("leaves the cached dashboards alone when the reopen fails", async () => {
+    mocks.reopenTrip.mockRejectedValue(new ApiError(404, "TRIP_NOT_FOUND", "Trip not found."));
+
+    const res = await request(createApp()).post(`${base}/trips/${TRIP_ID}/reopen`);
+
+    expect(res.status).toBe(404);
+    expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
+  });
+
   it("refuses staff who aren't assigned to the trip", async () => {
     mocks.requireTripAccess.mockRejectedValue(notAssigned());
 
@@ -244,6 +266,24 @@ describe("POST /trips/:tripId/duplicate", () => {
     expect(mocks.duplicateTrip).toHaveBeenCalledWith(AGENCY_ID, TRIP_ID, "user-staff");
   });
 
+  it("drops the cached dashboards so the copy shows up at once", async () => {
+    mocks.duplicateTrip.mockResolvedValue({ trip: { id: "trip-2" }, itinerary: { id: "itin-2" }, thread: { id: "thread-2" } });
+
+    await request(createApp()).post(`${base}/trips/${TRIP_ID}/duplicate`);
+
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledWith(AGENCY_ID);
+  });
+
+  it("leaves the cached dashboards alone when the copy fails", async () => {
+    mocks.duplicateTrip.mockRejectedValue(new ApiError(409, "TRIP_NOT_SAVED", "Save this trip first."));
+
+    const res = await request(createApp()).post(`${base}/trips/${TRIP_ID}/duplicate`);
+
+    expect(res.status).toBe(409);
+    expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
+  });
+
   it("refuses staff who aren't assigned to the trip", async () => {
     mocks.requireTripAccess.mockRejectedValue(notAssigned());
 
@@ -257,6 +297,31 @@ describe("POST /trips/:tripId/duplicate", () => {
     const res = await request(createApp()).post(`${base}/trips/not-a-uuid/duplicate`);
     expect(res.status).toBe(400);
     expect(mocks.duplicateTrip).not.toHaveBeenCalled();
+  });
+});
+
+describe("POST /trips/:tripId/approve", () => {
+  it("checks trip access, approves, then drops the cached dashboards", async () => {
+    const approved = { trip: { id: TRIP_ID, status: "APPROVED" }, itinerary: { id: ITINERARY_ID, status: "APPROVED" } };
+    mocks.approveTrip.mockResolvedValue(approved);
+
+    const res = await request(createApp()).post(`${base}/trips/${TRIP_ID}/approve`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual(approved);
+    expect(mocks.requireTripAccess).toHaveBeenCalledWith(staffUser, AGENCY_ID, TRIP_ID);
+    expect(mocks.approveTrip).toHaveBeenCalledWith(AGENCY_ID, TRIP_ID);
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledWith(AGENCY_ID);
+  });
+
+  it("leaves the cached dashboards alone when the approval fails", async () => {
+    mocks.approveTrip.mockRejectedValue(new ApiError(409, "ITINERARY_REQUIRED", "No itinerary."));
+
+    const res = await request(createApp()).post(`${base}/trips/${TRIP_ID}/approve`);
+
+    expect(res.status).toBe(409);
+    expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
   });
 });
 
