@@ -31,6 +31,26 @@ function parseTimeToMinutes(time: string | null | undefined): number | null {
   return parseInt(match[1], 10) * 60 + parseInt(match[2], 10);
 }
 
+/**
+ * Trim, collapse inner whitespace and lowercase, the way the client groups names and
+ * destinations on the Itineraries page, so the numbers match the tabs.
+ */
+function normalizeForMatch(value: string | null | undefined): string {
+  return String(value ?? "").trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+const MAX_ITINERARY_TITLE_LENGTH = 200;
+
+/** "Baguio weekend (option 2)" -> "Baguio weekend": a copy of a copy is not "(option 2) (option 3)". */
+function stripOptionSuffix(title: string): string {
+  return title.replace(/\s*\(option \d+\)\s*$/i, "").trim();
+}
+
+function optionTitle(base: string, optionNumber: number): string {
+  const suffix = ` (option ${optionNumber})`;
+  return `${base.slice(0, MAX_ITINERARY_TITLE_LENGTH - suffix.length).trimEnd()}${suffix}`;
+}
+
 function includeItineraryDetails() {
   return {
     days: {
@@ -803,6 +823,25 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
           throw new ApiError(409, "ITINERARY_REQUIRED", "This trip has no itinerary to copy yet.");
         }
 
+        // The copy is this client's next saved trip to the same place, so it is numbered the way
+        // the Itineraries page numbers its tabs: oldest first, among saved (in review or
+        // approved) trips of the same client and destination. The copy is the newest, so its
+        // number is the count of existing ones plus one. Names and destinations are compared the
+        // client's way (trimmed, inner whitespace collapsed, lowercase), and a trip with no
+        // itinerary is skipped because the page does not list it.
+        const sourceClient = normalizeForMatch(source.clientName);
+        const sourcePlace = normalizeForMatch(source.destinationSummary?.trim() || source.title);
+        const savedTrips = await tx.clientTrip.findMany({
+          where: { agencyId, status: { in: ["IN_REVIEW", "APPROVED_INTERNAL"] }, itineraries: { some: {} } },
+          select: { clientName: true, destinationSummary: true, title: true }
+        });
+        const sameClientAndPlace = savedTrips.filter(
+          (saved) =>
+            normalizeForMatch(saved.clientName) === sourceClient &&
+            normalizeForMatch(saved.destinationSummary?.trim() || saved.title) === sourcePlace
+        );
+        const optionNumber = sameClientAndPlace.length + 1;
+
         const trip = await tx.clientTrip.create({
           data: {
             agencyId,
@@ -825,7 +864,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
             agencyId,
             tripId: trip.id,
             createdByUserId,
-            title: sourceItinerary.title,
+            title: optionTitle(stripOptionSuffix(sourceItinerary.title) || source.title, optionNumber),
             summary: sourceItinerary.summary,
             status: "NEEDS_REVIEW",
             days: {
@@ -853,7 +892,7 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
               }))
             }
           },
-          select: { id: true, status: true, version: true }
+          select: { id: true, title: true, status: true, version: true }
         });
 
         const travelerNeeds = source.agentThreads[0]?.travelerNeeds;

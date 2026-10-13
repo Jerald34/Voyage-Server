@@ -186,7 +186,7 @@ export interface ItineraryRepository {
     createdByUserId: string;
   }): Promise<{
     trip: ClientTripRecord;
-    itinerary: { id: string; status: string; version: number };
+    itinerary: { id: string; title: string; status: string; version: number };
     thread: { id: string; tripId: string | null; title: string; travelerNeeds: unknown; createdAt: Date };
   }>;
   /** The id of the trip's newest itinerary, or null when it has none. */

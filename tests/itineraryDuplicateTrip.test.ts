@@ -58,8 +58,25 @@ function sourceTrip(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
+// A trip row as the option-number lookup sees it. The fake below answers that lookup the way the
+// database would for the parts of the query it can be asked: this agency, these statuses, and
+// only trips that have an itinerary. Matching the client and place is the repository's own job.
+function savedRow(overrides: Record<string, unknown> = {}) {
+  return {
+    agencyId: AGENCY,
+    status: "IN_REVIEW",
+    clientName: "Garcia",
+    destinationSummary: "Baguio City",
+    title: "Garcia itinerary",
+    hasItinerary: true,
+    ...overrides
+  };
+}
+
+function fakeClient(source: ReturnType<typeof sourceTrip> | null, saved: Array<ReturnType<typeof savedRow>> | null = null) {
   const calls: Record<string, any> = {};
+  // By default the only trip in the database is the one being copied.
+  const rows = saved ?? (source ? [savedRow({ status: source.status })] : []);
   // Everything duplicateTrip writes must go through the transaction's own client, so the
   // outer client's writers throw: calling `client.x` instead of `tx.x` fails the test.
   const outsideTransaction = (name: string) => async () => {
@@ -72,6 +89,18 @@ function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
         const { where } = args;
         return source && where.id === source.id && where.agencyId === source.agencyId ? source : null;
       },
+      async findMany(args: any) {
+        calls.savedTripsQuery = args;
+        const { where } = args;
+        return rows
+          .filter(
+            (row) =>
+              row.agencyId === where.agencyId &&
+              where.status.in.includes(row.status) &&
+              (!where.itineraries?.some || row.hasItinerary)
+          )
+          .map(({ clientName, destinationSummary, title }) => ({ clientName, destinationSummary, title }));
+      },
       async create({ data }: any) {
         calls.trip = data;
         return { id: "trip-2", ...data, createdAt: new Date(), updatedAt: new Date() };
@@ -80,7 +109,7 @@ function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
     itinerary: {
       async create(args: any) {
         calls.itinerary = args;
-        return { id: "itin-2", status: args.data.status, version: 1 };
+        return { id: "itin-2", title: args.data.title, status: args.data.status, version: 1 };
       }
     },
     agentThread: {
@@ -97,6 +126,7 @@ function fakeClient(source: ReturnType<typeof sourceTrip> | null) {
     },
     clientTrip: {
       findFirst: outsideTransaction("clientTrip.findFirst"),
+      findMany: outsideTransaction("clientTrip.findMany"),
       create: outsideTransaction("clientTrip.create")
     },
     itinerary: {
@@ -146,7 +176,7 @@ describe("duplicateTrip", () => {
       agencyId: AGENCY,
       tripId: "trip-2",
       createdByUserId: "staff-9",
-      title: "Baguio weekend",
+      title: "Baguio weekend (option 2)",
       summary: "Pines and food",
       status: "NEEDS_REVIEW"
     });
@@ -163,7 +193,7 @@ describe("duplicateTrip", () => {
         placeSnapshotId: "snap-2", routeFromPrevious: { polyline: "abc" }, staffNotes: null, clientNotes: null
       }
     ]);
-    expect(result.itinerary).toEqual({ id: "itin-2", status: "NEEDS_REVIEW", version: 1 });
+    expect(result.itinerary).toEqual({ id: "itin-2", title: "Baguio weekend (option 2)", status: "NEEDS_REVIEW", version: 1 });
   });
 
   it("gives the copy a fresh chat with the same traveler needs", async () => {
@@ -241,6 +271,107 @@ describe("duplicateTrip", () => {
   it("refuses a trip with no itinerary yet", async () => {
     const { client } = fakeClient(sourceTrip({ itineraries: [] }));
     await expect(duplicate(client)).rejects.toMatchObject({ statusCode: 409, code: "ITINERARY_REQUIRED" });
+  });
+});
+
+describe("duplicateTrip option numbering", () => {
+  const optionTitleFor = async (source: ReturnType<typeof sourceTrip>, saved: Array<ReturnType<typeof savedRow>>) => {
+    const { client, calls } = fakeClient(source, saved);
+    const result = await duplicate(client);
+    expect(calls.itinerary.data.title).toBe(result.itinerary.title);
+    return result.itinerary.title;
+  };
+  const withTitle = (title: string) => {
+    const source = sourceTrip();
+    source.itineraries[0].title = title;
+    return source;
+  };
+
+  it("titles the copy (option 2) when the source is the only saved trip to that place", async () => {
+    expect(await optionTitleFor(sourceTrip(), [savedRow({ status: "APPROVED_INTERNAL" })])).toBe("Baguio weekend (option 2)");
+  });
+
+  it("only looks at this agency's saved trips, in review or approved, that have an itinerary", async () => {
+    const { client, calls } = fakeClient(sourceTrip());
+    await duplicate(client);
+    expect(calls.savedTripsQuery.where).toEqual({
+      agencyId: AGENCY,
+      status: { in: ["IN_REVIEW", "APPROVED_INTERNAL"] },
+      itineraries: { some: {} }
+    });
+  });
+
+  it("takes the next number when an option already exists", async () => {
+    const saved = [savedRow({ status: "APPROVED_INTERNAL" }), savedRow()];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 3)");
+  });
+
+  it("does not stack suffixes when the source is already an option", async () => {
+    const saved = [savedRow({ status: "APPROVED_INTERNAL" }), savedRow()];
+    expect(await optionTitleFor(withTitle("Baguio weekend (option 2)"), saved)).toBe("Baguio weekend (option 3)");
+    expect(await optionTitleFor(withTitle("Baguio weekend (Option 12)  "), saved)).toBe("Baguio weekend (option 3)");
+  });
+
+  it("keeps an option mention that is not a trailing number", async () => {
+    expect(await optionTitleFor(withTitle("Baguio (option B) weekend"), [savedRow()])).toBe(
+      "Baguio (option B) weekend (option 2)"
+    );
+  });
+
+  it("does not count a trip to a different destination", async () => {
+    const saved = [savedRow(), savedRow({ destinationSummary: "Sagada" })];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 2)");
+  });
+
+  it("does not count another client's trip to the same place", async () => {
+    const saved = [savedRow(), savedRow({ clientName: "Reyes" })];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 2)");
+  });
+
+  it("does not count drafts or archived trips", async () => {
+    const saved = [savedRow(), savedRow({ status: "DRAFT" }), savedRow({ status: "ARCHIVED" })];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 2)");
+  });
+
+  it("does not count a trip in another agency", async () => {
+    const saved = [savedRow(), savedRow({ agencyId: "agency-2" })];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 2)");
+  });
+
+  it("does not count a trip with no itinerary, because the page never lists it", async () => {
+    const saved = [savedRow(), savedRow({ hasItinerary: false })];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 2)");
+  });
+
+  it("counts names and places the way the tabs group them: case and spacing do not matter", async () => {
+    const saved = [
+      savedRow({ clientName: "  garcia " }),
+      savedRow({ clientName: "GARCIA", destinationSummary: "baguio   city" }),
+      savedRow({ clientName: "Gar  cia" })
+    ];
+    expect(await optionTitleFor(sourceTrip({ clientName: "Garcia  " }), saved)).toBe("Baguio weekend (option 3)");
+  });
+
+  it("falls back to the trip title for the place, like the tabs do, when the summary is blank", async () => {
+    const source = sourceTrip({ destinationSummary: "  ", title: "Boracay" });
+    const saved = [
+      savedRow({ destinationSummary: null, title: "BORACAY" }),
+      savedRow({ destinationSummary: "Boracay", title: "Something else" }),
+      savedRow({ destinationSummary: "Baguio City", title: "Boracay" })
+    ];
+    expect(await optionTitleFor(source, saved)).toBe("Baguio weekend (option 3)");
+  });
+
+  it("keeps the whole title within the 200-character limit", async () => {
+    const title = await optionTitleFor(withTitle("x".repeat(200)), [savedRow()]);
+    expect(title).toHaveLength(200);
+    expect(title.endsWith("x (option 2)")).toBe(true);
+  });
+
+  it("leaves the trip's own title alone, since the tabs group by it", async () => {
+    const { client, calls } = fakeClient(sourceTrip(), [savedRow()]);
+    await duplicate(client);
+    expect(calls.trip.title).toBe("Garcia itinerary");
   });
 });
 
