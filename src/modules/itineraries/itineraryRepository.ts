@@ -41,9 +41,18 @@ function normalizeForMatch(value: string | null | undefined): string {
 
 const MAX_ITINERARY_TITLE_LENGTH = 200;
 
+const OPTION_SUFFIX = /\s*\(option (\d+)\)\s*$/i;
+
 /** "Baguio weekend (option 2)" -> "Baguio weekend": a copy of a copy is not "(option 2) (option 3)". */
 function stripOptionSuffix(title: string): string {
-  return title.replace(/\s*\(option \d+\)\s*$/i, "").trim();
+  return title.replace(OPTION_SUFFIX, "").trim();
+}
+
+/** The n of a trailing "(option n)". A title without one is the first option, 1. */
+function optionNumberOf(title: string | null | undefined): number {
+  const match = OPTION_SUFFIX.exec(title ?? "");
+  const n = match ? Number(match[1]) : 1;
+  return Number.isSafeInteger(n) && n >= 1 ? n : 1;
 }
 
 function optionTitle(base: string, optionNumber: number): string {
@@ -278,10 +287,10 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         if (!existing) {
           throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
         }
-        await tx.agentThread.updateMany({
-          where: { tripId, agencyId },
-          data: { tripId: null }
-        });
+        // The trip's chats go with it: left behind they would come back as empty drafts. Their
+        // messages, runs, tool calls, tasks, sources and events cascade from the thread, and the
+        // thread-to-trip link does not (NoAction), so the chats must go before the trip.
+        await tx.agentThread.deleteMany({ where: { tripId, agencyId } });
         await tx.clientTrip.delete({
           where: { id_agencyId: { id: tripId, agencyId } }
         });
@@ -828,19 +837,27 @@ export function createPrismaItineraryRepository(client: PrismaClient = prisma): 
         // approved) trips of the same client and destination. The copy is the newest, so its
         // number is the count of existing ones plus one. Names and destinations are compared the
         // client's way (trimmed, inner whitespace collapsed, lowercase), and a trip with no
-        // itinerary is skipped because the page does not list it.
+        // itinerary is skipped because the page does not list it. Removing an option leaves a gap
+        // in the titles, so the number is never below the highest one already used plus one:
+        // with "(option 3)" left after "(option 2)" was removed, the next copy is "(option 4)".
         const sourceClient = normalizeForMatch(source.clientName);
         const sourcePlace = normalizeForMatch(source.destinationSummary?.trim() || source.title);
         const savedTrips = await tx.clientTrip.findMany({
           where: { agencyId, status: { in: ["IN_REVIEW", "APPROVED_INTERNAL"] }, itineraries: { some: {} } },
-          select: { clientName: true, destinationSummary: true, title: true }
+          select: {
+            clientName: true,
+            destinationSummary: true,
+            title: true,
+            itineraries: { orderBy: { createdAt: "desc" as const }, take: 1, select: { title: true } }
+          }
         });
         const sameClientAndPlace = savedTrips.filter(
           (saved) =>
             normalizeForMatch(saved.clientName) === sourceClient &&
             normalizeForMatch(saved.destinationSummary?.trim() || saved.title) === sourcePlace
         );
-        const optionNumber = sameClientAndPlace.length + 1;
+        const highestUsed = Math.max(0, ...sameClientAndPlace.map((saved) => optionNumberOf(saved.itineraries[0]?.title)));
+        const optionNumber = Math.max(sameClientAndPlace.length, highestUsed) + 1;
 
         const trip = await tx.clientTrip.create({
           data: {

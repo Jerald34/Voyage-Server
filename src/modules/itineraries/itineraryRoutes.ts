@@ -197,6 +197,9 @@ itineraryRoutes.delete("/trips/:tripId", async (request, response, next) => {
     const { tripId } = tripIdParamsSchema.parse(request.params);
     await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
     const result = await itineraryService.deleteTrip(agencyId, tripId);
+    // A removed trip leaves the dashboard and calendar lists. Drop the cached dashboards so the
+    // next read is fresh, not up to a minute stale.
+    invalidateAgencyDashboards(agencyId);
     response.json(result);
   } catch (error) {
     next(error);

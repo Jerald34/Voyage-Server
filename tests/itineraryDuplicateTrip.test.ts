@@ -69,6 +69,8 @@ function savedRow(overrides: Record<string, unknown> = {}) {
     destinationSummary: "Baguio City",
     title: "Garcia itinerary",
     hasItinerary: true,
+    // The title of the trip's newest itinerary, which carries its option number.
+    itineraryTitle: "Baguio weekend",
     ...overrides
   };
 }
@@ -99,7 +101,12 @@ function fakeClient(source: ReturnType<typeof sourceTrip> | null, saved: Array<R
               where.status.in.includes(row.status) &&
               (!where.itineraries?.some || row.hasItinerary)
           )
-          .map(({ clientName, destinationSummary, title }) => ({ clientName, destinationSummary, title }));
+          .map(({ clientName, destinationSummary, title, itineraryTitle }) => ({
+            clientName,
+            destinationSummary,
+            title,
+            itineraries: [{ title: itineraryTitle }]
+          }));
       },
       async create({ data }: any) {
         calls.trip = data;
@@ -301,9 +308,62 @@ describe("duplicateTrip option numbering", () => {
     });
   });
 
+  it("asks for each trip's newest itinerary title, to see which numbers are taken", async () => {
+    const { client, calls } = fakeClient(sourceTrip());
+    await duplicate(client);
+    expect(calls.savedTripsQuery.select.itineraries).toEqual({
+      orderBy: { createdAt: "desc" },
+      take: 1,
+      select: { title: true }
+    });
+  });
+
   it("takes the next number when an option already exists", async () => {
-    const saved = [savedRow({ status: "APPROVED_INTERNAL" }), savedRow()];
+    const saved = [
+      savedRow({ status: "APPROVED_INTERNAL" }),
+      savedRow({ itineraryTitle: "Baguio weekend (option 2)" })
+    ];
     expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 3)");
+  });
+
+  it("keeps counting one by one while the numbers have no gaps", async () => {
+    const saved = [
+      savedRow({ status: "APPROVED_INTERNAL" }),
+      savedRow({ itineraryTitle: "Baguio weekend (option 2)" }),
+      savedRow({ itineraryTitle: "Baguio weekend (option 3)" })
+    ];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 4)");
+  });
+
+  it("never repeats a number after an option was removed", async () => {
+    // "(option 2)" was removed, so two trips are left, one of them titled "(option 3)".
+    const saved = [
+      savedRow({ status: "APPROVED_INTERNAL" }),
+      savedRow({ itineraryTitle: "Baguio weekend (option 3)" })
+    ];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 4)");
+  });
+
+  it("reads the number off the title whatever its case or spacing", async () => {
+    const saved = [savedRow({ itineraryTitle: "Baguio weekend (Option 7)  " }), savedRow()];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 8)");
+  });
+
+  it("counts a title without a number as the first option", async () => {
+    // Two trips, neither numbered: the count decides.
+    expect(await optionTitleFor(sourceTrip(), [savedRow(), savedRow({ itineraryTitle: "Something else" })])).toBe(
+      "Baguio weekend (option 3)"
+    );
+  });
+
+  it("ignores the numbers on other clients' and other places' trips", async () => {
+    const saved = [
+      savedRow(),
+      savedRow({ clientName: "Reyes", itineraryTitle: "Baguio weekend (option 9)" }),
+      savedRow({ destinationSummary: "Sagada", itineraryTitle: "Sagada trip (option 9)" }),
+      savedRow({ status: "DRAFT", itineraryTitle: "Baguio weekend (option 9)" })
+    ];
+    expect(await optionTitleFor(sourceTrip(), saved)).toBe("Baguio weekend (option 2)");
   });
 
   it("does not stack suffixes when the source is already an option", async () => {

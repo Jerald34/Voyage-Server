@@ -23,6 +23,7 @@ const mocks = vi.hoisted(() => ({
   approveTrip: vi.fn(),
   reopenTrip: vi.fn(),
   duplicateTrip: vi.fn(),
+  deleteTrip: vi.fn(),
   createPlaceSession: vi.fn(),
   invalidateAgencyDashboards: vi.fn()
 }));
@@ -46,7 +47,8 @@ vi.mock("../src/modules/itineraries/itineraryService", () => ({
     replaceDraft: mocks.replaceDraft,
     approveTrip: mocks.approveTrip,
     reopenTrip: mocks.reopenTrip,
-    duplicateTrip: mocks.duplicateTrip
+    duplicateTrip: mocks.duplicateTrip,
+    deleteTrip: mocks.deleteTrip
   }
 }));
 vi.mock("../src/services/places/placeServices", () => ({
@@ -297,6 +299,40 @@ describe("POST /trips/:tripId/duplicate", () => {
     const res = await request(createApp()).post(`${base}/trips/not-a-uuid/duplicate`);
     expect(res.status).toBe(400);
     expect(mocks.duplicateTrip).not.toHaveBeenCalled();
+  });
+});
+
+describe("DELETE /trips/:tripId", () => {
+  it("checks trip access, deletes, then drops the cached dashboards", async () => {
+    mocks.deleteTrip.mockResolvedValue({ deleted: true });
+
+    const res = await request(createApp()).delete(`${base}/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(200);
+    expect(res.body).toEqual({ deleted: true });
+    expect(mocks.requireTripAccess).toHaveBeenCalledWith(staffUser, AGENCY_ID, TRIP_ID);
+    expect(mocks.deleteTrip).toHaveBeenCalledWith(AGENCY_ID, TRIP_ID);
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledOnce();
+    expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledWith(AGENCY_ID);
+  });
+
+  it("leaves the cached dashboards alone when the delete fails", async () => {
+    mocks.deleteTrip.mockRejectedValue(new ApiError(404, "TRIP_NOT_FOUND", "Trip not found."));
+
+    const res = await request(createApp()).delete(`${base}/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(404);
+    expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
+  });
+
+  it("deletes nothing for a trip the caller can't reach", async () => {
+    mocks.requireTripAccess.mockRejectedValue(notAssigned());
+
+    const res = await request(createApp()).delete(`${base}/trips/${TRIP_ID}`);
+
+    expect(res.status).toBe(404);
+    expect(mocks.deleteTrip).not.toHaveBeenCalled();
+    expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
   });
 });
 
