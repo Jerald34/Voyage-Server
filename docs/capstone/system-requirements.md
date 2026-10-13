@@ -14,7 +14,7 @@ Answer to capstone panel item 14. The client table matches what the app shows in
 
 Memory and internet figures are guidance, not measured limits.
 
-Why these browser versions: Next.js 16 builds for Chrome and Edge 111, Firefox 111 and Safari 16.4 by default, and the styling library, Tailwind CSS v4, officially supports Chrome 111, Safari 16.4 and Firefox 128. Older browsers lose colours, shadows and some selected states. Older browsers that can still run Voyage's scripts (Chrome or Edge 94–110, Firefox 93–127) see a warning banner, which they can dismiss for the session. Safari and iPhone browsers older than 16.4 can't load the app at all. Voyage also installs as an app (PWA) on phones and computers that support it.
+Why these browser versions: Next.js 16 builds for Chrome and Edge 111, Firefox 111 and Safari 16.4 by default, and the styling library, Tailwind CSS v4, officially supports Chrome 111, Safari 16.4 and Firefox 128. Older browsers can lose colours, shadows and some selected states. Older browsers that can still run Voyage's scripts (Chrome or Edge 94–110, Firefox 93–127) see a warning banner, which they can dismiss for the session. In older browsers (Safari or any iPhone browser before 16.4, Chrome or Edge before 94, Firefox before 93), Voyage's scripts don't run: the page may appear, but nothing works and no warning shows. Voyage also installs as an app (PWA) on phones and computers that support it.
 
 Travelers who only open a shared itinerary link need the same browser, and no account.
 

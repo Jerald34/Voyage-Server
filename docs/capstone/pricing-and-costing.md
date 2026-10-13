@@ -9,7 +9,7 @@ Prices were set from both sides:
 - **Floor (cost-plus):** what one agency costs to serve, so no plan loses money.
 - **Ceiling (market):** what agencies pay for comparable tools, so Voyage stays cheaper.
 
-All figures use **₱61 = US$1** (mid-2026 rates were ₱60.6–61.8; recheck before the defense). At October 2026's rate (about ₱62.5), the per-itinerary cost still rounds to ₱130 and each plan's floor rises by only about ₱7, so the prices and margins hold.
+All figures use **₱61 = US$1** (mid-2026 rates were ₱60.6–61.8). At October 2026's rate (about ₱62.5), the per-itinerary cost still rounds to ₱130 and each plan's floor rises by only about ₱7, so the prices and margins hold.
 
 ## 1. Variable cost per itinerary
 
@@ -67,7 +67,7 @@ Margin = (price − floor) ÷ price. Even if every agency uses its whole allowan
 | Tern (annual) | $35 per seat per month | ₱4,270 | ₱10,675 | ₱32,025 |
 | **Voyage** | per agency | **₱2,990** | **₱6,990** | **₱16,990** |
 
-At each plan's full team size (2, 5 and 15 people), Voyage costs less than both. Travefy Core can be cheaper for a solo agent or a team just past a plan's limit (for example 3 or 6 people). Tern includes AI up to a usage limit and sells more AI use as an add-on (Tern Pro, from $19 a month).
+At each plan's full team size (2, 5 and 15 people), Voyage costs less than both. Travefy Core and Tern can both be cheaper for a solo agent or a team just past a plan's limit (for example 3 or 6 people). Tern includes AI up to a usage limit and sells more AI use as an add-on (Tern Pro, from $19 a month).
 
 ## 5. Free trial
 
@@ -77,7 +77,7 @@ What happens on day 15? During the pilot, nothing is charged and billing is not 
 
 ## 6. Limits of this costing
 
-- Prices are display only. Voyage has no payment processing, no stored plan and no plan-based usage cap (only anti-abuse limits on messages to the agent); adding them (for example PayMongo checkout) is future work.
+- Prices are display only. Voyage has no payment processing, no stored plan and no plan-based usage cap (only anti-abuse limits on messages to the agent). Adding payments, a stored plan and plan limits (for example PayMongo checkout) is future work.
 - Third-party prices change; recheck Google Maps Platform, Gemini API, Railway, Vercel, Resend and Serper pricing pages and the exchange rate before quoting these numbers.
 - The app estimates each run's AI cost from its token count and Google's list price; the AI rows above use the same method.
 - Weather comes from Open-Meteo's free API, which is for non-commercial use; a paid Open-Meteo plan must be added to the fixed cost before billing starts.
@@ -90,6 +90,7 @@ What happens on day 15? During the pilot, nothing is charged and billing is not 
 (accessed 13 Oct 2026)
 
 - Gemini 3 Flash pricing (Vertex AI): https://cloud.google.com/vertex-ai/generative-ai/pricing
+- Gemini API pricing: https://ai.google.dev/gemini-api/docs/pricing
 - Google Maps Platform pricing (Places, Photos, Routes, free monthly caps): https://developers.google.com/maps/billing-and-pricing/pricing
 - Railway plans: https://docs.railway.com/pricing/plans
 - Vercel Pro: https://vercel.com/pricing
