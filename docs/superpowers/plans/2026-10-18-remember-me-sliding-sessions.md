@@ -30,7 +30,18 @@ Default is **checked** because the PWA is the main surface and people expect an 
 Notes:
 - The cap is enforced by clamping every `expiresAt` write, so `attachAuthUser` keeps its single `expiresAt <= now` check.
 - An iOS home-screen app may drop browser-session cookies when it is closed from the app switcher, so unchecked PWA users will sign in again on each launch. That's expected.
-- The hourly throttle keeps the cost at roughly one `UPDATE` per active user per hour. `useAgencyStatusPolling` already calls `/auth/me`, so an open app keeps renewing.
+- The hourly throttle keeps the cost at roughly one `UPDATE` per active user per hour. Renewal comes from real use: `useAgencyStatusPolling` only polls while an agency is unverified, so an idle open tab still times out after its idle window.
+
+## As built (2026-10-18)
+
+The plan was executed on `feat/remember-me-sessions` in both repos. Review rounds changed these things from the task text below:
+- `sessionLifetimeConfig(overrides: Partial<SessionLifetimeConfig>)`; `AuthServiceOptions.sessionTtlDays` was removed in favour of `sessionLifetime`. `renewedSessionExpiry` returns null for an already-expired session. `SESSION_SHORT_TTL_HOURS` has a minimum of 2.
+- Persistent cookies use a relative `maxAge` (not `expires`), so a wrong device clock can't expire them early.
+- Renewal is wrapped so it can never fail a request, uses a compare-and-set `updateMany`, and is skipped on `POST /auth/logout` (covered by `tests/logoutCookie.test.ts`).
+- The client sends `rememberMe` only when it is `false`, so the client keeps working against an older server whose strict `loginSchema` rejects the key.
+- Checkbox tests live in `tests/login-form-remember.test.jsx`. `tests/login-page.test.jsx` can't run on staging because `app/components/icons/index.js` has JSX in a .js file.
+- `app/api/stream/route.js` forwards upstream `Set-Cookie`, so a renewal on an SSE request refreshes the cookie.
+- Deploy the server (with its migration) before the client.
 
 ## File map
 
@@ -50,7 +61,7 @@ Notes:
 **Voyage-Client**
 - Modify `app/hooks/useAuth.js`: `login({ rememberMe })`, exported `oauthStartUrl`, `startOAuth(provider, { rememberMe })`.
 - Modify `app/components/auth/LoginForm.jsx`: the checkbox.
-- Tests: create `tests/use-auth-remember.test.jsx`; modify `tests/login-page.test.jsx`.
+- Tests: create `tests/use-auth-remember.test.jsx` and `tests/login-form-remember.test.jsx` (as built; the plan originally said modify `tests/login-page.test.jsx`).
 
 Work on whatever branch is checked out (both repos were on `staging` when this was written). Do not create or switch branches. Commit after each task, never push, and leave out any `Co-Authored-By` line.
 
