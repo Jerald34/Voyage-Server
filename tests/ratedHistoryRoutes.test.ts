@@ -26,7 +26,7 @@ vi.mock("../src/db/prisma", () => ({
   prisma: {
     session: {
       findUnique: vi.fn(),
-      update: vi.fn()
+      updateMany: vi.fn()
     },
     clientTrip: {
       findUnique: vi.fn()
@@ -185,6 +185,7 @@ function makeAccess(agencyId: string, userId: string, role: "OWNER" | "ADMIN" | 
 // ── Typed mock references ────────────────────────────────────────────────────
 
 const mockSessionFindUnique = prisma.session.findUnique as ReturnType<typeof vi.fn>;
+const mockSessionUpdateMany = prisma.session.updateMany as ReturnType<typeof vi.fn>;
 const mockTripFindUnique = (prisma as any).clientTrip.findUnique as ReturnType<typeof vi.fn>;
 const mockRequireVerifiedMember = agencyAccessService.requireVerifiedAgencyMember as ReturnType<typeof vi.fn>;
 const mockListRatedHistory = ratedHistoryService.listRatedHistory as ReturnType<typeof vi.fn>;
@@ -220,6 +221,8 @@ beforeEach(() => {
   vi.resetAllMocks();
   // Default: ownerA authenticated
   authenticateAs(USER_OWNER_A_ID, AGENCY_A_ID);
+  // attachAuthUser renews the fresh session through a compare-and-set updateMany.
+  mockSessionUpdateMany.mockResolvedValue({ count: 1 });
   // Default: access allowed for agencyA
   mockRequireVerifiedMember.mockResolvedValue(makeAccess(AGENCY_A_ID, USER_OWNER_A_ID));
 });
