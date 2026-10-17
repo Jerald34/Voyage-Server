@@ -85,6 +85,12 @@ export function createPrismaAgencyRepository(client: PrismaClient = prisma): Age
     },
     async findUserById(userId) {
       return client.user.findUnique({ where: { id: userId } });
+    },
+    async listActiveSuperAdmins() {
+      return client.user.findMany({
+        where: { role: "SUPER_ADMIN", status: "ACTIVE" },
+        select: { id: true, email: true, displayName: true }
+      });
     }
   };
 }

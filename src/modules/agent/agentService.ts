@@ -63,6 +63,14 @@ function humanizeToolName(name: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
+// The agent's bookkeeping tools; the client hides them too (processBubbleLabels.js).
+const TRACKING_TOOL_NAMES = new Set(["add_agent_task", "update_agent_task", "list_agent_tasks", "record_agent_task"]);
+
+function countStops(count: number): string {
+  return `${count} ${count === 1 ? "stop" : "stops"}`;
+}
+
+// Wording mirrors summarize() in Voyage-Client/app/components/agent/process-bubble/processBubbleLabels.js.
 function summarizeTimeline(
   timeline: ProcessTimelineEntry[],
   durationMs: number | null,
@@ -71,10 +79,12 @@ function summarizeTimeline(
   const durationStr =
     durationMs != null ? (durationMs / 1000).toFixed(1) + "s" : "-";
 
-  const toolEntries = timeline.filter((e): e is { id: string; kind: "tool"; name: string } => e.kind === "tool");
+  const toolEntries = timeline.filter(
+    (e): e is { id: string; kind: "tool"; name: string } => e.kind === "tool" && !TRACKING_TOOL_NAMES.has(e.name)
+  );
 
   if (toolEntries.length === 0) {
-    return `Thought for ${durationStr}`;
+    return `Replied in ${durationStr}`;
   }
 
   // Only when the run really ended with questions; a failed ask_user call does not count.
@@ -92,10 +102,10 @@ function summarizeTimeline(
     if (toolEntries.length >= 3) {
       return `Built itinerary · ${durationStr}`;
     }
-    return `Added ${toolEntries.length} items · ${durationStr}`;
+    return `Added ${countStops(toolEntries.length)} · ${durationStr}`;
   }
 
-  return `Worked for ${durationStr}`;
+  return `Finished in ${durationStr}`;
 }
 
 function buildProcessSnapshot(

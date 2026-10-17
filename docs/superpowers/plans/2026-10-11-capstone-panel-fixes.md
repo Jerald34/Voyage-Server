@@ -3449,6 +3449,47 @@ Expected: only the 8 known failing files; `next build` green.
 
 - [ ] **Step 4: Record the results.** Note pass/fail per check under a "Results" heading in this plan and commit the plan. Then tell the user what was verified and what wasn't.
 
+### Results (2026-10-12, branch `feat/capstone-panel-fixes` in both repos)
+
+**Step 1, server: PASS.**
+- `npm test` gave 1354 passed and 11 failed. The 11 are the known stale tests: agentLogger 1, agentOrchestrator 4, modelProvider 2, webSearchProvider 4.
+- `npm run build` (tsc) is clean.
+
+**Step 2, client: PASS.**
+- `npm test` gave 1579 passed and 1 failed. The failure is the known stale `agent-command-center-places` test.
+- 6 files fail to load because of the known JSX in `app/components/icons/index.js`. That is one file fewer than the old baseline of 8.
+- `npm run build` is green.
+
+**Step 3, hands-on checks: NOT RUN.** Docker Desktop was off, so there was no local database, and no email provider was available.
+- Checks 1-5 and 7-9 are still open for the user.
+- Check 6 (the PDF) was covered without a person looking at it. A review harness drove real jsPDF fonts over four trips: a sample trip, a 5-day stress trip, edge cases and a 45-day trip. It found:
+  - no text past the margins or under photos
+  - nothing below the content limit
+  - day bars always on the same page as their first stop
+  - the glance header repeated after page breaks
+  - one footer per page
+
+**Changes beyond the plan:** each came out of a review and was approved.
+- **Item 24:** a running task with no label never blanks the status. One sr-only live region stays mounted, so screen readers announce the first step. Empty step lists show no chevron, and steps are grouped by the label shown.
+- **Item 20:**
+  - Email transports time out: SMTP after 10/10/15 s, Resend after 10 s.
+  - The notifier is fire-and-forget, so a slow mail provider never holds up register, approve or reject.
+  - Admin alerts go out one at a time, for Resend's rate limit.
+  - Owners are emailed only when the decision changes their status.
+  - The support subject is capped at 150 characters.
+  - The pending screen sends the user to `/login` when the session expires, and to `/login?step=agency` when the agency is gone. It does this through a shared `applyAuthUser`; first-load routing is unchanged.
+- **Item 7:**
+  - A day bar reserves space for its first stop, and long time ranges break after the dash.
+  - The greys are darker for print (about 4.5:1 or better).
+  - The glance header repeats after a page break, and empty stops are skipped.
+  - Loaded photos are cached.
+  - Share PDFs fall back to the trip's client name.
+  - The landing page's sample-PDF block shows the new layout.
+
+**More known limits:**
+- A signed-out super admin who opens the "Review agency" link signs in and lands on the Command Center, not Admin, because the deep link doesn't survive `/login`.
+- The public share route returns the whole share row, including `clientEmail` and `token`, and `buildLogoUrl` points at a bucket the client can't read. Both predate this work and were raised as a separate task.
+
 ---
 
 ## Self-review (done while writing)

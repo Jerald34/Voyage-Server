@@ -1418,5 +1418,41 @@ describe("answering ask_user questions", () => {
   });
 });
 
+describe("process summary wording", () => {
+  async function finishRunWith(events: Array<{ type: string; payload: Record<string, unknown> }>) {
+    const repository = createMemoryRepository();
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Baguio" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Plan Baguio");
+    for (const event of events) {
+      await service.recordRunEvent(run, event as never);
+    }
+    const result = await service.completeRun(run.id, "Done.");
+    return (result.message.metadata as any).process.activeLabel as string;
+  }
+
+  const tool = (name: string) => [
+    { type: "tool.started", payload: { name, input: {} } },
+    { type: "tool.completed", payload: { name, output: {} } }
+  ];
+
+  it("says Replied in for a run that only reasoned", async () => {
+    await expect(finishRunWith([{ type: "thought.delta", payload: { delta: "Considering the route" } }])).resolves.toMatch(/^Replied in /);
+  });
+
+  it("counts stops, singular and plural", async () => {
+    await expect(finishRunWith([...tool("add_itinerary_item")])).resolves.toMatch(/^Added 1 stop · /);
+    await expect(finishRunWith([...tool("add_itinerary_item"), ...tool("add_itinerary_item")])).resolves.toMatch(/^Added 2 stops · /);
+  });
+
+  it("says Finished in for a mix of other tools", async () => {
+    await expect(finishRunWith([...tool("web_search"), ...tool("estimate_route")])).resolves.toMatch(/^Finished in /);
+  });
+
+  it("does not count progress-tracking tools", async () => {
+    await expect(finishRunWith([...tool("record_agent_task"), ...tool("add_itinerary_item")])).resolves.toMatch(/^Added 1 stop · /);
+  });
+});
+
 // Export for reuse in other test files
 export { createMemoryRepository };

@@ -205,6 +205,7 @@ export type AgentOrchestratorAgentService = {
   ): Promise<{
     messages: Array<{ role: "USER" | "ASSISTANT" | "SYSTEM_VISIBLE"; content: string; metadata?: unknown }>;
     travelerNeeds?: unknown;
+    tripId?: string | null;
   }>;
   startRun(runId: string, startedAt: Date): Promise<AgentRunRecord>;
   recordRunEvent(run: AgentRunRecord, event: AgentEvent): Promise<AgentRunEventRecord>;

@@ -3,6 +3,7 @@ import { Router } from "express";
 import { requireAuth } from "../../http/authMiddleware";
 import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
+import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 import {
   manualDayRenameSchema,
   manualStopCreateSchema,
@@ -196,6 +197,9 @@ itineraryRoutes.delete("/trips/:tripId", async (request, response, next) => {
     const { tripId } = tripIdParamsSchema.parse(request.params);
     await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
     const result = await itineraryService.deleteTrip(agencyId, tripId);
+    // A removed trip leaves the dashboard and calendar lists. Drop the cached dashboards so the
+    // next read is fresh, not up to a minute stale.
+    invalidateAgencyDashboards(agencyId);
     response.json(result);
   } catch (error) {
     next(error);
@@ -208,6 +212,9 @@ itineraryRoutes.post("/trips/:tripId/approve", async (request, response, next) =
     const { tripId } = tripIdParamsSchema.parse(request.params);
     await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
     const result = await itineraryService.approveTrip(agencyId, tripId);
+    // Approving moves the trip out of "needs review" and onto the calendar's
+    // approved list. Drop the cached dashboards so the next read is fresh.
+    invalidateAgencyDashboards(agencyId);
     response.json(result);
   } catch (error) {
     next(error);
@@ -222,7 +229,26 @@ itineraryRoutes.post("/trips/:tripId/reopen", async (request, response, next) =>
     const { tripId } = tripIdParamsSchema.parse(request.params);
     await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
     const result = await itineraryService.reopenTrip(agencyId, tripId);
+    // The trip is back in review, so the cached dashboards are out of date.
+    invalidateAgencyDashboards(agencyId);
     response.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Copy a trip as another option for the same client: a new trip in review with the same
+// days and stops, and a fresh Planner chat. Same access rule as changing the trip.
+itineraryRoutes.post("/trips/:tripId/duplicate", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { tripId } = tripIdParamsSchema.parse(request.params);
+    await agencyAccessService.requireTripAccess(request.authUser!, agencyId, tripId);
+    const result = await itineraryService.duplicateTrip(agencyId, tripId, request.authUser!.id);
+    // The copy is a new trip in review. Drop the cached dashboards so it shows
+    // up on the dashboard and calendar at once, not up to a minute later.
+    invalidateAgencyDashboards(agencyId);
+    response.status(201).json(result);
   } catch (error) {
     next(error);
   }
