@@ -111,7 +111,8 @@ export async function createMessage(req: Request, res: Response, next: NextFunct
       userId,
       input.content,
       input.imageUrls,
-      input.travelerNeeds
+      input.travelerNeeds,
+      input.answers
     );
 
     // Background run initiation

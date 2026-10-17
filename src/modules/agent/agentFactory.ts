@@ -8,6 +8,7 @@ import {
   createAddItineraryDayTool,
   createAddItineraryItemTool,
   createAgentToolRegistry,
+  createAskUserTool,
   createCreateItineraryTool,
   createDeleteItineraryTool,
   createEstimateRouteTool,
@@ -64,6 +65,7 @@ function createAgencyAgentOrchestrator() {
     createAddAgentTaskTool({ agentService }),
     createUpdateAgentTaskTool({ agentService }),
     createListAgentTasksTool({ agentService }),
+    createAskUserTool(),
     createCreateItineraryTool({ itineraryService, agentService }),
     createUpdateItineraryTool({ itineraryService, agentService }),
     createPlanItineraryTool({ itineraryService, agentService }),
@@ -210,6 +212,14 @@ function createAgencyAgentOrchestrator() {
         // Not authorized, or gone: no warnings rather than a failed run.
         return null;
       }
+    },
+    // A copied option's fresh chat has no itinerary events: read its trip's newest itinerary.
+    // Personal threads have no trips. Errors are left to the orchestrator, which logs them
+    // and starts the run without an itinerary.
+    loadTripItinerary: async ({ agencyId, tripId }) => {
+      if (!agencyId) return null;
+      const itineraryId = await itineraryService.findTripLatestItineraryId(agencyId, tripId);
+      return itineraryId ? await itineraryService.getItinerary(agencyId, itineraryId) : null;
     },
     createPlaceSession: (agencyId) =>
       createPlaceSession(agencyId, {

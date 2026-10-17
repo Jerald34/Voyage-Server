@@ -34,7 +34,11 @@ vi.mock("../src/services/oauth", () => ({
 vi.mock("../src/services/email", () => ({
   sendVerificationEmail: vi.fn().mockResolvedValue(undefined),
   sendPasswordResetEmail: vi.fn().mockResolvedValue(undefined),
-  sendAgencyInvitationEmail: vi.fn().mockResolvedValue(undefined)
+  sendAgencyInvitationEmail: vi.fn().mockResolvedValue(undefined),
+  sendAgencyApplicationReceivedEmail: vi.fn().mockResolvedValue(undefined),
+  sendAgencyApprovedEmail: vi.fn().mockResolvedValue(undefined),
+  sendAgencyRejectedEmail: vi.fn().mockResolvedValue(undefined),
+  sendNewAgencyApplicationEmail: vi.fn().mockResolvedValue(undefined)
 }));
 
 vi.mock("../src/modules/shares/shareService", () => ({

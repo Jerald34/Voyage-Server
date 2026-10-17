@@ -84,4 +84,5 @@ export type AgencyRepository = {
   deleteAgencyCascade(agencyId: string): Promise<void>;
   updateUser(userId: string, data: { accountType?: "PENDING" | "PERSONAL" | "AGENCY_USER" }): Promise<{ id: string; accountType: string }>;
   findUserById(userId: string): Promise<{ id: string; accountType: string } | null>;
+  listActiveSuperAdmins(): Promise<Array<{ id: string; email: string; displayName: string }>>;
 };

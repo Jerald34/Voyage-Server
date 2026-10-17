@@ -16,6 +16,7 @@ import {
 } from "./agentThreadTitler";
 import type {
   AgentRepository,
+  AgentMessageRecord,
   AgentRunRecord,
   AgentRunEventRecord,
   AgentToolCallInput,
@@ -24,8 +25,16 @@ import type {
   AgentTaskRecord,
   AgentSourceInput,
   AgentRunStatus,
-  CompleteRunUsage
+  CompleteRunUsage,
+  CompleteRunOptions
 } from "./agentTypes";
+import {
+  ASK_USER_TOOL_NAME,
+  parseStoredAskUser,
+  questionNotPendingError,
+  resolveAskUserAnswers,
+  type AskUserAnswersInput
+} from "./askUser";
 import { createPrismaAgentRepository } from "./agentRepository";
 
 // ---------------------------------------------------------------------------
@@ -54,14 +63,33 @@ function humanizeToolName(name: string): string {
     .replace(/\b\w/g, (c) => c.toUpperCase());
 }
 
-function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number | null): string {
+// The agent's bookkeeping tools; the client hides them too (processBubbleLabels.js).
+const TRACKING_TOOL_NAMES = new Set(["add_agent_task", "update_agent_task", "list_agent_tasks", "record_agent_task"]);
+
+function countStops(count: number): string {
+  return `${count} ${count === 1 ? "stop" : "stops"}`;
+}
+
+// Wording mirrors summarize() in Voyage-Client/app/components/agent/process-bubble/processBubbleLabels.js.
+function summarizeTimeline(
+  timeline: ProcessTimelineEntry[],
+  durationMs: number | null,
+  endedWithQuestions = false
+): string {
   const durationStr =
     durationMs != null ? (durationMs / 1000).toFixed(1) + "s" : "-";
 
-  const toolEntries = timeline.filter((e): e is { id: string; kind: "tool"; name: string } => e.kind === "tool");
+  const toolEntries = timeline.filter(
+    (e): e is { id: string; kind: "tool"; name: string } => e.kind === "tool" && !TRACKING_TOOL_NAMES.has(e.name)
+  );
 
   if (toolEntries.length === 0) {
-    return `Thought for ${durationStr}`;
+    return `Replied in ${durationStr}`;
+  }
+
+  // Only when the run really ended with questions; a failed ask_user call does not count.
+  if (endedWithQuestions && toolEntries.some((e) => e.name === ASK_USER_TOOL_NAME)) {
+    return `Asked for your input · ${durationStr}`;
   }
 
   const hasMapPinpoint = toolEntries.some((e) => e.name === "map_pinpoint");
@@ -74,17 +102,18 @@ function summarizeTimeline(timeline: ProcessTimelineEntry[], durationMs: number 
     if (toolEntries.length >= 3) {
       return `Built itinerary · ${durationStr}`;
     }
-    return `Added ${toolEntries.length} items · ${durationStr}`;
+    return `Added ${countStops(toolEntries.length)} · ${durationStr}`;
   }
 
-  return `Worked for ${durationStr}`;
+  return `Finished in ${durationStr}`;
 }
 
 function buildProcessSnapshot(
   runEvents: AgentRunEventRecord[],
   startedAt: Date | null,
   completedAt: Date,
-  tasks: AgentTaskRecord[] = []
+  tasks: AgentTaskRecord[] = [],
+  endedWithQuestions = false
 ): ProcessSnapshot | null {
   const timeline: ProcessTimelineEntry[] = [];
   let currentThoughtText: string | null = null;
@@ -160,12 +189,20 @@ function buildProcessSnapshot(
 
   return {
     status: "done",
-    activeLabel: summarizeTimeline(timeline, durationMs),
+    activeLabel: summarizeTimeline(timeline, durationMs, endedWithQuestions),
     timeline,
     tasks: tasksForSnapshot,
     durationMs,
     defaultOpen: false
   };
+}
+
+/** The questions being answered must be an assistant reply in this thread that asked them. */
+function resolveAnswersForThread(messages: AgentMessageRecord[], answers: AskUserAnswersInput) {
+  const question = messages.find((message) => message.id === answers.messageId && message.role === "ASSISTANT");
+  const askUser = question ? parseStoredAskUser(question.metadata) : null;
+  if (!askUser) throw questionNotPendingError();
+  return resolveAskUserAnswers(askUser, answers);
 }
 
 const TERMINAL_RUN_STATUSES: AgentRunStatus[] = ["COMPLETED", "FAILED", "CANCELLED"];
@@ -342,17 +379,23 @@ export function createAgentService(options: {
       userId: string,
       content: string,
       imageUrls?: string[],
-      travelerNeeds?: TravelerNeeds
+      travelerNeeds?: TravelerNeeds,
+      answers?: AskUserAnswersInput
     ) {
-      const parsed = createMessageSchema.parse({ content, imageUrls, travelerNeeds });
-      await this.getThread(agencyId, threadId);
-      const metadata = parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : undefined;
+      const parsed = createMessageSchema.parse({ content, imageUrls, travelerNeeds, answers });
+      const thread = await this.getThread(agencyId, threadId);
+      const storedAnswers = parsed.answers ? resolveAnswersForThread(thread.messages, parsed.answers) : undefined;
+      const metadata = {
+        ...(parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : {}),
+        ...(storedAnswers ? { answers: storedAnswers } : {})
+      };
       const result = await options.repository.createUserMessageAndRun({
         agencyId,
         threadId,
         authorUserId: userId,
         content: parsed.content,
-        metadata,
+        metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
+        ...(storedAnswers ? { answersTo: storedAnswers.messageId } : {}),
         travelerNeeds: parsed.travelerNeeds,
         modelProvider,
         modelName
@@ -490,7 +533,12 @@ export function createAgentService(options: {
       return created;
     },
 
-    async completeRun(runId: string, assistantContent: string, usage?: CompleteRunUsage) {
+    async completeRun(
+      runId: string,
+      assistantContent: string,
+      usage?: CompleteRunUsage,
+      completion: CompleteRunOptions = {}
+    ) {
       agentLogger.agentResponse(runId, assistantContent);
       const run = await getRun(runId);
       assertRunOpen(run);
@@ -506,7 +554,13 @@ export function createAgentService(options: {
         } catch {
           // best-effort
         }
-        processSnapshot = buildProcessSnapshot(runEvents, run.startedAt, completedAt, tasks);
+        processSnapshot = buildProcessSnapshot(
+          runEvents,
+          run.startedAt,
+          completedAt,
+          tasks,
+          Boolean(completion.askUser)
+        );
       } catch {
         // Best-effort: don't let snapshot failure block message persistence.
       }
@@ -515,7 +569,8 @@ export function createAgentService(options: {
         assistantContent,
         completedAt,
         processSnapshot: processSnapshot ?? undefined,
-        usage
+        usage,
+        askUser: completion.askUser
       });
       if (!completed) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
