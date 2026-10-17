@@ -21,10 +21,14 @@ const SESSION_COOKIE_ATTRS: Pick<CookieOptions, "httpOnly" | "secure" | "sameSit
   path: "/"
 };
 
-export function setSessionCookie(response: Response, token: string) {
+export type SessionCookieTiming = { persistent: boolean; expiresAt: Date };
+
+export function setSessionCookie(response: Response, token: string, timing: SessionCookieTiming) {
   response.cookie(env.SESSION_COOKIE_NAME, token, {
     ...SESSION_COOKIE_ATTRS,
-    maxAge: env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000
+    // "Keep me signed in" -> the cookie ends when the server session does.
+    // Otherwise no expiry at all: a browser-session cookie, dropped on close.
+    ...(timing.persistent ? { expires: timing.expiresAt } : {})
   });
 }
 

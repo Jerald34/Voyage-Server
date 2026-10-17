@@ -115,7 +115,7 @@ authRoutes.post("/login", async (request, response, next) => {
   try {
     const input = loginSchema.parse(request.body);
     const result = await authService.loginWithEmail(input);
-    setSessionCookie(response, result.sessionToken);
+    setSessionCookie(response, result.sessionToken, result.session);
     response.json({ user: serializeUser(result.user as NonNullable<Express.Request["authUser"]>) });
   } catch (error) {
     next(error);
@@ -245,7 +245,7 @@ authRoutes.get("/google/callback", async (request, response, next) => {
     }
     const claims = await verifyGoogleAuthorizationCode(code);
     const result = await authService.signInWithVerifiedOAuth(claims);
-    setSessionCookie(response, result.sessionToken);
+    setSessionCookie(response, result.sessionToken, result.session);
     response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
   } catch (error) {
     next(error);
@@ -289,7 +289,7 @@ authRoutes.post("/apple/callback", async (request, response, next) => {
     }
     const claims = await verifyAppleIdToken(idToken);
     const result = await authService.signInWithVerifiedOAuth(claims);
-    setSessionCookie(response, result.sessionToken);
+    setSessionCookie(response, result.sessionToken, result.session);
     response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
   } catch (error) {
     next(error);
