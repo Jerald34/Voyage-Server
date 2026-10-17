@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { env } from "../src/config/env";
 import {
   initialSessionExpiry,
   renewedSessionExpiry,
+  sessionLifetimeConfig,
+  SESSION_RENEW_INTERVAL_MS,
   type SessionLifetimeConfig
 } from "../src/modules/auth/sessionLifetime";
 
@@ -15,6 +18,26 @@ const config: SessionLifetimeConfig = {
   maxAgeMs: 90 * DAY,
   renewIntervalMs: HOUR
 };
+
+describe("sessionLifetimeConfig", () => {
+  it("derives its defaults from the environment", () => {
+    expect(sessionLifetimeConfig()).toEqual({
+      persistentTtlMs: env.SESSION_TTL_DAYS * DAY,
+      shortTtlMs: env.SESSION_SHORT_TTL_HOURS * HOUR,
+      maxAgeMs: env.SESSION_MAX_AGE_DAYS * DAY,
+      renewIntervalMs: SESSION_RENEW_INTERVAL_MS
+    });
+  });
+
+  it("lets a single field be overridden and keeps the env defaults for the rest", () => {
+    const overridden = sessionLifetimeConfig({ shortTtlMs: 5 });
+
+    expect(overridden.shortTtlMs).toBe(5);
+    expect(overridden.persistentTtlMs).toBe(env.SESSION_TTL_DAYS * DAY);
+    expect(overridden.maxAgeMs).toBe(env.SESSION_MAX_AGE_DAYS * DAY);
+    expect(overridden.renewIntervalMs).toBe(SESSION_RENEW_INTERVAL_MS);
+  });
+});
 
 describe("initialSessionExpiry", () => {
   it("gives remembered sessions the long idle window", () => {
@@ -47,7 +70,7 @@ describe("renewedSessionExpiry", () => {
   });
 
   it("never pushes past the hard cap from sign-in", () => {
-    const session = { createdAt: new Date(T), expiresAt: new Date(T + 80 * DAY), persistent: true };
+    const session = { createdAt: new Date(T), expiresAt: new Date(T + 86 * DAY), persistent: true };
     expect(renewedSessionExpiry(session, new Date(T + 85 * DAY), config)).toEqual(new Date(T + 90 * DAY));
   });
 
@@ -56,7 +79,13 @@ describe("renewedSessionExpiry", () => {
     expect(renewedSessionExpiry(session, new Date(T + 89 * DAY), config)).toBeNull();
   });
 
+  it("never resurrects a session that has already expired", () => {
+    const session = { createdAt: new Date(T), expiresAt: new Date(T + 30 * DAY), persistent: true };
+    expect(renewedSessionExpiry(session, new Date(T + 31 * DAY), config)).toBeNull();
+  });
+
   it("never shortens a session", () => {
+    // e.g. after the short window was lowered
     const session = { createdAt: new Date(T), expiresAt: new Date(T + 30 * DAY), persistent: false };
     expect(renewedSessionExpiry(session, new Date(T + HOUR * 2), config)).toBeNull();
   });

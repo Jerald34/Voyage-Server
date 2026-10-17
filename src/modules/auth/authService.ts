@@ -31,8 +31,7 @@ function addHours(date: Date, hours: number) {
 export function createAuthService(options: AuthServiceOptions) {
   const now = options.now ?? (() => new Date());
   const appOrigin = options.appOrigin ?? env.APP_ORIGIN;
-  const sessionLifetime =
-    options.sessionLifetime ?? sessionLifetimeConfig({ sessionTtlDays: options.sessionTtlDays });
+  const sessionLifetime = sessionLifetimeConfig(options.sessionLifetime);
   const passwordPepper = options.passwordPepper ?? env.PASSWORD_PEPPER;
 
   async function createSession(userId: string, persistent = true) {

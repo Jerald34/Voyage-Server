@@ -193,3 +193,21 @@ describe("weather configuration", () => {
     expect(() => parseEnv({ WEATHER_TYPICAL_YEARS: "11" })).toThrowError(/WEATHER_TYPICAL_YEARS/);
   });
 });
+
+describe("session lifetime configuration", () => {
+  it("applies documented defaults", async () => {
+    const { parseEnv } = await loadEnvModule();
+    const parsed = parseEnv({});
+
+    expect(parsed.SESSION_TTL_DAYS).toBe(30);
+    expect(parsed.SESSION_SHORT_TTL_HOURS).toBe(12);
+    expect(parsed.SESSION_MAX_AGE_DAYS).toBe(90);
+  });
+
+  it("rejects a short window under 2 hours, which the hourly renewal throttle could never extend", async () => {
+    const { parseEnv } = await loadEnvModule();
+
+    expect(() => parseEnv({ SESSION_SHORT_TTL_HOURS: "1" })).toThrowError(/SESSION_SHORT_TTL_HOURS/);
+    expect(parseEnv({ SESSION_SHORT_TTL_HOURS: "2" }).SESSION_SHORT_TTL_HOURS).toBe(2);
+  });
+});

@@ -6,7 +6,6 @@ import {
   type EmailSender
 } from "../src/modules/auth/authService";
 import { serializeUser } from "../src/modules/auth/authRoutes";
-import { env } from "../src/config/env";
 import { hashPassword } from "../src/services/password";
 import { hashToken } from "../src/services/tokens";
 
@@ -174,7 +173,7 @@ function createService() {
     emailSender,
     now,
     appOrigin: "http://localhost:3000",
-    sessionTtlDays: 30,
+    sessionLifetime: { persistentTtlMs: 30 * 24 * 60 * 60 * 1000, shortTtlMs: 12 * 60 * 60 * 1000 },
     passwordPepper: "pepper"
   });
 
@@ -559,7 +558,7 @@ describe("auth service — keep me signed in", () => {
     });
 
     expect(result.session.persistent).toBe(false);
-    expect(result.session.expiresAt).toEqual(new Date(NOW + env.SESSION_SHORT_TTL_HOURS * HOUR));
+    expect(result.session.expiresAt).toEqual(new Date(NOW + 12 * HOUR));
   });
 
   it("passes the choice through OAuth sign-in", async () => {
@@ -577,5 +576,23 @@ describe("auth service — keep me signed in", () => {
     );
 
     expect(result.session.persistent).toBe(false);
+  });
+
+  it("applies the choice again when an already-linked provider account signs in", async () => {
+    const { service } = createService();
+    const claims = {
+      provider: "GOOGLE" as const,
+      providerAccountId: "google-returning",
+      email: "returning@example.com",
+      emailVerified: true,
+      displayName: "Returning"
+    };
+
+    const first = await service.signInWithVerifiedOAuth(claims, { persistent: true });
+    const second = await service.signInWithVerifiedOAuth(claims, { persistent: false });
+
+    expect(first.session.persistent).toBe(true);
+    expect(second.session.persistent).toBe(false);
+    expect(second.session.expiresAt).toEqual(new Date(NOW + 12 * HOUR));
   });
 });

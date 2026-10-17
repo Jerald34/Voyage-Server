@@ -27,9 +27,11 @@ const envSchema = z.object({
   // the loopback PORT so local dev works; production must set this to the deployed URL.
   PUBLIC_API_ORIGIN: z.string().default(""),
   SESSION_COOKIE_NAME: z.string().default("voyage_session"),
+  // Idle window for "Keep me signed in" sessions (renewed on use).
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
   // Idle window for sessions where the user unticked "Keep me signed in".
-  SESSION_SHORT_TTL_HOURS: z.coerce.number().int().positive().default(12),
+  // At least 2: renewal is throttled to once an hour, so a 1-hour window would never renew.
+  SESSION_SHORT_TTL_HOURS: z.coerce.number().int().min(2).default(12),
   // Hard limit from sign-in; sliding renewal never pushes a session past it.
   SESSION_MAX_AGE_DAYS: z.coerce.number().int().positive().default(90),
   PASSWORD_PEPPER: z.string().default(""),

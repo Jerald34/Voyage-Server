@@ -16,12 +16,14 @@ export type SessionLifetimeConfig = {
   renewIntervalMs: number;
 };
 
-export function sessionLifetimeConfig(overrides: { sessionTtlDays?: number } = {}): SessionLifetimeConfig {
+/** Env-derived defaults; any field can be overridden (tests, alternative deployments). */
+export function sessionLifetimeConfig(overrides: Partial<SessionLifetimeConfig> = {}): SessionLifetimeConfig {
   return {
-    persistentTtlMs: (overrides.sessionTtlDays ?? env.SESSION_TTL_DAYS) * DAY_MS,
+    persistentTtlMs: env.SESSION_TTL_DAYS * DAY_MS,
     shortTtlMs: env.SESSION_SHORT_TTL_HOURS * HOUR_MS,
     maxAgeMs: env.SESSION_MAX_AGE_DAYS * DAY_MS,
-    renewIntervalMs: SESSION_RENEW_INTERVAL_MS
+    renewIntervalMs: SESSION_RENEW_INTERVAL_MS,
+    ...overrides
   };
 }
 
@@ -42,6 +44,8 @@ export function renewedSessionExpiry(
   now: Date,
   config: SessionLifetimeConfig
 ): Date | null {
+  // An expired token must never be brought back to life by a renewal.
+  if (session.expiresAt.getTime() <= now.getTime()) return null;
   const target = Math.min(
     now.getTime() + idleWindowMs(session.persistent, config),
     session.createdAt.getTime() + config.maxAgeMs

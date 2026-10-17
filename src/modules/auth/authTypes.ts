@@ -103,7 +103,6 @@ export type AuthServiceOptions = {
   emailSender: EmailSender;
   now?: () => Date;
   appOrigin?: string;
-  sessionTtlDays?: number;
-  sessionLifetime?: SessionLifetimeConfig;
+  sessionLifetime?: Partial<SessionLifetimeConfig>;
   passwordPepper?: string;
 };
