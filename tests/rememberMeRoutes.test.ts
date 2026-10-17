@@ -98,3 +98,60 @@ describe("POST /auth/login — keep me signed in", () => {
     expect(res.body?.error?.code).toBe("VALIDATION_ERROR");
   });
 });
+
+describe("Google sign-in — keep me signed in", () => {
+  beforeAll(() => {
+    Object.assign(env, {
+      GOOGLE_CLIENT_ID: env.GOOGLE_CLIENT_ID || "test-google-client",
+      GOOGLE_CLIENT_SECRET: env.GOOGLE_CLIENT_SECRET || "test-google-secret",
+      GOOGLE_REDIRECT_URI: env.GOOGLE_REDIRECT_URI || "http://localhost:4000/auth/google/callback"
+    });
+  });
+
+  beforeEach(() => {
+    vi.mocked(verifyGoogleAuthorizationCode).mockResolvedValue({
+      provider: "GOOGLE",
+      providerAccountId: "google-keep",
+      email: "keep@example.com",
+      emailVerified: true,
+      displayName: "Keep Me"
+    });
+  });
+
+  async function signInWithGoogle(startPath: string, persistentResult: boolean) {
+    vi.mocked(authService.signInWithVerifiedOAuth).mockResolvedValue(signInResult(persistentResult));
+    const app = createApp();
+    const start = await request(app).get(startPath);
+    const state = new URL(start.headers["location"] as string).searchParams.get("state") ?? "";
+    const oauthCookies = setCookies(start)
+      .map((c) => c.split(";")[0])
+      .filter((c) => c.startsWith("voyage_oauth_") && !c.endsWith("="))
+      .join("; ");
+    const callback = await request(app)
+      .get(`/auth/google/callback?code=google-code-123456&state=${state}`)
+      .set("Cookie", oauthCookies);
+    return { start, callback };
+  }
+
+  it("remembers by default", async () => {
+    const { callback } = await signInWithGoogle("/auth/google/start", true);
+
+    expect(callback.status).toBe(302);
+    expect(authService.signInWithVerifiedOAuth).toHaveBeenCalledWith(expect.any(Object), { persistent: true });
+  });
+
+  it("uses a short session when started with remember=0", async () => {
+    const { start, callback } = await signInWithGoogle("/auth/google/start?remember=0", false);
+
+    expect(setCookies(start).some((c) => c.startsWith("voyage_oauth_remember=0"))).toBe(true);
+    expect(callback.status).toBe(302);
+    expect(authService.signInWithVerifiedOAuth).toHaveBeenCalledWith(expect.any(Object), { persistent: false });
+    expect(sessionCookie(callback)).not.toContain("Expires=");
+  });
+
+  it("clears the remember cookie on the callback", async () => {
+    const { callback } = await signInWithGoogle("/auth/google/start?remember=0", false);
+
+    expect(setCookies(callback).some((c) => c.startsWith("voyage_oauth_remember=;"))).toBe(true);
+  });
+});
