@@ -25,7 +25,8 @@ import { randomUUID } from "node:crypto";
 vi.mock("../src/db/prisma", () => ({
   prisma: {
     session: {
-      findUnique: vi.fn()
+      findUnique: vi.fn(),
+      update: vi.fn()
     },
     clientTrip: {
       findUnique: vi.fn()
@@ -201,6 +202,8 @@ function authenticateAs(userId: string, agencyId: string) {
   mockSessionFindUnique.mockResolvedValue({
     id: randomUUID(),
     tokenHash: "ignored-by-mock",
+    persistent: true,
+    createdAt: new Date(),
     expiresAt: new Date(Date.now() + 86_400_000),
     user
   });
