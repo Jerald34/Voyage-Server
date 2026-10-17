@@ -28,6 +28,10 @@ const envSchema = z.object({
   PUBLIC_API_ORIGIN: z.string().default(""),
   SESSION_COOKIE_NAME: z.string().default("voyage_session"),
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  // Idle window for sessions where the user unticked "Keep me signed in".
+  SESSION_SHORT_TTL_HOURS: z.coerce.number().int().positive().default(12),
+  // Hard limit from sign-in; sliding renewal never pushes a session past it.
+  SESSION_MAX_AGE_DAYS: z.coerce.number().int().positive().default(90),
   PASSWORD_PEPPER: z.string().default(""),
   ADMIN_EMAILS: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
