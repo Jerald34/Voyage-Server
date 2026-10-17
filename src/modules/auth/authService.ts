@@ -10,6 +10,7 @@ import {
 import { hashPassword, verifyPassword } from "../../services/password";
 import { createRandomToken, hashToken } from "../../services/tokens";
 import type { AuthUserRecord, AuthServiceOptions, AuthRepository, ProviderAccountRecord } from "./authTypes";
+import { initialSessionExpiry, sessionLifetimeConfig } from "./sessionLifetime";
 
 export * from "./authTypes";
 
@@ -23,10 +24,6 @@ function assertActiveUser(user: AuthUserRecord) {
   }
 }
 
-function addDays(date: Date, days: number) {
-  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
-}
-
 function addHours(date: Date, hours: number) {
   return new Date(date.getTime() + hours * 60 * 60 * 1000);
 }
@@ -34,15 +31,17 @@ function addHours(date: Date, hours: number) {
 export function createAuthService(options: AuthServiceOptions) {
   const now = options.now ?? (() => new Date());
   const appOrigin = options.appOrigin ?? env.APP_ORIGIN;
-  const sessionTtlDays = options.sessionTtlDays ?? env.SESSION_TTL_DAYS;
+  const sessionLifetime =
+    options.sessionLifetime ?? sessionLifetimeConfig({ sessionTtlDays: options.sessionTtlDays });
   const passwordPepper = options.passwordPepper ?? env.PASSWORD_PEPPER;
 
-  async function createSession(userId: string) {
+  async function createSession(userId: string, persistent = true) {
     const sessionToken = createRandomToken();
     const session = await options.repository.createSession({
       userId,
       tokenHash: hashToken(sessionToken),
-      expiresAt: addDays(now(), sessionTtlDays)
+      persistent,
+      expiresAt: initialSessionExpiry(now(), persistent, sessionLifetime)
     });
 
     return { session, sessionToken };
@@ -148,7 +147,7 @@ export function createAuthService(options: AuthServiceOptions) {
       return { user };
     },
 
-    async loginWithEmail(input: { email: string; password: string }) {
+    async loginWithEmail(input: { email: string; password: string; rememberMe?: boolean }) {
       const user = await options.repository.findUserByEmailNormalized(normalizeEmail(input.email));
       if (!user || !user.passwordHash) {
         throw new ApiError(401, "INVALID_CREDENTIALS", "Email or password is incorrect.");
@@ -169,7 +168,7 @@ export function createAuthService(options: AuthServiceOptions) {
         );
       }
 
-      const { sessionToken, session } = await createSession(user.id);
+      const { sessionToken, session } = await createSession(user.id, input.rememberMe ?? true);
       return { user, session, sessionToken };
     },
 
@@ -289,13 +288,17 @@ export function createAuthService(options: AuthServiceOptions) {
       return { email: emailNormalized, available: !existingUser };
     },
 
-    async signInWithVerifiedOAuth(input: {
-      provider: "GOOGLE" | "APPLE";
-      providerAccountId: string;
-      email: string;
-      emailVerified: boolean;
-      displayName: string;
-    }) {
+    async signInWithVerifiedOAuth(
+      input: {
+        provider: "GOOGLE" | "APPLE";
+        providerAccountId: string;
+        email: string;
+        emailVerified: boolean;
+        displayName: string;
+      },
+      sessionOptions: { persistent?: boolean } = {}
+    ) {
+      const persistent = sessionOptions.persistent ?? true;
       const existingProviderAccount = await options.repository.findProviderAccount(
         input.provider,
         input.providerAccountId
@@ -303,7 +306,7 @@ export function createAuthService(options: AuthServiceOptions) {
 
       if (existingProviderAccount) {
         assertActiveUser(existingProviderAccount.user);
-        const { sessionToken, session } = await createSession(existingProviderAccount.user.id);
+        const { sessionToken, session } = await createSession(existingProviderAccount.user.id, persistent);
         return { user: existingProviderAccount.user, session, sessionToken };
       }
 
@@ -348,7 +351,7 @@ export function createAuthService(options: AuthServiceOptions) {
         providerEmailVerified: input.emailVerified
       });
 
-      const { sessionToken, session } = await createSession(user.id);
+      const { sessionToken, session } = await createSession(user.id, persistent);
       return { user, session, sessionToken };
     }
   };
