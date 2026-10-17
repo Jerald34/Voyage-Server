@@ -1,5 +1,6 @@
 import type { PrismaClient } from "@prisma/client";
 import type { VerificationEmailPayload } from "../../services/email";
+import type { SessionLifetimeConfig } from "./sessionLifetime";
 
 export type AuthUserRecord = {
   id: string;
@@ -27,6 +28,7 @@ export type SessionRecord = {
   id: string;
   userId: string;
   tokenHash: string;
+  persistent: boolean;
   expiresAt: Date;
   createdAt: Date;
   updatedAt: Date;
@@ -70,7 +72,7 @@ export type AuthRepository = {
     id: string,
     data: Partial<Pick<AuthUserRecord, "emailVerifiedAt" | "displayName" | "passwordHash" | "accountType">>
   ): Promise<AuthUserRecord>;
-  createSession(data: { userId: string; tokenHash: string; expiresAt: Date }): Promise<SessionRecord>;
+  createSession(data: { userId: string; tokenHash: string; persistent: boolean; expiresAt: Date }): Promise<SessionRecord>;
   deleteSessionsByUserId(userId: string): Promise<void>;
   deleteSessionByTokenHash(tokenHash: string): Promise<void>;
   markUnusedVerificationTokensUsed(userId: string, usedAt: Date): Promise<void>;
@@ -102,5 +104,6 @@ export type AuthServiceOptions = {
   now?: () => Date;
   appOrigin?: string;
   sessionTtlDays?: number;
+  sessionLifetime?: SessionLifetimeConfig;
   passwordPepper?: string;
 };
