@@ -44,6 +44,12 @@ export type RawDashboardData = {
     status: "PENDING" | "SEEN" | "ADDRESSED";
     agencyRepliedAt: Date | null;
     createdAt: Date;
+    /** Who wrote it, as typed on the share page. */
+    authorName: string;
+    agencyReply: string | null;
+    dayNumber: number | null;
+    /** The ItineraryItem the comment is on; its title is in `itemTitles`. */
+    itemId: string | null;
   }>;
   reviews: Array<{
     id: string;
@@ -54,6 +60,11 @@ export type RawDashboardData = {
     submittedAt: Date;
     tripId: string;
   }>;
+  /**
+   * Titles of the stops comments point at. Optional so hand-built fixtures can
+   * leave it out; a missing entry means the stop has no known title.
+   */
+  itemTitles?: Array<{ id: string; title: string }>;
 };
 
 export interface DashboardRepository {
@@ -129,12 +140,25 @@ export function createPrismaDashboardRepository(client: PrismaClient = prisma): 
               content: true,
               status: true,
               agencyRepliedAt: true,
-              createdAt: true
+              createdAt: true,
+              authorName: true,
+              agencyReply: true,
+              dayNumber: true,
+              itemId: true
             }
           })
         : [];
 
-      return { trips, itineraries, shares, comments, reviews };
+      // One lookup for every stop a comment points at, so the dashboard can name it.
+      const itemIds = [...new Set(comments.flatMap((c) => (c.itemId ? [c.itemId] : [])))];
+      const itemTitles = itemIds.length
+        ? await client.itineraryItem.findMany({
+            where: { id: { in: itemIds } },
+            select: { id: true, title: true }
+          })
+        : [];
+
+      return { trips, itineraries, shares, comments, reviews, itemTitles };
     }
   };
 }
