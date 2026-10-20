@@ -58,6 +58,31 @@ export type OwnerWorklist = {
   lowRated: OwnerWorklistLowRated[];
 };
 
+/** One client comment on the dashboard's "Client comments" card. */
+export type ClientCommentRow = {
+  id: string;
+  shareId: string;
+  tripId: string;
+  tripTitle: string;
+  /** Who the link was shared with, else the trip's client. */
+  clientName: string | null;
+  authorName: string;
+  excerpt: string;
+  dayNumber: number | null;
+  /** The stop's title; null for a day-level comment or a deleted stop. */
+  itemTitle: string | null;
+  createdAt: string;
+  agencyReply: string | null;
+  agencyRepliedAt: string | null;
+};
+
+export type ClientComments = {
+  /** No reply yet, oldest first. */
+  waiting: ClientCommentRow[];
+  /** Replied in the last 30 days, newest reply first. */
+  answered: ClientCommentRow[];
+};
+
 /**
  * `value` is null when the period has no signal (e.g. no closed trips, no
  * replied comments); `deltaVsPrior` is null unless both periods have signal.
