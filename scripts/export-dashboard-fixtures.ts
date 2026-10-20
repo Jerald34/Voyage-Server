@@ -60,7 +60,18 @@ function share(id: string, tripId: string, fields: Partial<Share> & Pick<Share, 
 }
 
 function repliedComment(id: string, shareId: string, createdAt: Date, replyAfterMs: number): Comment {
-  return { id, shareId, content: "Client question", status: "ADDRESSED", agencyRepliedAt: after(createdAt, replyAfterMs), createdAt };
+  return {
+    id,
+    shareId,
+    content: "Client question",
+    status: "ADDRESSED",
+    agencyRepliedAt: after(createdAt, replyAfterMs),
+    createdAt,
+    authorName: "Ana Reyes",
+    agencyReply: "Yes, that works.",
+    dayNumber: 1,
+    itemId: null
+  };
 }
 
 // ---- Current 30d window: 2 approved + 1 archived closed trips ----
@@ -194,7 +205,11 @@ const comments: Comment[] = [
     content: "Can we swap the day 2 lunch spot?",
     status: "PENDING",
     agencyRepliedAt: null,
-    createdAt: at(-6 * HOUR)
+    createdAt: at(-6 * HOUR),
+    authorName: "Maria Santos",
+    agencyReply: null,
+    dayNumber: 2,
+    itemId: "item-kyoto-lunch"
   },
   // A second open question on the same trip: each comment is its own row.
   {
@@ -203,7 +218,11 @@ const comments: Comment[] = [
     content: "Is the ryokan wheelchair accessible? My father uses one.",
     status: "PENDING",
     agencyRepliedAt: null,
-    createdAt: at(-30 * HOUR)
+    createdAt: at(-30 * HOUR),
+    authorName: "Maria Santos",
+    agencyReply: null,
+    dayNumber: 1,
+    itemId: "item-kyoto-ryokan"
   }
 ];
 
@@ -222,10 +241,14 @@ const busyAgency: RawDashboardData = {
       submittedAt: at(-3 * DAY),
       tripId: cebu.id
     }
+  ],
+  itemTitles: [
+    { id: "item-kyoto-lunch", title: "Nishiki Market lunch" },
+    { id: "item-kyoto-ryokan", title: "Ryokan check-in" }
   ]
 };
 
-const emptyAgency: RawDashboardData = { trips: [], itineraries: [], shares: [], comments: [], reviews: [] };
+const emptyAgency: RawDashboardData = { trips: [], itineraries: [], shares: [], comments: [], reviews: [], itemTitles: [] };
 
 async function payloadFor(
   data: RawDashboardData,
