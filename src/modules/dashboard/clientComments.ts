@@ -29,7 +29,7 @@ export type ClientCommentInputs = {
 export function selectClientComments(inputs: ClientCommentInputs): ClientComments {
   const tripIndex = new Map(inputs.trips.map((trip) => [trip.id, trip]));
   const shareIndex = new Map(inputs.shares.map((share) => [share.id, share]));
-  const titles = new Map((inputs.itemTitles ?? []).map((item) => [item.id, item.title]));
+  const stops = new Map((inputs.itemTitles ?? []).map((item) => [item.id, item]));
   const answeredCutoff = inputs.now.getTime() - ANSWERED_WINDOW_DAYS * MS_PER_DAY;
 
   // Each row travels with the time it sorts by (asked at / replied at).
@@ -52,7 +52,7 @@ export function selectClientComments(inputs: ClientCommentInputs): ClientComment
       authorName: comment.authorName,
       excerpt: comment.content.slice(0, EXCERPT_LENGTH),
       dayNumber: comment.dayNumber,
-      itemTitle: comment.itemId ? titles.get(comment.itemId) ?? null : null,
+      itemTitle: stopTitle(comment.itemId ? stops.get(comment.itemId) : undefined, share.itineraryId),
       createdAt: comment.createdAt.toISOString(),
       agencyReply: comment.agencyReply,
       agencyRepliedAt: comment.agencyRepliedAt ? comment.agencyRepliedAt.toISOString() : null
@@ -76,6 +76,14 @@ export function selectClientComments(inputs: ClientCommentInputs): ClientComment
 }
 
 type SortedRow = { row: ClientCommentRow; time: number };
+
+/**
+ * A comment's itemId comes from the public share page unchecked, so the stop
+ * is only named when it sits in the itinerary the comment's own link shows.
+ */
+function stopTitle(stop: { title: string; itineraryId: string } | undefined, shareItineraryId: string): string | null {
+  return stop && stop.itineraryId === shareItineraryId ? stop.title : null;
+}
 
 function compareIds(a: string, b: string): number {
   return a < b ? -1 : a > b ? 1 : 0;

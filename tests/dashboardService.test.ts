@@ -83,6 +83,7 @@ function makeShare(
   return {
     id,
     tripId,
+    itineraryId: "it1",
     clientName: null,
     viewCount: 0,
     lastViewedAt: null,
@@ -729,7 +730,7 @@ describe("client comments, stage trips and counter trips", () => {
       itineraries: [{ id: "it1", tripId: "t1", createdAt: NOW }],
       shares: [makeShare("s1", "t1", { viewCount: 2 })],
       comments: [makeComment("c1", "s1", { dayNumber: 1, itemId: "item-1" })],
-      itemTitles: [{ id: "item-1", title: "Ryokan check-in" }]
+      itemTitles: [{ id: "item-1", title: "Ryokan check-in", itineraryId: "it1" }]
     });
 
     const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", now: NOW });

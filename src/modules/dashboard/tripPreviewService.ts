@@ -9,7 +9,14 @@ export function buildTripPreview(raw: RawTripPreview): TripPreview {
   if (!raw.trip) {
     throw new ApiError(404, "TRIP_NOT_FOUND", "Trip not found.");
   }
-  const titles = new Map(raw.itemTitles.map((item) => [item.id, item.title]));
+  const stops = new Map(raw.itemTitles.map((item) => [item.id, item]));
+  const shareItinerary = new Map(raw.shares.map((s) => [s.id, s.itineraryId]));
+  // A comment's itemId comes from the public share page unchecked, so a stop
+  // is only named when it is in the itinerary the comment's own link shows.
+  const stopTitle = (comment: RawTripPreview["comments"][number]): string | null => {
+    const stop = comment.itemId ? stops.get(comment.itemId) : undefined;
+    return stop && stop.itineraryId === shareItinerary.get(comment.shareId) ? stop.title : null;
+  };
   // Shares arrive newest first: the newest live link, else the newest of all.
   const share = raw.shares.find((s) => s.revokedAt === null) ?? raw.shares[0] ?? null;
 
@@ -46,7 +53,7 @@ export function buildTripPreview(raw: RawTripPreview): TripPreview {
       status: comment.status,
       dayNumber: comment.dayNumber,
       itemId: comment.itemId,
-      itemTitle: comment.itemId ? titles.get(comment.itemId) ?? null : null,
+      itemTitle: stopTitle(comment),
       agencyReply: comment.agencyReply,
       agencyRepliedAt: iso(comment.agencyRepliedAt),
       createdAt: comment.createdAt.toISOString()

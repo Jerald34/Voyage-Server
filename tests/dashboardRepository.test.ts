@@ -27,6 +27,13 @@ describe("dashboard repository", () => {
     });
   });
 
+  it("reads which itinerary each link shows, so a comment's stop can be checked against it", async () => {
+    const client = fakeClient();
+    await createPrismaDashboardRepository(client as never).fetchAgencyDashboardData("agency-1");
+
+    expect(client.itineraryShare.findMany.mock.calls[0][0].select).toMatchObject({ itineraryId: true });
+  });
+
   it("reads each comment's author, reply and stop, and looks up the stop titles once", async () => {
     const client = fakeClient();
     client.itineraryShare.findMany.mockResolvedValue([{ id: "share-1" }]);
@@ -35,7 +42,9 @@ describe("dashboard repository", () => {
       { id: "c2", shareId: "share-1", itemId: "item-1" },
       { id: "c3", shareId: "share-1", itemId: null }
     ]);
-    client.itineraryItem.findMany.mockResolvedValue([{ id: "item-1", title: "Ryokan check-in" }]);
+    client.itineraryItem.findMany.mockResolvedValue([
+      { id: "item-1", title: "Ryokan check-in", itineraryDay: { itineraryId: "itinerary-1" } }
+    ]);
 
     const raw = await createPrismaDashboardRepository(client as never).fetchAgencyDashboardData("agency-1");
 
@@ -48,9 +57,11 @@ describe("dashboard repository", () => {
     expect(client.itineraryItem.findMany).toHaveBeenCalledWith({
       // Scoped to this agency: a comment's itemId comes from the public page.
       where: { id: { in: ["item-1"] }, itineraryDay: { itinerary: { agencyId: "agency-1" } } },
-      select: { id: true, title: true }
+      // Each title carries the itinerary it sits in, so the service can tell
+      // whether it belongs to the link the comment was made on.
+      select: { id: true, title: true, itineraryDay: { select: { itineraryId: true } } }
     });
-    expect(raw.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in" }]);
+    expect(raw.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in", itineraryId: "itinerary-1" }]);
   });
 
   it("skips the stop lookup when no comment points at a stop", async () => {

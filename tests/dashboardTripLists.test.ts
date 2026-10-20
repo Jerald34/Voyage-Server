@@ -28,6 +28,7 @@ const trip = (id: string, fields: Partial<Trip> = {}): Trip => ({
 const share = (tripId: string | null, viewCount = 0, fields: Partial<Share> = {}): Share => ({
   id: `share-${tripId}-${viewCount}`,
   tripId,
+  itineraryId: `it-${tripId}`,
   clientName: null,
   viewCount,
   lastViewedAt: null,

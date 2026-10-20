@@ -21,6 +21,8 @@ export type RawTripPreview = {
   /** Newest first. */
   shares: Array<{
     id: string;
+    /** The itinerary the link shows; read for the stop check, never sent to the panel. */
+    itineraryId: string;
     clientName: string | null;
     viewCount: number;
     lastViewedAt: Date | null;
@@ -42,7 +44,8 @@ export type RawTripPreview = {
     agencyRepliedAt: Date | null;
     createdAt: Date;
   }>;
-  itemTitles: Array<{ id: string; title: string }>;
+  /** Each stop's title with the itinerary it sits in. */
+  itemTitles: Array<{ id: string; title: string; itineraryId: string }>;
 };
 
 export interface TripPreviewRepository {
@@ -72,6 +75,7 @@ export function createPrismaTripPreviewRepository(client: PrismaClient = prisma)
         orderBy: { createdAt: "desc" },
         select: {
           id: true,
+          itineraryId: true,
           clientName: true,
           viewCount: true,
           lastViewedAt: true,
@@ -103,17 +107,23 @@ export function createPrismaTripPreviewRepository(client: PrismaClient = prisma)
         : [];
 
       // A comment's itemId comes from the public share page unchecked, so only
-      // name stops that belong to this trip's itineraries.
+      // look up stops in this trip's itineraries, and carry each stop's
+      // itinerary so the service names it only for a link that shows it.
       const itemIds = [...new Set(comments.flatMap((c) => (c.itemId ? [c.itemId] : [])))];
-      const itemTitles = itemIds.length
+      const itemRows = itemIds.length
         ? await client.itineraryItem.findMany({
             where: {
               id: { in: itemIds },
               itineraryDay: { itinerary: { tripId, agencyId } }
             },
-            select: { id: true, title: true }
+            select: { id: true, title: true, itineraryDay: { select: { itineraryId: true } } }
           })
         : [];
+      const itemTitles = itemRows.map((item) => ({
+        id: item.id,
+        title: item.title,
+        itineraryId: item.itineraryDay.itineraryId
+      }));
 
       return { trip, shares, comments, itemTitles };
     }

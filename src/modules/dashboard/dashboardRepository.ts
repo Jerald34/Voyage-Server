@@ -27,6 +27,8 @@ export type RawDashboardData = {
   shares: Array<{
     id: string;
     tripId: string | null;
+    /** The itinerary the link shows; a comment's stop only counts if it is in this one. */
+    itineraryId: string;
     /** Who the link was shared with; the Recently viewed card prefers it to the trip's client. */
     clientName: string | null;
     viewCount: number;
@@ -61,10 +63,11 @@ export type RawDashboardData = {
     tripId: string;
   }>;
   /**
-   * Titles of the stops comments point at. Optional so hand-built fixtures can
-   * leave it out; a missing entry means the stop has no known title.
+   * Titles of the stops comments point at, each with the itinerary it sits in.
+   * Optional so hand-built fixtures can leave it out; a missing entry means the
+   * stop has no known title.
    */
-  itemTitles?: Array<{ id: string; title: string }>;
+  itemTitles?: Array<{ id: string; title: string; itineraryId: string }>;
 };
 
 export interface DashboardRepository {
@@ -103,6 +106,7 @@ export function createPrismaDashboardRepository(client: PrismaClient = prisma): 
           select: {
             id: true,
             tripId: true,
+            itineraryId: true,
             clientName: true,
             viewCount: true,
             lastViewedAt: true,
@@ -151,13 +155,19 @@ export function createPrismaDashboardRepository(client: PrismaClient = prisma): 
 
       // One lookup for every stop a comment points at, so the dashboard can name it.
       const itemIds = [...new Set(comments.flatMap((c) => (c.itemId ? [c.itemId] : [])))];
-      const itemTitles = itemIds.length
+      const itemRows = itemIds.length
         ? await client.itineraryItem.findMany({
             // Scoped to this agency: itemId comes from the public share page unchecked.
             where: { id: { in: itemIds }, itineraryDay: { itinerary: { agencyId } } },
-            select: { id: true, title: true }
+            // The itinerary lets the service name a stop only for a comment made on a link that shows it.
+            select: { id: true, title: true, itineraryDay: { select: { itineraryId: true } } }
           })
         : [];
+      const itemTitles = itemRows.map((item) => ({
+        id: item.id,
+        title: item.title,
+        itineraryId: item.itineraryDay.itineraryId
+      }));
 
       return { trips, itineraries, shares, comments, reviews, itemTitles };
     }

@@ -48,6 +48,8 @@ function share(id: string, tripId: string, fields: Partial<Share> & Pick<Share, 
   return {
     id,
     tripId,
+    // Each trip has one itinerary, named below in busyAgency.
+    itineraryId: `itinerary-${tripId}`,
     clientName: null,
     viewCount: 0,
     lastViewedAt: null,
@@ -243,8 +245,8 @@ const busyAgency: RawDashboardData = {
     }
   ],
   itemTitles: [
-    { id: "item-kyoto-lunch", title: "Nishiki Market lunch" },
-    { id: "item-kyoto-ryokan", title: "Ryokan check-in" }
+    { id: "item-kyoto-lunch", title: "Nishiki Market lunch", itineraryId: `itinerary-${kyoto.id}` },
+    { id: "item-kyoto-ryokan", title: "Ryokan check-in", itineraryId: `itinerary-${kyoto.id}` }
   ]
 };
 

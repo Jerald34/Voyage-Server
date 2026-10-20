@@ -26,6 +26,7 @@ const tripRow = {
 
 const shareRow = (id: string, fields: Partial<RawTripPreview["shares"][number]> = {}) => ({
   id,
+  itineraryId: "itinerary-1",
   clientName: null,
   viewCount: 0,
   lastViewedAt: null,
@@ -95,9 +96,55 @@ describe("buildTripPreview", () => {
         createdAt: at(-1 * HOUR)
       }
     ];
-    const preview = buildTripPreview(raw({ comments, itemTitles: [{ id: "item-1", title: "Ryokan check-in" }] }));
+    const preview = buildTripPreview(
+      raw({
+        shares: [shareRow("live")],
+        comments,
+        itemTitles: [{ id: "item-1", title: "Ryokan check-in", itineraryId: "itinerary-1" }]
+      })
+    );
     expect(preview.comments.map((c) => c.itemTitle)).toEqual(["Ryokan check-in", null]);
     expect(preview.comments[0].createdAt).toBe(at(-2 * HOUR).toISOString());
+  });
+
+  it("names a stop only when it is in the itinerary the comment's own link shows", () => {
+    // The trip can have several links, each on its own itinerary. A comment's
+    // itemId comes from the public page unchecked, so a stop from the trip's
+    // other itinerary must not be named.
+    const comment = (id: string, shareId: string, itemId: string) => ({
+      id,
+      shareId,
+      authorName: "Maria",
+      content: "Question",
+      status: "PENDING" as const,
+      dayNumber: 1,
+      itemId,
+      agencyReply: null,
+      agencyRepliedAt: null,
+      createdAt: at(-2 * HOUR)
+    });
+    const preview = buildTripPreview(
+      raw({
+        shares: [
+          shareRow("link-v2", { itineraryId: "itinerary-2" }),
+          shareRow("link-v1", { itineraryId: "itinerary-1" })
+        ],
+        comments: [
+          comment("on-v1", "link-v1", "item-v1"),
+          comment("v1-points-at-v2-stop", "link-v1", "item-v2"),
+          comment("on-v2", "link-v2", "item-v2")
+        ],
+        itemTitles: [
+          { id: "item-v1", title: "Old day 1 lunch", itineraryId: "itinerary-1" },
+          { id: "item-v2", title: "New day 1 lunch", itineraryId: "itinerary-2" }
+        ]
+      })
+    );
+    expect(preview.comments.map((c) => [c.id, c.itemTitle])).toEqual([
+      ["on-v1", "Old day 1 lunch"],
+      ["v1-points-at-v2-stop", null],
+      ["on-v2", "New day 1 lunch"]
+    ]);
   });
 
   it("sends only the panel's comment fields, never the client's email", () => {
@@ -182,7 +229,9 @@ describe("trip preview repository", () => {
       { id: "c2", shareId: "share-1", itemId: "item-1" },
       { id: "c3", shareId: "share-1", itemId: null }
     ]);
-    client.itineraryItem.findMany.mockResolvedValue([{ id: "item-1", title: "Ryokan check-in" }]);
+    client.itineraryItem.findMany.mockResolvedValue([
+      { id: "item-1", title: "Ryokan check-in", itineraryDay: { itineraryId: "itinerary-1" } }
+    ]);
 
     const result = await createPrismaTripPreviewRepository(client as never).fetchTripPreview("agency-1", tripRow.id);
 
@@ -194,8 +243,15 @@ describe("trip preview repository", () => {
         id: { in: ["item-1"] },
         itineraryDay: { itinerary: { tripId: tripRow.id, agencyId: "agency-1" } }
       },
-      select: { id: true, title: true }
+      select: { id: true, title: true, itineraryDay: { select: { itineraryId: true } } }
     });
-    expect(result.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in" }]);
+    expect(result.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in", itineraryId: "itinerary-1" }]);
+  });
+
+  it("reads which itinerary each link shows", async () => {
+    const client = fakeClient();
+    client.itineraryShare.findMany.mockResolvedValue([{ id: "share-1" }]);
+    await createPrismaTripPreviewRepository(client as never).fetchTripPreview("agency-1", tripRow.id);
+    expect(client.itineraryShare.findMany.mock.calls[0][0].select).toMatchObject({ itineraryId: true });
   });
 });

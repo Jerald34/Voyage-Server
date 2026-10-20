@@ -33,6 +33,7 @@ const trip = (id: string, fields: Partial<Trip> = {}): Trip => ({
 const share = (id: string, tripId: string | null, fields: Partial<Share> = {}): Share => ({
   id,
   tripId,
+  itineraryId: "it-1",
   clientName: null,
   viewCount: 0,
   lastViewedAt: null,
@@ -90,7 +91,7 @@ describe("selectClientComments", () => {
           agencyRepliedAt: at(-1 * HOUR)
         })
       ],
-      itemTitles: [{ id: "item-1", title: "Ryokan check-in" }],
+      itemTitles: [{ id: "item-1", title: "Ryokan check-in", itineraryId: "it-1" }],
       now: NOW
     });
 
@@ -119,6 +120,28 @@ describe("selectClientComments", () => {
       now: NOW
     });
     expect(result.waiting[0]).toMatchObject({ clientName: "Trip Client", dayNumber: 2, itemTitle: null });
+  });
+
+  it("names a stop only when it is in the itinerary the comment's link shows", () => {
+    // A comment's itemId comes from the public share page unchecked, so an id
+    // from another itinerary (even the agency's own) must not get a title.
+    const result = selectClientComments({
+      trips: [trip("t1")],
+      shares: [share("s1", "t1", { itineraryId: "it-1" })],
+      comments: [
+        comment("own", "s1", { itemId: "item-own", createdAt: at(-3 * HOUR) }),
+        comment("other", "s1", { itemId: "item-other", createdAt: at(-2 * HOUR) })
+      ],
+      itemTitles: [
+        { id: "item-own", title: "Ryokan check-in", itineraryId: "it-1" },
+        { id: "item-other", title: "Another itinerary's stop", itineraryId: "it-2" }
+      ],
+      now: NOW
+    });
+    expect(result.waiting.map((row) => [row.id, row.itemTitle])).toEqual([
+      ["own", "Ryokan check-in"],
+      ["other", null]
+    ]);
   });
 
   it("drops replies older than 30 days and comments without a trip", () => {
