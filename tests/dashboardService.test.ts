@@ -720,3 +720,56 @@ describe("getDashboard – recently viewed", () => {
     expect(staffDashboardPayloadSchema.parse(staff).recentViews).toHaveLength(1);
   });
 });
+
+describe("client comments, stage trips and counter trips", () => {
+  it("sends the owner every waiting comment and the trips behind each funnel stage", async () => {
+    const { svc } = makeService({
+      ...emptyData(),
+      trips: [makeTrip("t1", { title: "Kyoto", status: "IN_REVIEW" })],
+      itineraries: [{ id: "it1", tripId: "t1", createdAt: NOW }],
+      shares: [makeShare("s1", "t1", { viewCount: 2 })],
+      comments: [makeComment("c1", "s1", { dayNumber: 1, itemId: "item-1" })],
+      itemTitles: [{ id: "item-1", title: "Ryokan check-in" }]
+    });
+
+    const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_A, role: "OWNER", now: NOW });
+    if (payload.view !== "owner") throw new Error("expected the owner view");
+
+    expect(payload.clientComments.waiting).toEqual([
+      expect.objectContaining({ id: "c1", tripTitle: "Kyoto", itemTitle: "Ryokan check-in", authorName: "Maria Santos" })
+    ]);
+    expect(payload.clientComments.answered).toEqual([]);
+    const viewed = payload.funnel.stages.find((stage) => stage.key === "viewed")!;
+    expect(viewed.count).toBe(1);
+    expect(viewed.trips).toEqual([{ tripId: "t1", tripTitle: "Kyoto", clientName: null, status: "IN_REVIEW" }]);
+    expect(() => ownerDashboardPayloadSchema.parse(payload)).not.toThrow();
+  });
+
+  it("scopes staff comments to their trips and lists the trips behind each counter", async () => {
+    const { svc } = makeService({
+      ...emptyData(),
+      trips: [
+        makeTrip("mine-draft", { createdByUserId: USER_B }),
+        makeTrip("mine-away", {
+          createdByUserId: USER_B,
+          status: "APPROVED_INTERNAL",
+          startDate: new Date(NOW.getTime() - 86_400_000),
+          endDate: new Date(NOW.getTime() + 86_400_000)
+        }),
+        makeTrip("theirs", { createdByUserId: USER_A })
+      ],
+      shares: [makeShare("s-mine", "mine-draft"), makeShare("s-theirs", "theirs")],
+      comments: [makeComment("c-mine", "s-mine"), makeComment("c-theirs", "s-theirs")]
+    });
+
+    const payload = await svc.getDashboard({ agencyId: AGENCY, userId: USER_B, role: "STAFF", now: NOW });
+    if (payload.view !== "staff") throw new Error("expected the staff view");
+
+    expect(payload.clientComments.waiting.map((row) => row.id)).toEqual(["c-mine"]);
+    expect(payload.pipelineTrips.drafts.map((row) => row.tripId)).toEqual(["mine-draft"]);
+    expect(payload.pipelineTrips.activeNow.map((row) => row.tripId)).toEqual(["mine-away"]);
+    expect(payload.pipeline.drafts).toBe(1);
+    expect(payload.pipeline.activeNow).toBe(1);
+    expect(() => staffDashboardPayloadSchema.parse(payload)).not.toThrow();
+  });
+});

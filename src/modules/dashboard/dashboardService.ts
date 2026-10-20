@@ -19,6 +19,8 @@ import type {
   StaffDashboardPayload
 } from "./dashboardTypes";
 import { dashboardRepository, type DashboardRepository, type RawDashboardData } from "./dashboardRepository";
+import { selectClientComments } from "./clientComments";
+import { selectFunnelCohort, toTripListRows } from "./tripLists";
 
 /**
  * Composition layer for the dashboard read endpoint.
@@ -157,16 +159,16 @@ function composeOwnerPayload(args: {
       : null;
 
   // ---- Funnel ----
+  // Trips created in the window, by the furthest stage each reached; each
+  // stage carries its trips so the dashboard can list them.
+  const cohort = selectFunnelCohort(raw, window);
   const funnelStages = computeFunnelStages({
-    created: tripsInWindow.length,
-    drafted: raw.itineraries.filter((i) => {
-      const trip = raw.trips.find((t) => t.id === i.tripId);
-      return trip && trip.createdAt >= window.start && trip.createdAt <= window.end;
-    }).length,
-    sent: sharesInWindow.length,
-    viewed: sharesInWindow.filter((s) => s.viewCount > 0).length,
-    approved: tripsInWindow.filter((t) => t.status === "APPROVED_INTERNAL").length
-  });
+    created: cohort.created.length,
+    drafted: cohort.drafted.length,
+    sent: cohort.sent.length,
+    viewed: cohort.viewed.length,
+    approved: cohort.approved.length
+  }).map((stage) => ({ ...stage, trips: toTripListRows(cohort[stage.key], "created") }));
 
   // ---- Worklist ----
   const worklist = selectOwnerWorklistRows({
@@ -198,6 +200,13 @@ function composeOwnerPayload(args: {
     period,
     generatedAt: now.toISOString(),
     worklist,
+    clientComments: selectClientComments({
+      trips: raw.trips,
+      shares: raw.shares,
+      comments: raw.comments,
+      itemTitles: raw.itemTitles,
+      now
+    }),
     kpis: {
       winRate: { value: winRate, deltaVsPrior: deltaOrNull(winRate, winRatePrior), sparkline: buildSparkline(tripsInWindow.map((t) => t.createdAt), window) },
       timeToFirstShareDays: {
@@ -272,17 +281,25 @@ function composeStaffPayload(args: {
   });
 
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1);
+  const isTravelingNow = (t: RawDashboardData["trips"][number]) =>
+    t.startDate !== null && t.endDate !== null && t.startDate <= now && t.endDate >= now;
+  const pipelineGroups = {
+    drafts: myTrips.filter((t) => t.status === "DRAFT"),
+    inReview: myTrips.filter((t) => t.status === "IN_REVIEW"),
+    approvedThisMonth: myTrips.filter((t) => t.status === "APPROVED_INTERNAL" && t.updatedAt >= monthStart),
+    activeNow: myTrips.filter(isTravelingNow)
+  };
   const pipeline = {
-    drafts: myTrips.filter((t) => t.status === "DRAFT").length,
-    inReview: myTrips.filter((t) => t.status === "IN_REVIEW").length,
-    approvedThisMonth: myTrips.filter((t) => t.status === "APPROVED_INTERNAL" && t.updatedAt >= monthStart).length,
-    activeNow: myTrips.filter(
-      (t) =>
-        t.startDate !== null &&
-        t.endDate !== null &&
-        t.startDate <= now &&
-        t.endDate >= now
-    ).length
+    drafts: pipelineGroups.drafts.length,
+    inReview: pipelineGroups.inReview.length,
+    approvedThisMonth: pipelineGroups.approvedThisMonth.length,
+    activeNow: pipelineGroups.activeNow.length
+  };
+  const pipelineTrips = {
+    drafts: toTripListRows(pipelineGroups.drafts, "updated"),
+    inReview: toTripListRows(pipelineGroups.inReview, "updated"),
+    approvedThisMonth: toTripListRows(pipelineGroups.approvedThisMonth, "updated"),
+    activeNow: toTripListRows(pipelineGroups.activeNow, "updated")
   };
 
   const fiveDaysOut = 5 * 24 * 60 * 60 * 1000;
@@ -310,7 +327,16 @@ function composeStaffPayload(args: {
     hero,
     secondaryRecent,
     worklist,
+    clientComments: selectClientComments({
+      trips: raw.trips,
+      shares: raw.shares,
+      comments: raw.comments,
+      itemTitles: raw.itemTitles,
+      now,
+      tripIds: new Set(myTrips.map((t) => t.id))
+    }),
     pipeline,
+    pipelineTrips,
     startingSoon,
     recentViews: selectRecentViews({ trips: raw.trips, shares: raw.shares, now, userId })
   };

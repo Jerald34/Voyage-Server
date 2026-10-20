@@ -127,7 +127,7 @@ export type TripListRow = {
 export type FunnelStageWithTrips = FunnelStage & { trips: TripListRow[] };
 
 export type OwnerFunnel = {
-  stages: FunnelStage[];
+  stages: FunnelStageWithTrips[];
 };
 
 export type OwnerRecentReview = {
@@ -163,6 +163,7 @@ export type OwnerDashboardPayload = {
   period: DashboardPeriod;
   generatedAt: string;
   worklist: OwnerWorklist;
+  clientComments: ClientComments;
   kpis: OwnerKpis;
   funnel: OwnerFunnel;
   recentReviews: OwnerRecentReview[];
@@ -225,6 +226,14 @@ export type StaffPipeline = {
   activeNow: number;
 };
 
+/** The trips behind each staff counter, at most 50 each, most recently updated first. */
+export type StaffPipelineTrips = {
+  drafts: TripListRow[];
+  inReview: TripListRow[];
+  approvedThisMonth: TripListRow[];
+  activeNow: TripListRow[];
+};
+
 export type StaffStartingSoonCard = {
   tripId: string;
   tripTitle: string;
@@ -241,7 +250,9 @@ export type StaffDashboardPayload = {
   hero: StaffHero | null;
   secondaryRecent: StaffSecondaryRecent[];
   worklist: StaffWorklist;
+  clientComments: ClientComments;
   pipeline: StaffPipeline;
+  pipelineTrips: StaffPipelineTrips;
   startingSoon: StaffStartingSoonCard[];
   recentViews: RecentView[];
 };
