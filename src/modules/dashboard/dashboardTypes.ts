@@ -113,6 +113,19 @@ export type FunnelStage = {
   dropOffPct: number | null;
 };
 
+export type TripStatus = "DRAFT" | "IN_REVIEW" | "APPROVED_INTERNAL" | "ARCHIVED";
+
+/** One trip in a dashboard trip list (a funnel stage, a staff counter). */
+export type TripListRow = {
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  status: TripStatus;
+};
+
+/** A funnel stage with the trips behind its count (at most 50; `count` stays exact). */
+export type FunnelStageWithTrips = FunnelStage & { trips: TripListRow[] };
+
 export type OwnerFunnel = {
   stages: FunnelStage[];
 };
