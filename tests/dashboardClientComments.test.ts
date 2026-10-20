@@ -146,20 +146,76 @@ describe("selectClientComments", () => {
     expect(result.waiting.map((row) => row.id)).toEqual(["c-mine"]);
   });
 
-  it("caps both lists", () => {
-    const many = Array.from({ length: WAITING_LIMIT + 5 }, (_, i) =>
-      comment(`w${i}`, "s1", { createdAt: at(-(i + 1) * HOUR) })
+  it("caps waiting at the 50 oldest and answered at the 20 newest replies", () => {
+    // Waiting arrives newest first and answered oldest first: cutting the lists
+    // before sorting them would keep the wrong rows.
+    const waiting = Array.from({ length: WAITING_LIMIT + 5 }, (_, i) =>
+      comment(`w${String(i).padStart(2, "0")}`, "s1", { createdAt: at(-(i + 1) * HOUR) })
     );
     const answered = Array.from({ length: ANSWERED_LIMIT + 5 }, (_, i) =>
-      comment(`a${i}`, "s1", { status: "ADDRESSED", agencyReply: "Ok", agencyRepliedAt: at(-(i + 1) * HOUR) })
+      comment(`a${String(i).padStart(2, "0")}`, "s1", {
+        status: "ADDRESSED",
+        agencyReply: "Ok",
+        agencyRepliedAt: at(-(ANSWERED_LIMIT + 5 - i) * HOUR)
+      })
     );
     const result = selectClientComments({
       trips: [trip("t1")],
       shares: [share("s1", "t1")],
-      comments: [...many, ...answered],
+      comments: [...waiting, ...answered],
       now: NOW
     });
-    expect(result.waiting).toHaveLength(WAITING_LIMIT);
-    expect(result.answered).toHaveLength(ANSWERED_LIMIT);
+
+    // w54 is the oldest comment; the five newest (w00-w04) are cut.
+    expect(result.waiting.map((row) => row.id)).toEqual(
+      Array.from({ length: WAITING_LIMIT }, (_, i) => `w${String(WAITING_LIMIT + 4 - i).padStart(2, "0")}`)
+    );
+    // a24 is the newest reply; the five oldest (a00-a04) are cut.
+    expect(result.answered.map((row) => row.id)).toEqual(
+      Array.from({ length: ANSWERED_LIMIT }, (_, i) => `a${String(ANSWERED_LIMIT + 4 - i).padStart(2, "0")}`)
+    );
+  });
+
+  it("breaks ties on the id, so the rows kept at the cap do not depend on the input order", () => {
+    const sameTime = (prefix: string, count: number, fields: Partial<Comment>) =>
+      Array.from({ length: count }, (_, i) => comment(`${prefix}${String(i).padStart(2, "0")}`, "s1", fields));
+    const waiting = sameTime("w", WAITING_LIMIT + 5, { createdAt: at(-3 * HOUR) });
+    const answered = sameTime("a", ANSWERED_LIMIT + 5, {
+      status: "ADDRESSED",
+      agencyReply: "Ok",
+      agencyRepliedAt: at(-1 * HOUR)
+    });
+    const select = (comments: Comment[]) =>
+      selectClientComments({ trips: [trip("t1")], shares: [share("s1", "t1")], comments, now: NOW });
+
+    const forward = select([...waiting, ...answered]);
+    const backward = select([...waiting, ...answered].reverse());
+
+    expect(backward).toEqual(forward);
+    expect(forward.waiting.map((row) => row.id)).toEqual(waiting.slice(0, WAITING_LIMIT).map((c) => c.id));
+    expect(forward.answered.map((row) => row.id)).toEqual(answered.slice(0, ANSWERED_LIMIT).map((c) => c.id));
+  });
+
+  it("leaves a seen comment with no reply out of both lists", () => {
+    const result = selectClientComments({
+      trips: [trip("t1")],
+      shares: [share("s1", "t1")],
+      comments: [comment("seen", "s1", { status: "SEEN" }), comment("pending", "s1")],
+      now: NOW
+    });
+    expect(result.waiting.map((row) => row.id)).toEqual(["pending"]);
+    expect(result.answered).toEqual([]);
+  });
+
+  it("keeps a reply exactly 30 days old and drops one a millisecond older", () => {
+    const replied = (id: string, repliedAt: Date) =>
+      comment(id, "s1", { status: "ADDRESSED", agencyReply: "Ok", agencyRepliedAt: repliedAt });
+    const result = selectClientComments({
+      trips: [trip("t1")],
+      shares: [share("s1", "t1")],
+      comments: [replied("on-the-line", at(-30 * DAY)), replied("just-past", at(-30 * DAY - 1))],
+      now: NOW
+    });
+    expect(result.answered.map((row) => row.id)).toEqual(["on-the-line"]);
   });
 });

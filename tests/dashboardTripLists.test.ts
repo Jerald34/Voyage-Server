@@ -174,8 +174,20 @@ describe("toTripListRows", () => {
     expect(toTripListRows([trip("a", { updatedAt: at(-1 * DAY) }), trip("b", { updatedAt: at(-2 * DAY) })], "updated").map((r) => r.tripId)).toEqual(["a", "b"]);
   });
 
-  it("caps the list", () => {
-    const many = Array.from({ length: TRIP_LIST_LIMIT + 3 }, (_, i) => trip(`t${i}`));
-    expect(toTripListRows(many, "created")).toHaveLength(TRIP_LIST_LIMIT);
+  it("keeps the newest 50 trips, whichever order they arrive in", () => {
+    // Oldest first, so cutting the list before sorting it would keep the oldest.
+    const pad = (i: number) => String(i).padStart(2, "0");
+    const oldestFirst = Array.from({ length: TRIP_LIST_LIMIT + 3 }, (_, i) =>
+      trip(`t${pad(i)}`, { createdAt: at(-(TRIP_LIST_LIMIT + 3 - i) * DAY), updatedAt: at(-(i + 1) * DAY) })
+    );
+
+    // By creation, t52 is the newest and t00-t02 are cut.
+    expect(toTripListRows(oldestFirst, "created").map((row) => row.tripId)).toEqual(
+      Array.from({ length: TRIP_LIST_LIMIT }, (_, i) => `t${pad(TRIP_LIST_LIMIT + 2 - i)}`)
+    );
+    // By last update, t00 is the newest and t51-t52 are cut.
+    expect(toTripListRows(oldestFirst, "updated").map((row) => row.tripId)).toEqual(
+      Array.from({ length: TRIP_LIST_LIMIT }, (_, i) => `t${pad(i)}`)
+    );
   });
 });

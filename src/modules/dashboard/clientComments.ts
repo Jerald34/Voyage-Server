@@ -32,8 +32,9 @@ export function selectClientComments(inputs: ClientCommentInputs): ClientComment
   const titles = new Map((inputs.itemTitles ?? []).map((item) => [item.id, item.title]));
   const answeredCutoff = inputs.now.getTime() - ANSWERED_WINDOW_DAYS * MS_PER_DAY;
 
-  const waiting: ClientCommentRow[] = [];
-  const answered: ClientCommentRow[] = [];
+  // Each row travels with the time it sorts by (asked at / replied at).
+  const waiting: SortedRow[] = [];
+  const answered: SortedRow[] = [];
 
   for (const comment of inputs.comments) {
     const share = shareIndex.get(comment.shareId);
@@ -58,13 +59,24 @@ export function selectClientComments(inputs: ClientCommentInputs): ClientComment
     };
 
     if (comment.agencyRepliedAt === null) {
-      if (comment.status === "PENDING") waiting.push(row);
+      if (comment.status === "PENDING") waiting.push({ row, time: comment.createdAt.getTime() });
     } else if (comment.agencyRepliedAt.getTime() >= answeredCutoff) {
-      answered.push(row);
+      answered.push({ row, time: comment.agencyRepliedAt.getTime() });
     }
   }
 
-  waiting.sort((a, b) => (a.createdAt < b.createdAt ? -1 : 1));
-  answered.sort((a, b) => (a.agencyRepliedAt! > b.agencyRepliedAt! ? -1 : 1));
-  return { waiting: waiting.slice(0, WAITING_LIMIT), answered: answered.slice(0, ANSWERED_LIMIT) };
+  // Equal times fall back to the id, so which rows survive the cap never
+  // depends on the order the database returned them in.
+  waiting.sort((a, b) => a.time - b.time || compareIds(a.row.id, b.row.id));
+  answered.sort((a, b) => b.time - a.time || compareIds(a.row.id, b.row.id));
+  return {
+    waiting: waiting.slice(0, WAITING_LIMIT).map((entry) => entry.row),
+    answered: answered.slice(0, ANSWERED_LIMIT).map((entry) => entry.row)
+  };
+}
+
+type SortedRow = { row: ClientCommentRow; time: number };
+
+function compareIds(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
 }
