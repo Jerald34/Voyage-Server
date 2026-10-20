@@ -21,10 +21,16 @@ const SESSION_COOKIE_ATTRS: Pick<CookieOptions, "httpOnly" | "secure" | "sameSit
   path: "/"
 };
 
-export function setSessionCookie(response: Response, token: string) {
+export type SessionCookieTiming = { persistent: boolean; expiresAt: Date };
+
+export function setSessionCookie(response: Response, token: string, timing: SessionCookieTiming) {
   response.cookie(env.SESSION_COOKIE_NAME, token, {
     ...SESSION_COOKIE_ATTRS,
-    maxAge: env.SESSION_TTL_DAYS * 24 * 60 * 60 * 1000
+    // "Keep me signed in" -> the cookie ends when the server session does. Sent as a
+    // relative Max-Age (Express adds a matching Expires) so a device with a wrong
+    // clock can't expire it early. Otherwise no expiry at all: a browser-session
+    // cookie, dropped on close.
+    ...(timing.persistent ? { maxAge: Math.max(0, timing.expiresAt.getTime() - Date.now()) } : {})
   });
 }
 

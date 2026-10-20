@@ -56,7 +56,8 @@ export const updateProfileSchema = z.object({
 
 export const loginSchema = z.object({
   email: normalizedEmailSchema,
-  password: loginPasswordSchema
+  password: loginPasswordSchema,
+  rememberMe: z.boolean().optional()
 }).strict();
 
 export const emailCheckSchema = z.object({

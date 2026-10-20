@@ -35,6 +35,12 @@ import {
   buildVoyageSynthesisPrompt
 } from "./agentPrompts";
 import {
+  createPromptLeakDetector,
+  createStreamLeakGuard,
+  looksLikePromptExtraction,
+  PROMPT_LEAK_REFUSAL
+} from "./promptLeakGuard";
+import {
   shouldRecoverPlainItinerary,
   shouldCreateItineraryDirectlyFromUserRequest,
   createItineraryToolCallFromUserRequest
@@ -150,6 +156,17 @@ export function createAgentOrchestrator(options: {
   const availableToolNames = options.availableToolNames ?? [];
   const tools = availableToolSet(availableToolNames);
   const toolListForPrompt = availableToolNames.length > 0 ? availableToolNames.join(", ") : "(none)";
+  const isPromptLeak = createPromptLeakDetector([
+    buildVoyageSystemPrompt(toolListForPrompt),
+    buildVoyageSynthesisPrompt()
+  ]);
+
+  /** Swaps a reply that reproduces the prompt for the standard refusal. */
+  function withoutPromptLeak(runId: string, message: string) {
+    if (!isPromptLeak(message)) return message;
+    agentLogger.debug(runId, "Replaced a reply that reproduced the system prompt");
+    return PROMPT_LEAK_REFUSAL;
+  }
 
   async function failRun(input: AgentOrchestratorRunInput, error: unknown) {
     const details = errorDetails(error);
@@ -163,6 +180,7 @@ export function createAgentOrchestrator(options: {
     usageSummary: ReturnType<ReturnType<typeof createUsageAccumulator>["summary"]>,
     askUser?: AskUserPayload
   ) {
+    assistantMessage = withoutPromptLeak(run.id, assistantMessage);
     await options.agentService.recordRunEvent(run, {
       type: "message.delta",
       payload: { delta: assistantMessage }
@@ -193,6 +211,13 @@ export function createAgentOrchestrator(options: {
           type: "run.started",
           payload: { runId: input.runId }
         });
+
+        // Obvious extraction attempts never reach the model.
+        if (looksLikePromptExtraction(input.userContent)) {
+          agentLogger.debug(input.runId, "Refused a prompt extraction request without a model call");
+          await streamAndComplete(run, PROMPT_LEAK_REFUSAL, usage.summary());
+          return;
+        }
 
         let conversationHistory: ModelMessage[] = [];
         let activeItineraryContext: { prompt: string; itinerary: Record<string, unknown> } | null = null;
@@ -383,6 +408,13 @@ export function createAgentOrchestrator(options: {
             ...historyWithContext
           ];
           if (options.modelProvider.completeStream) {
+            // Raw text-mode output streams live, so it is checked for prompt text before it is sent.
+            const textGuard = createStreamLeakGuard(isPromptLeak, async (delta) => {
+              await options.agentService.recordRunEvent(run, {
+                type: "thought.delta",
+                payload: { delta }
+              });
+            });
             const streamed = await streamModelCompletion({
               modelProvider: options.modelProvider,
               input: {
@@ -406,10 +438,7 @@ export function createAgentOrchestrator(options: {
                   modelContent
                 });
                 if (initialMode === "text" && !isRecoveryCandidate) {
-                  await options.agentService.recordRunEvent(run, {
-                    type: "thought.delta",
-                    payload: { delta }
-                  });
+                  await textGuard.push(delta);
                 } else if (isRecoveryCandidate && !recoveryNotified) {
                   recoveryNotified = true;
                   await options.agentService.recordRunEvent(run, {
@@ -419,6 +448,8 @@ export function createAgentOrchestrator(options: {
                 }
               }
             });
+
+            await textGuard.flush();
 
             if (streamed && typeof streamed.content === "string") {
               modelContent = streamed.content;
@@ -916,6 +947,12 @@ export function createAgentOrchestrator(options: {
         let synthesizedMessage = parsedOutput.assistantMessage;
         let synthesisUsage: ModelUsage | undefined;
         let streamedSynthesis = false;
+        const synthesisGuard = createStreamLeakGuard(isPromptLeak, async (delta) => {
+          await options.agentService.recordRunEvent(run, {
+            type: "message.delta",
+            payload: { delta }
+          });
+        });
         try {
           const synthesisToolResults = toolResults.slice(-SYNTHESIS_TOOL_RESULTS_TAIL);
           const synthesisOmittedCount = Math.max(0, toolResults.length - synthesisToolResults.length);
@@ -967,12 +1004,10 @@ export function createAgentOrchestrator(options: {
                 });
               },
               onDelta: async (delta) => {
-                await options.agentService.recordRunEvent(run, {
-                  type: "message.delta",
-                  payload: { delta }
-                });
+                await synthesisGuard.push(delta);
               }
             });
+            await synthesisGuard.flush();
 
             if (streamed && streamed.content.trim().length > 0) {
               synthesizedMessage = recoverSynthesizedMessage(
@@ -1005,7 +1040,12 @@ export function createAgentOrchestrator(options: {
           agentLogger.error("Synthesis Failed", input.runId, "Falling back to assistant message.");
         }
 
-        if (!streamedSynthesis) {
+        const synthesisLeaked = synthesisGuard.leaked || isPromptLeak(synthesizedMessage);
+        if (synthesisLeaked) {
+          agentLogger.debug(input.runId, "Replaced a synthesis reply that reproduced the system prompt");
+          synthesizedMessage = PROMPT_LEAK_REFUSAL;
+        }
+        if (!streamedSynthesis || synthesisLeaked) {
           await options.agentService.recordRunEvent(run, {
             type: "message.delta",
             payload: { delta: synthesizedMessage }

@@ -6,6 +6,7 @@ import {
   type EmailSender
 } from "../src/modules/auth/authService";
 import { serializeUser } from "../src/modules/auth/authRoutes";
+import { hashPassword } from "../src/services/password";
 import { hashToken } from "../src/services/tokens";
 
 type UserRecord = Awaited<ReturnType<AuthRepository["createUser"]>>;
@@ -172,7 +173,7 @@ function createService() {
     emailSender,
     now,
     appOrigin: "http://localhost:3000",
-    sessionTtlDays: 30,
+    sessionLifetime: { persistentTtlMs: 30 * 24 * 60 * 60 * 1000, shortTtlMs: 12 * 60 * 60 * 1000 },
     passwordPepper: "pepper"
   });
 
@@ -518,5 +519,80 @@ describe("auth route serialization", () => {
       city: "Baguio",
       country: "Philippines",
     });
+  });
+});
+
+describe("auth service — keep me signed in", () => {
+  const NOW = new Date("2026-04-27T12:00:00.000Z").getTime();
+  const HOUR = 60 * 60 * 1000;
+  const DAY = 24 * HOUR;
+
+  async function seedVerifiedUser(repository: ReturnType<typeof createService>["repository"]) {
+    await repository.createUser({
+      email: "keep@example.com",
+      emailNormalized: "keep@example.com",
+      passwordHash: await hashPassword("password123", "pepper"),
+      displayName: "Keep Me",
+      emailVerifiedAt: new Date(NOW)
+    });
+  }
+
+  it("creates a remembered 30-day session by default", { timeout: 15000 }, async () => {
+    const { service, repository } = createService();
+    await seedVerifiedUser(repository);
+
+    const result = await service.loginWithEmail({ email: "keep@example.com", password: "password123" });
+
+    expect(result.session.persistent).toBe(true);
+    expect(result.session.expiresAt).toEqual(new Date(NOW + 30 * DAY));
+  });
+
+  it("creates a short session when rememberMe is false", { timeout: 15000 }, async () => {
+    const { service, repository } = createService();
+    await seedVerifiedUser(repository);
+
+    const result = await service.loginWithEmail({
+      email: "keep@example.com",
+      password: "password123",
+      rememberMe: false
+    });
+
+    expect(result.session.persistent).toBe(false);
+    expect(result.session.expiresAt).toEqual(new Date(NOW + 12 * HOUR));
+  });
+
+  it("passes the choice through OAuth sign-in", async () => {
+    const { service } = createService();
+
+    const result = await service.signInWithVerifiedOAuth(
+      {
+        provider: "GOOGLE",
+        providerAccountId: "google-keep",
+        email: "oauth-keep@example.com",
+        emailVerified: true,
+        displayName: "OAuth Keep"
+      },
+      { persistent: false }
+    );
+
+    expect(result.session.persistent).toBe(false);
+  });
+
+  it("applies the choice again when an already-linked provider account signs in", async () => {
+    const { service } = createService();
+    const claims = {
+      provider: "GOOGLE" as const,
+      providerAccountId: "google-returning",
+      email: "returning@example.com",
+      emailVerified: true,
+      displayName: "Returning"
+    };
+
+    const first = await service.signInWithVerifiedOAuth(claims, { persistent: true });
+    const second = await service.signInWithVerifiedOAuth(claims, { persistent: false });
+
+    expect(first.session.persistent).toBe(true);
+    expect(second.session.persistent).toBe(false);
+    expect(second.session.expiresAt).toEqual(new Date(NOW + 12 * HOUR));
   });
 });
