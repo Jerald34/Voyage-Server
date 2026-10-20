@@ -153,7 +153,8 @@ export function createPrismaDashboardRepository(client: PrismaClient = prisma): 
       const itemIds = [...new Set(comments.flatMap((c) => (c.itemId ? [c.itemId] : [])))];
       const itemTitles = itemIds.length
         ? await client.itineraryItem.findMany({
-            where: { id: { in: itemIds } },
+            // Scoped to this agency: itemId comes from the public share page unchecked.
+            where: { id: { in: itemIds }, itineraryDay: { itinerary: { agencyId } } },
             select: { id: true, title: true }
           })
         : [];

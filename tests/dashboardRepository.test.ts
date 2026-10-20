@@ -46,7 +46,8 @@ describe("dashboard repository", () => {
       itemId: true
     });
     expect(client.itineraryItem.findMany).toHaveBeenCalledWith({
-      where: { id: { in: ["item-1"] } },
+      // Scoped to this agency: a comment's itemId comes from the public page.
+      where: { id: { in: ["item-1"] }, itineraryDay: { itinerary: { agencyId: "agency-1" } } },
       select: { id: true, title: true }
     });
     expect(raw.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in" }]);
