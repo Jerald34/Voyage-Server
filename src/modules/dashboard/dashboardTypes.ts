@@ -305,3 +305,46 @@ export type CalendarPayload = {
   trips: CalendarTrip[];
   events: CalendarEvent[];
 };
+
+// ---------- Trip panel ----------
+
+export type TripPreviewComment = {
+  id: string;
+  shareId: string;
+  authorName: string;
+  content: string;
+  status: "PENDING" | "SEEN" | "ADDRESSED";
+  dayNumber: number | null;
+  itemId: string | null;
+  /** Null for a day-level comment, or when the stop was deleted. */
+  itemTitle: string | null;
+  agencyReply: string | null;
+  agencyRepliedAt: string | null;
+  createdAt: string;
+};
+
+export type TripPreview = {
+  trip: {
+    id: string;
+    title: string;
+    status: TripStatus;
+    clientName: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    travelerCount: number | null;
+    destinationSummary: string | null;
+  };
+  /** The newest live link, else the newest link; null when never shared. */
+  share: {
+    id: string;
+    clientName: string | null;
+    viewCount: number;
+    lastViewedAt: string | null;
+    expiresAt: string | null;
+    revokedAt: string | null;
+    proposalRating: number | null;
+    createdAt: string;
+  } | null;
+  /** Every comment on every link of the trip, oldest first. */
+  comments: TripPreviewComment[];
+};

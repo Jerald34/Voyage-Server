@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { isIsoDate } from "../../services/weather/dates";
 
 export const dashboardViewSchema = z.enum(["owner", "staff"]);
@@ -8,6 +9,9 @@ export const dashboardQuerySchema = z.object({
   view: dashboardViewSchema.optional(),
   period: dashboardPeriodSchema.optional()
 });
+
+/** `/agencies/:agencyId/dashboard/trips/:tripId` (mergeParams carries agencyId). */
+export const tripPreviewParamsSchema = idParamsSchema("agencyId", "tripId");
 
 const kpiTileSchema = z.object({
   value: z.number().nullable(),
