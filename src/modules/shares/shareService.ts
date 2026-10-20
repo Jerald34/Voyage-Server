@@ -5,13 +5,30 @@ import type { CreateShareInput, AddCommentInput } from "./shareSchemas";
 import type { ShareRepository, PublicShareData, CommentRecord } from "./shareTypes";
 import { shareRepository } from "./shareRepository";
 import { computeExtendedExpiry } from "./shareExpiry";
+import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 
 // Re-export all types
 export type { ShareRecord, CommentRecord, PublicShareData, ShareRepository } from "./shareTypes";
 
 // ---------- Service factory ----------
 
-export function createShareService(options: { repository: ShareRepository }) {
+/**
+ * `onAgencyActivity(agencyId)` runs after a client touches an agency's link
+ * (a comment, a view), so the agency's dashboard caches can be cleared. The
+ * public routes don't know the agency; the share record does.
+ */
+export function createShareService(options: { repository: ShareRepository; onAgencyActivity?: (agencyId: string) => void }) {
+  // The client's comment or view is already saved; a failing hook must not
+  // turn that into an error for a public page.
+  function reportAgencyActivity(agencyId: string | null) {
+    if (!agencyId) return;
+    try {
+      options.onAgencyActivity?.(agencyId);
+    } catch {
+      // Worst case the dashboard shows the change once its cache expires.
+    }
+  }
+
   return {
     async createShare(agencyId: string, itineraryId: string, input: CreateShareInput) {
       assertUuid(agencyId, "agencyId");
@@ -38,7 +55,10 @@ export function createShareService(options: { repository: ShareRepository }) {
       }
 
       // Increment view count asynchronously — don't block the response
-      options.repository.incrementViewCount(share.id).catch(() => undefined);
+      options.repository
+        .incrementViewCount(share.id)
+        .then(() => reportAgencyActivity(share.agencyId))
+        .catch(() => undefined);
 
       return data;
     },
@@ -88,7 +108,9 @@ export function createShareService(options: { repository: ShareRepository }) {
         throw new ApiError(410, "SHARE_EXPIRED", "This share link has expired.");
       }
 
-      return options.repository.addComment(share.id, input);
+      const comment = await options.repository.addComment(share.id, input);
+      reportAgencyActivity(share.agencyId);
+      return comment;
     },
 
     async listPublicComments(token: string) {
@@ -135,5 +157,6 @@ export function createShareService(options: { repository: ShareRepository }) {
 // ---------- Singleton instance ----------
 
 export const shareService = createShareService({
-  repository: shareRepository
+  repository: shareRepository,
+  onAgencyActivity: invalidateAgencyDashboards
 });

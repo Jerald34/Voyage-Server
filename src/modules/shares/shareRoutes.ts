@@ -45,6 +45,8 @@ shareRoutes.post("/:itineraryId", async (request, response, next) => {
     const { itineraryId } = itineraryIdParamsSchema.parse(request.params);
     const input = createShareInputSchema.parse(request.body);
     const share = await shareService.createShare(agencyId, itineraryId, input);
+    // Expiry rows, calendar marks and Recently viewed follow the agency's links.
+    invalidateAgencyDashboards(agencyId);
     response.status(201).json({ share });
   } catch (error) {
     next(error);
@@ -93,6 +95,8 @@ shareRoutes.delete("/:shareId", async (request, response, next) => {
     const agencyId = getAgencyId(request);
     const { shareId } = shareIdParamsSchema.parse(request.params);
     const share = await shareService.revokeShare(agencyId, shareId);
+    // Expiry rows, calendar marks and Recently viewed follow the agency's links.
+    invalidateAgencyDashboards(agencyId);
     response.json({ share });
   } catch (error) {
     next(error);
