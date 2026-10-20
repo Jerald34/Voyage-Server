@@ -108,6 +108,10 @@ function makeComment(
     status: "PENDING",
     agencyRepliedAt: null,
     createdAt: NOW,
+    authorName: "Maria Santos",
+    agencyReply: null,
+    dayNumber: null,
+    itemId: null,
     ...overrides
   };
 }

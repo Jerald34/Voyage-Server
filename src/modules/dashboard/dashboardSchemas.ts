@@ -43,6 +43,7 @@ const ownerWorklistSchema = z.object({
       id: z.string(),
       tripId: z.string(),
       tripTitle: z.string(),
+      authorName: z.string(),
       commentExcerpt: z.string(),
       createdAt: z.string()
     })
@@ -122,6 +123,7 @@ const staffWorklistSchema = z.object({
       id: z.string(),
       tripId: z.string(),
       tripTitle: z.string(),
+      authorName: z.string(),
       commentExcerpt: z.string(),
       createdAt: z.string()
     })

@@ -16,6 +16,7 @@ export type OwnerWorklistUnreadComment = {
   id: string;
   tripId: string;
   tripTitle: string;
+  authorName: string;
   commentExcerpt: string;
   createdAt: string;
 };
