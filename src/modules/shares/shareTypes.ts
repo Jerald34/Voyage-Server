@@ -108,6 +108,9 @@ export interface ShareRepository {
   findShareByToken(token: string): Promise<PublicShareData | null>;
   incrementViewCount(shareId: string): Promise<void>;
   revokeShare(agencyId: string, shareId: string): Promise<ShareRecord>;
+  /** The agency's link by id, or null when it is not theirs. */
+  findShareForAgency(agencyId: string, shareId: string): Promise<ShareRecord | null>;
+  updateShareExpiry(shareId: string, expiresAt: Date): Promise<ShareRecord>;
   listSharesForTrip(agencyId: string, tripId: string): Promise<ShareRecord[]>;
   listAllSharesForAgency(agencyId: string): Promise<ShareRecord[]>;
   addComment(shareId: string, input: AddCommentInput): Promise<CommentRecord>;

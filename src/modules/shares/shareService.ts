@@ -4,6 +4,7 @@ import { assertUuid } from "../itineraries/itineraryService";
 import type { CreateShareInput, AddCommentInput } from "./shareSchemas";
 import type { ShareRepository, PublicShareData, CommentRecord } from "./shareTypes";
 import { shareRepository } from "./shareRepository";
+import { computeExtendedExpiry } from "./shareExpiry";
 
 // Re-export all types
 export type { ShareRecord, CommentRecord, PublicShareData, ShareRepository } from "./shareTypes";
@@ -45,6 +46,21 @@ export function createShareService(options: { repository: ShareRepository }) {
     async revokeShare(agencyId: string, shareId: string) {
       assertUuid(agencyId, "agencyId");
       return options.repository.revokeShare(agencyId, shareId);
+    },
+
+    async extendShare(agencyId: string, shareId: string, extendDays: number, now: Date = new Date()) {
+      assertUuid(agencyId, "agencyId");
+      const share = await options.repository.findShareForAgency(agencyId, shareId);
+      if (!share) {
+        throw new ApiError(404, "SHARE_NOT_FOUND", "Share not found.");
+      }
+      if (share.revokedAt !== null) {
+        throw new ApiError(409, "SHARE_REVOKED", "This link was turned off. Share the itinerary again instead.");
+      }
+      if (share.expiresAt === null) {
+        throw new ApiError(409, "SHARE_NEVER_EXPIRES", "This link never expires.");
+      }
+      return options.repository.updateShareExpiry(shareId, computeExtendedExpiry(share.expiresAt, extendDays, now));
     },
 
     async listSharesForTrip(agencyId: string, tripId?: string) {

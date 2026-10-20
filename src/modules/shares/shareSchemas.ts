@@ -46,6 +46,10 @@ export const replyCommentInputSchema = z.object({
   content: longTextSchema
 }).strict();
 
+export const extendShareInputSchema = z.object({
+  extendDays: z.union([z.literal(7), z.literal(30)])
+}).strict();
+
 // Live public-share links are generated with nanoid(12), so the param lower bound
 // must stay compatible with existing links while still rejecting obviously malformed input.
 export const publicShareTokenParamsSchema = z.object({
@@ -64,3 +68,4 @@ export const listSharesQuerySchema = z.object({
 export type CreateShareInput = z.infer<typeof createShareInputSchema>;
 export type AddCommentInput = z.infer<typeof addCommentInputSchema>;
 export type ReplyCommentInput = z.infer<typeof replyCommentInputSchema>;
+export type ExtendShareInput = z.infer<typeof extendShareInputSchema>;

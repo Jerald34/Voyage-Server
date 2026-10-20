@@ -7,6 +7,7 @@ import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 import {
   commentIdParamsSchema,
   createShareInputSchema,
+  extendShareInputSchema,
   itineraryIdParamsSchema,
   listSharesQuerySchema,
   replyCommentInputSchema,
@@ -92,6 +93,21 @@ shareRoutes.delete("/:shareId", async (request, response, next) => {
     const agencyId = getAgencyId(request);
     const { shareId } = shareIdParamsSchema.parse(request.params);
     const share = await shareService.revokeShare(agencyId, shareId);
+    response.json({ share });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PATCH /agencies/:agencyId/shares/:shareId/expiry — push a link's expiry out by 7 or 30 days
+shareRoutes.patch("/:shareId/expiry", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { shareId } = shareIdParamsSchema.parse(request.params);
+    const { extendDays } = extendShareInputSchema.parse(request.body);
+    const share = await shareService.extendShare(agencyId, shareId, extendDays);
+    // "Link expires" rows and calendar marks change with the expiry.
+    invalidateAgencyDashboards(agencyId);
     response.json({ share });
   } catch (error) {
     next(error);
