@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { addCommentInputSchema, publicShareTokenParamsSchema } from "./shareSchemas";
 import { shareService } from "./shareService";
-import { buildShareResponse } from "./publicShareService";
+import { buildShareResponseFromData, computeShareRevision } from "./publicShareService";
 import { proposalRatingInputSchema } from "../reviews/reviewSchemas";
 import { reviewService } from "../reviews/reviewService";
 import { itineraryWeatherService } from "../weather/weatherService";
@@ -13,14 +13,23 @@ publicShareRoutes.get("/:token", async (request, response, next) => {
   try {
     const { token } = publicShareTokenParamsSchema.parse(request.params);
     const data = await shareService.getShareByToken(token);
-    const result = buildShareResponse({
-      share: data.share,
-      agency: data.agency,
-      itinerary: data.itinerary as Record<string, unknown>,
-      trip: data.trip as Record<string, unknown> | null,
-      creator: data.creator
-    });
-    response.json(result);
+    const result = buildShareResponseFromData(data);
+    // `revision` fingerprints the itinerary this response carries, so an open page
+    // can compare it with GET /shared/:token/revision to see whether it was edited.
+    response.json({ ...result, revision: computeShareRevision(result) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /shared/:token/revision — cheap "has the itinerary changed?" check for an open
+// share page (no auth, not a view). Same 404/410 as the page itself.
+publicShareRoutes.get("/:token/revision", async (request, response, next) => {
+  try {
+    const { token } = publicShareTokenParamsSchema.parse(request.params);
+    const revision = await shareService.getShareRevision(token);
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ revision });
   } catch (error) {
     next(error);
   }

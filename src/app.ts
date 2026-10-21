@@ -100,6 +100,7 @@ export function createApp(options: CreateAppOptions = {}) {
   app.get("/shared/:token", rateLimiters.publicShareRead);
   app.get("/shared/:token/comments", rateLimiters.publicShareRead);
   app.get("/shared/:token/weather", rateLimiters.publicShareRead);
+  app.get("/shared/:token/revision", rateLimiters.publicShareRead);
   app.post("/shared/:token/comments", rateLimiters.publicShareWrite);
   app.post("/shared/:token/rate", rateLimiters.publicShareWrite);
   app.get("/reviews/:tripToken/check", rateLimiters.reviewCheck);

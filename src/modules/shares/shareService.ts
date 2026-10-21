@@ -5,6 +5,7 @@ import type { CreateShareInput, AddCommentInput } from "./shareSchemas";
 import type { ShareRepository, PublicShareData, CommentRecord } from "./shareTypes";
 import { shareRepository } from "./shareRepository";
 import { computeExtendedExpiry } from "./shareExpiry";
+import { buildShareResponseFromData, computeShareRevision } from "./publicShareService";
 import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 
 // Re-export all types
@@ -29,6 +30,27 @@ export function createShareService(options: { repository: ShareRepository; onAge
     }
   }
 
+  // The share for a public token, or the 404/410 a client should see for a link
+  // that does not exist, was turned off, or has run out.
+  async function readLiveShare(token: string): Promise<PublicShareData> {
+    const data = await options.repository.findShareByToken(token);
+    if (!data) {
+      throw new ApiError(404, "SHARE_NOT_FOUND", "Share link not found.");
+    }
+
+    const { share } = data;
+
+    if (share.revokedAt !== null) {
+      throw new ApiError(410, "SHARE_REVOKED", "This share link has been revoked.");
+    }
+
+    if (share.expiresAt !== null && share.expiresAt <= new Date()) {
+      throw new ApiError(410, "SHARE_EXPIRED", "This share link has expired.");
+    }
+
+    return data;
+  }
+
   return {
     async createShare(agencyId: string, itineraryId: string, input: CreateShareInput) {
       assertUuid(agencyId, "agencyId");
@@ -39,20 +61,8 @@ export function createShareService(options: { repository: ShareRepository; onAge
     },
 
     async getShareByToken(token: string) {
-      const data = await options.repository.findShareByToken(token);
-      if (!data) {
-        throw new ApiError(404, "SHARE_NOT_FOUND", "Share link not found.");
-      }
-
+      const data = await readLiveShare(token);
       const { share } = data;
-
-      if (share.revokedAt !== null) {
-        throw new ApiError(410, "SHARE_REVOKED", "This share link has been revoked.");
-      }
-
-      if (share.expiresAt !== null && share.expiresAt <= new Date()) {
-        throw new ApiError(410, "SHARE_EXPIRED", "This share link has expired.");
-      }
 
       // Increment view count asynchronously — don't block the response
       options.repository
@@ -61,6 +71,16 @@ export function createShareService(options: { repository: ShareRepository; onAge
         .catch(() => undefined);
 
       return data;
+    },
+
+    /**
+     * The fingerprint of the itinerary a share link shows, for an open page to
+     * ask "has it changed?". Unlike getShareByToken this is not a view: it does
+     * not count one and does not report agency activity.
+     */
+    async getShareRevision(token: string) {
+      const data = await readLiveShare(token);
+      return computeShareRevision(buildShareResponseFromData(data));
     },
 
     async revokeShare(agencyId: string, shareId: string) {
