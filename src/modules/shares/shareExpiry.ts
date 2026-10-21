@@ -1,3 +1,4 @@
+/** A day here is a fixed 24 hours (UTC), not a calendar day, so DST never shifts an expiry. */
 const MS_PER_DAY = 24 * 60 * 60 * 1000;
 
 /** The day counts the dashboard offers for extending a link. */
