@@ -4,6 +4,7 @@ vi.mock("../src/db/prisma", () => ({ prisma: {} }));
 
 import { ApiError } from "../src/http/errors";
 import {
+  TRIP_PREVIEW_COMMENT_LIMIT,
   createPrismaTripPreviewRepository,
   type RawTripPreview
 } from "../src/modules/dashboard/tripPreviewRepository";
@@ -246,6 +247,25 @@ describe("trip preview repository", () => {
       select: { id: true, title: true, itineraryDay: { select: { itineraryId: true } } }
     });
     expect(result.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in", itineraryId: "itinerary-1" }]);
+  });
+
+  it("reads only the newest 200 comments and still returns them oldest first", async () => {
+    const client = fakeClient();
+    client.itineraryShare.findMany.mockResolvedValue([{ id: "share-1" }]);
+    // The database hands back the newest first, as asked.
+    client.itineraryComment.findMany.mockResolvedValue([
+      { id: "c3", shareId: "share-1", itemId: null },
+      { id: "c2", shareId: "share-1", itemId: null },
+      { id: "c1", shareId: "share-1", itemId: null }
+    ]);
+
+    const result = await createPrismaTripPreviewRepository(client as never).fetchTripPreview("agency-1", tripRow.id);
+
+    const query = client.itineraryComment.findMany.mock.calls[0][0];
+    expect(TRIP_PREVIEW_COMMENT_LIMIT).toBe(200);
+    expect(query.take).toBe(TRIP_PREVIEW_COMMENT_LIMIT);
+    expect(query.orderBy).toEqual([{ createdAt: "desc" }, { id: "desc" }]);
+    expect(result.comments.map((c) => c.id)).toEqual(["c1", "c2", "c3"]);
   });
 
   it("reads which itinerary each link shows", async () => {

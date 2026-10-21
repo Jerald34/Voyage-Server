@@ -7,6 +7,9 @@ import { prisma } from "../../db/prisma";
  * Scoped by agency, so another agency's trip reads as missing.
  */
 
+/** Most comments the trip panel reads; the newest are kept. */
+export const TRIP_PREVIEW_COMMENT_LIMIT = 200;
+
 export type RawTripPreview = {
   trip: {
     id: string;
@@ -31,7 +34,7 @@ export type RawTripPreview = {
     proposalRating: number | null;
     createdAt: Date;
   }>;
-  /** Oldest first. */
+  /** Oldest first, and at most the newest TRIP_PREVIEW_COMMENT_LIMIT. */
   comments: Array<{
     id: string;
     shareId: string;
@@ -86,11 +89,13 @@ export function createPrismaTripPreviewRepository(client: PrismaClient = prisma)
         }
       });
 
-      // authorEmail is left out on purpose: the panel never shows the client's email.
-      const comments = shares.length
+      // Newest first so the cap keeps the newest; flipped back to oldest first below.
+      const newestFirst = shares.length
         ? await client.itineraryComment.findMany({
             where: { shareId: { in: shares.map((s) => s.id) } },
-            orderBy: { createdAt: "asc" },
+            orderBy: [{ createdAt: "desc" }, { id: "desc" }],
+            take: TRIP_PREVIEW_COMMENT_LIMIT,
+            // authorEmail is left out on purpose: the panel never shows the client's email.
             select: {
               id: true,
               shareId: true,
@@ -105,6 +110,7 @@ export function createPrismaTripPreviewRepository(client: PrismaClient = prisma)
             }
           })
         : [];
+      const comments = [...newestFirst].reverse();
 
       // A comment's itemId comes from the public share page unchecked, so only
       // look up stops in this trip's itineraries, and carry each stop's
