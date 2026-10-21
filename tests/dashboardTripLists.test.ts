@@ -160,6 +160,14 @@ describe("selectFunnelCohort", () => {
 });
 
 describe("toTripListRows", () => {
+  it("breaks equal times on the trip id so the cut-off is the same every load", () => {
+    const same = { createdAt: at(-2 * DAY), updatedAt: at(-2 * DAY) };
+    const trips = ["b", "c", "a"].map((id) => trip(id, same));
+
+    expect(toTripListRows(trips, "created").map((r) => r.tripId)).toEqual(["a", "b", "c"]);
+    expect(toTripListRows([...trips].reverse(), "updated").map((r) => r.tripId)).toEqual(["a", "b", "c"]);
+  });
+
   it("lists trips newest first in the chosen order, as rows", () => {
     const rows = toTripListRows(
       [

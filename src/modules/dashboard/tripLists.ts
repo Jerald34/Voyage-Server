@@ -10,7 +10,7 @@ type Trip = RawDashboardData["trips"][number];
 export function toTripListRows(trips: Trip[], order: "created" | "updated"): TripListRow[] {
   const time = (trip: Trip) => (order === "created" ? trip.createdAt : trip.updatedAt).getTime();
   return [...trips]
-    .sort((a, b) => time(b) - time(a))
+    .sort((a, b) => time(b) - time(a) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
     .slice(0, TRIP_LIST_LIMIT)
     .map((trip) => ({ tripId: trip.id, tripTitle: trip.title, clientName: trip.clientName, status: trip.status }));
 }
