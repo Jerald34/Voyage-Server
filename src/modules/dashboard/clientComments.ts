@@ -15,6 +15,8 @@ export const ANSWERED_WINDOW_DAYS = 30;
 export const WAITING_LIMIT = 50;
 export const ANSWERED_LIMIT = 20;
 const EXCERPT_LENGTH = 280;
+/** Longest agency reply a card row carries; the trip panel has the whole text. */
+const REPLY_LENGTH = 280;
 
 export type ClientCommentInputs = {
   trips: RawDashboardData["trips"];
@@ -54,7 +56,7 @@ export function selectClientComments(inputs: ClientCommentInputs): ClientComment
       dayNumber: comment.dayNumber,
       itemTitle: stopTitle(comment.itemId ? stops.get(comment.itemId) : undefined, share.itineraryId),
       createdAt: comment.createdAt.toISOString(),
-      agencyReply: comment.agencyReply,
+      agencyReply: comment.agencyReply === null ? null : shortenReply(comment.agencyReply),
       agencyRepliedAt: comment.agencyRepliedAt ? comment.agencyRepliedAt.toISOString() : null
     };
 
@@ -83,6 +85,12 @@ type SortedRow = { row: ClientCommentRow; time: number };
  */
 function stopTitle(stop: { title: string; itineraryId: string } | undefined, shareItineraryId: string): string | null {
   return stop && stop.itineraryId === shareItineraryId ? stop.title : null;
+}
+
+/** A long reply cut to REPLY_LENGTH characters with an ellipsis, by code point so an emoji is never split. */
+function shortenReply(reply: string): string {
+  const chars = Array.from(reply);
+  return chars.length > REPLY_LENGTH ? `${chars.slice(0, REPLY_LENGTH - 1).join("").trimEnd()}…` : reply;
 }
 
 function compareIds(a: string, b: string): number {

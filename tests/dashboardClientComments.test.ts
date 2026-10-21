@@ -111,6 +111,31 @@ describe("selectClientComments", () => {
     });
   });
 
+  it("cuts a long reply to 280 characters ending in an ellipsis, and leaves a short one alone", () => {
+    const replied = (id: string, agencyReply: string) =>
+      comment(id, "s1", { status: "ADDRESSED", agencyReply, agencyRepliedAt: at(-1 * HOUR) });
+    const result = selectClientComments({
+      trips: [trip("t1")],
+      shares: [share("s1", "t1")],
+      comments: [
+        replied("long", "x".repeat(300)),
+        replied("exact", "y".repeat(280)),
+        replied("short", "Yes, it is."),
+        // Emoji are two UTF-16 units each: cutting by units would split one in half.
+        replied("emoji", "z".repeat(270) + "😀".repeat(20))
+      ],
+      now: NOW
+    });
+    const reply = (id: string) => result.answered.find((row) => row.id === id)!.agencyReply!;
+
+    expect(reply("long")).toBe("x".repeat(279) + "…");
+    expect(Array.from(reply("long"))).toHaveLength(280);
+    expect(reply("exact")).toBe("y".repeat(280));
+    expect(reply("short")).toBe("Yes, it is.");
+    expect(reply("emoji")).toBe("z".repeat(270) + "😀".repeat(9) + "…");
+    expect(reply("emoji")).not.toMatch(/[\ud800-\udbff](?![\udc00-\udfff])/);
+  });
+
   it("falls back to the trip's client and leaves an unknown stop untitled", () => {
     const result = selectClientComments({
       trips: [trip("t1")],
