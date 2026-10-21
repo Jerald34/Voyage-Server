@@ -110,7 +110,11 @@ export interface ShareRepository {
   revokeShare(agencyId: string, shareId: string): Promise<ShareRecord>;
   /** The agency's link by id, or null when it is not theirs. */
   findShareForAgency(agencyId: string, shareId: string): Promise<ShareRecord | null>;
-  updateShareExpiry(shareId: string, expiresAt: Date): Promise<ShareRecord>;
+  /**
+   * Sets the expiry of the agency's link only while it is not revoked, so a link
+   * revoked after it was read is never touched. Null when no such link matched.
+   */
+  updateShareExpiry(agencyId: string, shareId: string, expiresAt: Date): Promise<ShareRecord | null>;
   listSharesForTrip(agencyId: string, tripId: string): Promise<ShareRecord[]>;
   listAllSharesForAgency(agencyId: string): Promise<ShareRecord[]>;
   addComment(shareId: string, input: AddCommentInput): Promise<CommentRecord>;

@@ -80,7 +80,19 @@ export function createShareService(options: { repository: ShareRepository; onAge
       if (share.expiresAt === null) {
         throw new ApiError(409, "SHARE_NEVER_EXPIRES", "This link never expires.");
       }
-      return options.repository.updateShareExpiry(shareId, computeExtendedExpiry(share.expiresAt, extendDays, now));
+      const updated = await options.repository.updateShareExpiry(
+        agencyId,
+        shareId,
+        computeExtendedExpiry(share.expiresAt, extendDays, now)
+      );
+      if (updated) return updated;
+
+      // Nothing was written: the link was revoked or removed after it was read.
+      const current = await options.repository.findShareForAgency(agencyId, shareId);
+      if (current?.revokedAt) {
+        throw new ApiError(409, "SHARE_REVOKED", "This link was turned off. Share the itinerary again instead.");
+      }
+      throw new ApiError(404, "SHARE_NOT_FOUND", "Share not found.");
     },
 
     async listSharesForTrip(agencyId: string, tripId?: string) {

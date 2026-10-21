@@ -226,12 +226,16 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
       return (share as ShareRecord | null) ?? null;
     },
 
-    async updateShareExpiry(shareId, expiresAt) {
-      const updated = await client.itineraryShare.update({
-        where: { id: shareId },
+    async updateShareExpiry(agencyId, shareId, expiresAt) {
+      // The write itself checks the agency and that the link is still live: the
+      // read before it can be stale by the time it lands.
+      const { count } = await client.itineraryShare.updateMany({
+        where: { id: shareId, agencyId, revokedAt: null },
         data: { expiresAt }
       });
-      return updated as ShareRecord;
+      if (count === 0) return null;
+      const updated = await client.itineraryShare.findFirst({ where: { id: shareId, agencyId } });
+      return (updated as ShareRecord | null) ?? null;
     },
 
     async listSharesForTrip(agencyId, tripId) {
