@@ -2,7 +2,7 @@
 // Called by the public share route after fetching share + itinerary + optional agency + creator.
 
 import { createHash } from "node:crypto";
-import type { PublicShareData } from "./shareTypes";
+import type { CommentRecord, PublicShareData } from "./shareTypes";
 
 export type ShareBrandInput = {
   share: {
@@ -28,14 +28,49 @@ export type ShareBrand =
   | { type: "agency"; name: string; logoUrl: string | null }
   | { type: "personal"; displayName: string };
 
+/**
+ * What anyone holding the link receives. Built field by field, so a column added
+ * to the share, trip or agency later never reaches a public page by accident:
+ * no emails, view stats, internal ids or storage keys.
+ */
 export type ShareResponseWithBrand = {
-  share: ShareBrandInput["share"];
-  agency: ShareBrandInput["agency"];
-  itinerary: ShareBrandInput["itinerary"];
-  trip: ShareBrandInput["trip"];
-  creator: ShareBrandInput["creator"];
+  share: {
+    clientName: string | null;
+    proposalRating: number | null;
+    proposalRatingComment: string | null;
+    proposalRatedAt: unknown;
+  };
+  itinerary: Record<string, unknown>;
+  trip: {
+    title: unknown;
+    clientName: unknown;
+    startDate: unknown;
+    endDate: unknown;
+    travelerCount: unknown;
+    destinationSummary: unknown;
+  } | null;
   brand: ShareBrand;
 };
+
+export type PublicComment = Pick<
+  CommentRecord,
+  "id" | "authorName" | "content" | "dayNumber" | "itemId" | "status" | "agencyReply" | "agencyRepliedAt" | "createdAt"
+>;
+
+/** A comment as the share page shows it. The author's email stays with the agency. */
+export function toPublicComment(comment: CommentRecord): PublicComment {
+  return {
+    id: comment.id,
+    authorName: comment.authorName,
+    content: comment.content,
+    dayNumber: comment.dayNumber,
+    itemId: comment.itemId,
+    status: comment.status,
+    agencyReply: comment.agencyReply,
+    agencyRepliedAt: comment.agencyRepliedAt,
+    createdAt: comment.createdAt
+  };
+}
 
 function buildLogoUrl(
   logoImage: { bucket: string; objectKey: string; [key: string]: unknown } | null
@@ -54,11 +89,15 @@ function buildLogoUrl(
   return `https://storage.googleapis.com/${bucket}/${key}`;
 }
 
+function nullable<T>(value: T | undefined): T | null {
+  return value === undefined ? null : value;
+}
+
 /**
  * Pure function: given the raw share row, optional agency, itinerary, and creator,
- * returns the full public share response payload including a `brand` discriminated union.
+ * returns the public share response payload including a `brand` discriminated union.
  */
-export function buildShareResponse(input: ShareBrandInput): ShareResponseWithBrand & { brand: ShareBrand } {
+export function buildShareResponse(input: ShareBrandInput): ShareResponseWithBrand {
   const { share, agency, itinerary, trip, creator } = input;
 
   let brand: ShareBrand;
@@ -75,12 +114,28 @@ export function buildShareResponse(input: ShareBrandInput): ShareResponseWithBra
     };
   }
 
+  // The itinerary is already an explicit public projection (shareRepository); only
+  // its own id, which the page never uses, is left behind.
+  const { id: _itineraryId, ...publicItinerary } = itinerary;
+
   return {
-    share,
-    agency,
-    itinerary,
-    trip,
-    creator,
+    share: {
+      clientName: nullable(share.clientName as string | null | undefined),
+      proposalRating: nullable(share.proposalRating as number | null | undefined),
+      proposalRatingComment: nullable(share.proposalRatingComment as string | null | undefined),
+      proposalRatedAt: nullable(share.proposalRatedAt)
+    },
+    itinerary: publicItinerary,
+    trip: trip
+      ? {
+          title: trip.title,
+          clientName: nullable(trip.clientName),
+          startDate: nullable(trip.startDate),
+          endDate: nullable(trip.endDate),
+          travelerCount: nullable(trip.travelerCount),
+          destinationSummary: nullable(trip.destinationSummary)
+        }
+      : null,
     brand
   };
 }

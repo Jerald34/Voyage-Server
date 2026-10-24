@@ -110,13 +110,12 @@ beforeEach(() => {
 });
 
 describe("GET /shared/:token (revision field)", () => {
-  it("adds a top-level revision and keeps every existing field", async () => {
+  it("adds a top-level revision beside the public fields", async () => {
     const response = await getShare();
 
     expect(response.status).toBe(200);
     expect(response.body.revision).toMatch(/^[0-9a-f]{16}$/);
-    expect(Object.keys(response.body).sort()).toEqual(["agency", "brand", "creator", "itinerary", "revision", "share", "trip"]);
-    expect(response.body.share.viewCount).toBe(3);
+    expect(Object.keys(response.body).sort()).toEqual(["brand", "itinerary", "revision", "share", "trip"]);
     expect(response.body.itinerary.days[0].items).toHaveLength(2);
     expect(response.body.brand).toEqual({ type: "agency", name: "Wanderlust", logoUrl: null });
   });

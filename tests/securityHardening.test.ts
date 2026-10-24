@@ -56,7 +56,8 @@ vi.mock("../src/modules/shares/shareService", () => ({
   }
 }));
 
-vi.mock("../src/modules/shares/publicShareService", () => ({
+vi.mock("../src/modules/shares/publicShareService", async (importOriginal) => ({
+  toPublicComment: (await importOriginal<typeof import("../src/modules/shares/publicShareService")>()).toPublicComment,
   buildShareResponseFromData: vi.fn(() => ({ share: { token: "share-token" }, itinerary: {}, trip: null })),
   computeShareRevision: vi.fn(() => "0123456789abcdef")
 }));

@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { addCommentInputSchema, publicShareTokenParamsSchema } from "./shareSchemas";
 import { shareService } from "./shareService";
-import { buildShareResponseFromData, computeShareRevision } from "./publicShareService";
+import { buildShareResponseFromData, computeShareRevision, toPublicComment } from "./publicShareService";
 import { proposalRatingInputSchema } from "../reviews/reviewSchemas";
 import { reviewService } from "../reviews/reviewService";
 import { itineraryWeatherService } from "../weather/weatherService";
@@ -52,7 +52,7 @@ publicShareRoutes.post("/:token/comments", async (request, response, next) => {
     const { token } = publicShareTokenParamsSchema.parse(request.params);
     const input = addCommentInputSchema.parse(request.body);
     const comment = await shareService.addComment(token, input);
-    response.status(201).json({ comment });
+    response.status(201).json({ comment: toPublicComment(comment) });
   } catch (error) {
     next(error);
   }
@@ -63,7 +63,8 @@ publicShareRoutes.get("/:token/comments", async (request, response, next) => {
   try {
     const { token } = publicShareTokenParamsSchema.parse(request.params);
     const comments = await shareService.listPublicComments(token);
-    response.json({ comments });
+    // Anyone with the link reads this list, so commenters' emails stay out of it.
+    response.json({ comments: comments.map(toPublicComment) });
   } catch (error) {
     next(error);
   }
