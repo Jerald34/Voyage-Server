@@ -60,17 +60,19 @@ export function createShareService(options: { repository: ShareRepository; onAge
       return options.repository.createShare(agencyId, itineraryId, { ...input, token });
     },
 
+    /** The live share for the public page. Not a view: the page records those itself. */
     async getShareByToken(token: string) {
-      const data = await readLiveShare(token);
-      const { share } = data;
+      return readLiveShare(token);
+    },
 
-      // Increment view count asynchronously — don't block the response
-      options.repository
-        .incrementViewCount(share.id)
-        .then(() => reportAgencyActivity(share.agencyId))
-        .catch(() => undefined);
-
-      return data;
+    /**
+     * One client visit. The page calls this once per visit, so a reload, a
+     * "Show latest" or a revision check never inflates the count.
+     */
+    async recordView(token: string) {
+      const { share } = await readLiveShare(token);
+      await options.repository.incrementViewCount(share.id);
+      reportAgencyActivity(share.agencyId);
     },
 
     /**
@@ -86,6 +88,30 @@ export function createShareService(options: { repository: ShareRepository; onAge
     async revokeShare(agencyId: string, shareId: string) {
       assertUuid(agencyId, "agencyId");
       return options.repository.revokeShare(agencyId, shareId);
+    },
+
+    /**
+     * A new link for the same itinerary, client, email and expiry, with the old
+     * link turned off; for when the old one went to the wrong person.
+     */
+    async regenerateShare(agencyId: string, shareId: string, now: Date = new Date()) {
+      assertUuid(agencyId, "agencyId");
+      const share = await options.repository.findShareForAgency(agencyId, shareId);
+      if (!share) {
+        throw new ApiError(404, "SHARE_NOT_FOUND", "Share not found.");
+      }
+      if (share.revokedAt !== null) {
+        throw new ApiError(409, "SHARE_REVOKED", "This link was turned off. Share the itinerary again instead.");
+      }
+      if (share.expiresAt !== null && share.expiresAt <= now) {
+        throw new ApiError(409, "SHARE_EXPIRED", "This link has expired. Extend it or share the itinerary again.");
+      }
+      const replaced = await options.repository.replaceShare(agencyId, shareId, nanoid(12));
+      if (!replaced) {
+        // Turned off between the read and the swap.
+        throw new ApiError(409, "SHARE_REVOKED", "This link was turned off. Share the itinerary again instead.");
+      }
+      return replaced;
     },
 
     async extendShare(agencyId: string, shareId: string, extendDays: number, now: Date = new Date()) {

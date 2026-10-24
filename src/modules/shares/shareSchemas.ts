@@ -46,6 +46,9 @@ export const replyCommentInputSchema = z.object({
   content: longTextSchema
 }).strict();
 
+// Regenerate copies everything from the old link, so it takes nothing.
+export const regenerateShareInputSchema = z.object({}).strict();
+
 export const extendShareInputSchema = z.object({
   extendDays: z.union([z.literal(7), z.literal(30)])
 }).strict();

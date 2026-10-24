@@ -10,6 +10,7 @@ import {
   extendShareInputSchema,
   itineraryIdParamsSchema,
   listSharesQuerySchema,
+  regenerateShareInputSchema,
   replyCommentInputSchema,
   shareIdParamsSchema
 } from "./shareSchemas";
@@ -98,6 +99,21 @@ shareRoutes.delete("/:shareId", async (request, response, next) => {
     // Expiry rows, calendar marks and Recently viewed follow the agency's links.
     invalidateAgencyDashboards(agencyId);
     response.json({ share });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /agencies/:agencyId/shares/:shareId/regenerate — new link, same client, email and expiry; old link off
+shareRoutes.post("/:shareId/regenerate", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { shareId } = shareIdParamsSchema.parse(request.params);
+    regenerateShareInputSchema.parse(request.body ?? {});
+    const share = await shareService.regenerateShare(agencyId, shareId);
+    // Expiry rows, calendar marks and Recently viewed follow the agency's links.
+    invalidateAgencyDashboards(agencyId);
+    response.status(201).json({ share });
   } catch (error) {
     next(error);
   }

@@ -221,6 +221,36 @@ export function createPrismaShareRepository(client: PrismaClient = prisma): Shar
       return updated as ShareRecord;
     },
 
+    async replaceShare(agencyId, shareId, token) {
+      return client.$transaction(async (tx) => {
+        // Turning the old link off is the guard: a link revoked after it was read
+        // matches nothing, and then no second link is made.
+        const { count } = await tx.itineraryShare.updateMany({
+          where: { id: shareId, agencyId, revokedAt: null },
+          data: { revokedAt: new Date() }
+        });
+        if (count === 0) return null;
+
+        const old = await tx.itineraryShare.findFirst({ where: { id: shareId, agencyId } });
+        if (!old) return null;
+
+        // Same itinerary, client, email (review emails go there) and expiry; views,
+        // rating and comments start fresh on the new link.
+        const created = await tx.itineraryShare.create({
+          data: {
+            token,
+            itineraryId: old.itineraryId,
+            tripId: old.tripId,
+            agencyId: old.agencyId,
+            clientName: old.clientName,
+            clientEmail: old.clientEmail,
+            expiresAt: old.expiresAt
+          }
+        });
+        return created as ShareRecord;
+      });
+    },
+
     async findShareForAgency(agencyId, shareId) {
       const share = await client.itineraryShare.findFirst({ where: { id: shareId, agencyId } });
       return (share as ShareRecord | null) ?? null;

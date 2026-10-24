@@ -148,10 +148,10 @@ describe("GET /shared/:token/revision", () => {
     expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
   });
 
-  it("the main share response still counts a view (so the spies are live)", async () => {
-    await getShare();
-    await flush();
+  it("recording a view counts one (so the spies are live)", async () => {
+    const response = await request(createApp()).post(`/shared/${VALID_SHARE_TOKEN}/view`);
 
+    expect(response.status).toBe(204);
     expect(mocks.incrementViewCount).toHaveBeenCalledWith("share-1");
     expect(mocks.invalidateAgencyDashboards).toHaveBeenCalledWith("agency-1");
   });

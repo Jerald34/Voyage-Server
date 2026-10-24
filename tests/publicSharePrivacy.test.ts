@@ -159,6 +159,15 @@ describe("GET /shared/:token sends only what the share page shows", () => {
     expect(response.body.itinerary.days[0].items[0]).toMatchObject({ id: "item-1", title: "Burnham Park" });
   });
 
+  it("is not a view: loading (or reloading, or Show latest) never counts one", async () => {
+    await request(createApp()).get(`/shared/${VALID_SHARE_TOKEN}`);
+    await request(createApp()).get(`/shared/${VALID_SHARE_TOKEN}`);
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(mocks.incrementViewCount).not.toHaveBeenCalled();
+    expect(mocks.invalidateAgencyDashboards).not.toHaveBeenCalled();
+  });
+
   it("never carries the client's email, view stats or internal ids", async () => {
     const response = await request(createApp()).get(`/shared/${VALID_SHARE_TOKEN}`);
     const text = JSON.stringify(response.body);

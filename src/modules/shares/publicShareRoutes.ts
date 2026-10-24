@@ -35,6 +35,18 @@ publicShareRoutes.get("/:token/revision", async (request, response, next) => {
   }
 });
 
+// POST /shared/:token/view — the page records one client visit (no auth). Loading the
+// share itself never counts, so reloads and "Show latest" do not inflate the number.
+publicShareRoutes.post("/:token/view", async (request, response, next) => {
+  try {
+    const { token } = publicShareTokenParamsSchema.parse(request.params);
+    await shareService.recordView(token);
+    response.status(204).end();
+  } catch (error) {
+    next(error);
+  }
+});
+
 // GET /shared/:token/weather — per-day weather for a share link (no auth, not a view)
 publicShareRoutes.get("/:token/weather", async (request, response, next) => {
   try {
