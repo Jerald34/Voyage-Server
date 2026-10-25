@@ -97,10 +97,47 @@ export function createAdminAccountActionService(options: { repository: AccountAc
     },
 
     async deleteAccount(actor: AccountActionActor, userId: string, input: DeleteAccountInput) {
-      // Filled in by Task 4.
-      await loadTarget(actor, userId);
-      void input;
-      throw new ApiError(501, "NOT_IMPLEMENTED", "Delete is not implemented yet.");
+      const target = await loadTarget(actor, userId);
+      if (input.confirmEmail.trim().toLowerCase() !== target.email.trim().toLowerCase()) {
+        throw new ApiError(400, "EMAIL_CONFIRMATION_MISMATCH", "The confirmation email does not match this account.");
+      }
+
+      // Order matters: a solo owner is the case the dialog explains, so it wins over the others.
+      const owned = await repository.listOwnedAgencies(userId);
+      const solo = owned.find((agency) => agency.successors.length === 0);
+      if (solo) {
+        throw new ApiError(409, "OWNER_HAS_NO_SUCCESSOR", `${solo.agencyName} has no other members.`, {
+          agencyId: solo.agencyId,
+          agencyName: solo.agencyName
+        });
+      }
+      if (owned.length > 1) {
+        throw new ApiError(409, "MULTIPLE_OWNED_AGENCIES", "This account owns more than one agency.");
+      }
+
+      let transfer: AnonymizeInput["transfer"] = null;
+      if (owned.length === 1) {
+        const agency = owned[0]!;
+        if (!input.newOwnerUserId) {
+          throw new ApiError(400, "NEW_OWNER_REQUIRED", `Choose a new owner for ${agency.agencyName} first.`, {
+            agencyId: agency.agencyId,
+            agencyName: agency.agencyName
+          });
+        }
+        if (!agency.successors.some((successor) => successor.userId === input.newOwnerUserId)) {
+          throw new ApiError(400, "INVALID_NEW_OWNER", "The new owner must be an active member of the agency.");
+        }
+        transfer = { agencyId: agency.agencyId, toUserId: input.newOwnerUserId };
+      }
+
+      await repository.anonymize({
+        userId,
+        adminUserId: actor.id,
+        reason: input.reason ?? null,
+        emailDomain: target.email.split("@")[1]?.trim().toLowerCase() ?? "",
+        now: now(),
+        transfer
+      });
     }
   };
 }

@@ -87,3 +87,85 @@ describe("disable / enable / sign out", () => {
     expect(repo.revokeSessions).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: ADMIN.id, reason: "Lost phone" });
   });
 });
+
+const agency = (over: Partial<OwnedAgency> = {}): OwnedAgency => ({
+  agencyId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
+  agencyName: "Bayani Tours",
+  successors: [{ userId: "22222222-2222-4222-8222-222222222222", displayName: "Liza Cruz", role: "ADMIN" }],
+  ...over
+});
+
+describe("deleteAccount", () => {
+  it("rejects a confirmation email that doesn't match", async () => {
+    const repo = makeRepo();
+    await expect(service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "someone@else.com" })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "EMAIL_CONFIRMATION_MISMATCH"
+    });
+    expect(repo.anonymize).not.toHaveBeenCalled();
+  });
+
+  it("anonymizes a regular account, matching the email case-insensitively", async () => {
+    const repo = makeRepo();
+    await service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "  mara@hops.TRAVEL ", reason: "Requested by the user" });
+    expect(repo.anonymize).toHaveBeenCalledWith({
+      userId: USER_ID,
+      adminUserId: ADMIN.id,
+      reason: "Requested by the user",
+      emailDomain: "hops.travel",
+      now: NOW,
+      transfer: null
+    });
+  });
+
+  it("blocks a solo owner and says which agency", async () => {
+    const repo = makeRepo({ owned: [agency({ successors: [] })] });
+    await expect(service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "mara@hops.travel" })).rejects.toMatchObject({
+      statusCode: 409,
+      code: "OWNER_HAS_NO_SUCCESSOR",
+      details: { agencyId: agency().agencyId, agencyName: "Bayani Tours" }
+    });
+  });
+
+  it("blocks an owner of more than one agency", async () => {
+    const repo = makeRepo({ owned: [agency(), agency({ agencyId: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", agencyName: "Second" })] });
+    await expect(service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "mara@hops.travel" })).rejects.toMatchObject({
+      statusCode: 409,
+      code: "MULTIPLE_OWNED_AGENCIES"
+    });
+  });
+
+  it("requires a new owner when the account owns an agency with members", async () => {
+    const repo = makeRepo({ owned: [agency()] });
+    await expect(service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "mara@hops.travel" })).rejects.toMatchObject({
+      statusCode: 400,
+      code: "NEW_OWNER_REQUIRED"
+    });
+  });
+
+  it("rejects a new owner who isn't an active member of that agency", async () => {
+    const repo = makeRepo({ owned: [agency()] });
+    await expect(
+      service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "mara@hops.travel", newOwnerUserId: "33333333-3333-4333-8333-333333333333" })
+    ).rejects.toMatchObject({ statusCode: 400, code: "INVALID_NEW_OWNER" });
+  });
+
+  it("hands the agency over, then anonymizes", async () => {
+    const repo = makeRepo({ owned: [agency()] });
+    await service(repo).deleteAccount(ADMIN, USER_ID, {
+      confirmEmail: "mara@hops.travel",
+      newOwnerUserId: "22222222-2222-4222-8222-222222222222"
+    });
+    expect(repo.anonymize).toHaveBeenCalledWith(
+      expect.objectContaining({
+        transfer: { agencyId: agency().agencyId, toUserId: "22222222-2222-4222-8222-222222222222" }
+      })
+    );
+  });
+
+  it("ignores a new owner sent for an account that owns nothing", async () => {
+    const repo = makeRepo();
+    await service(repo).deleteAccount(ADMIN, USER_ID, { confirmEmail: "mara@hops.travel", newOwnerUserId: "22222222-2222-4222-8222-222222222222" });
+    expect(repo.anonymize).toHaveBeenCalledWith(expect.objectContaining({ transfer: null }));
+  });
+});
