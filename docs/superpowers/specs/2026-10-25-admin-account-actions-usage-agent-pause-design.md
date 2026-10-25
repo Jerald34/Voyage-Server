@@ -47,7 +47,7 @@ This spec covers three parts that ship independently, in this order:
 - `enum UserStatus` gains `DELETED`.
 - `User.deletedAt DateTime?`.
 - `enum AdminAuditAction` gains `USER_ENABLED`, `USER_SESSIONS_REVOKED`, `USER_DELETED`, `AGENCY_OWNERSHIP_TRANSFERRED` (and Part 3's `AGENT_PAUSED`, `AGENT_RESUMED` — one migration if both parts land together, otherwise each part adds its own).
-- Audit rows for user actions use `targetType: "USER"`, `targetId: <userId>`; an ownership transfer uses `targetType: "AGENCY"` with `metadata: { fromUserId, toUserId }`.
+- Audit rows for user actions use `targetType: "User"` (matching the existing `"Agency"`/`"User"` rows), `targetId: <userId>`; an ownership transfer uses `targetType: "Agency"` with `metadata: { fromUserId, toUserId }`.
 
 ### Routes (all `requireSuperAdmin`, service re-checks `SUPER_ADMIN` like `accountService`)
 
@@ -86,7 +86,7 @@ Deleted accounts can never sign in: no password, no provider link, status not `A
 
 ### Account detail additions (`GET /admin/users/:userId`)
 
-- `auditEvents`: the last 50 `AdminAuditEvent`s with `targetType USER, targetId = userId`, newest first, with the acting admin's `displayName`.
+- `auditEvents`: the last 50 `AdminAuditEvent`s with `targetType "User", targetId = userId`, newest first, with the acting admin's `displayName`.
 - `ownedAgencies`: `[{ agencyId, agencyName, successors: [{ userId, displayName, role }] }]` — active non-owner members, for the delete dialog.
 - `usageThisMonth`: `{ costUsd, runCount }` (from Part 2's repository; omitted until Part 2 ships).
 - `agentPause` (Part 3).

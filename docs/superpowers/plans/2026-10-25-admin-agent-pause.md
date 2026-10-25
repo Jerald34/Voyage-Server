@@ -330,7 +330,7 @@ describe("agent pause writes", () => {
     });
     expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith({
       data: {
-        adminUserId: "admin-1", action: "AGENT_PAUSED", targetType: "USER", targetId: USER_ID, reason: "High usage",
+        adminUserId: "admin-1", action: "AGENT_PAUSED", targetType: "User", targetId: USER_ID, reason: "High usage",
         metadata: { duration: "24h", until: "2026-10-26T08:00:00.000Z" }
       }
     });
@@ -343,7 +343,7 @@ describe("agent pause writes", () => {
       data: { agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null, agentPausedByUserId: null }
     });
     expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith({
-      data: { adminUserId: "admin-1", action: "AGENT_RESUMED", targetType: "USER", targetId: USER_ID, reason: null }
+      data: { adminUserId: "admin-1", action: "AGENT_RESUMED", targetType: "User", targetId: USER_ID, reason: null }
     });
   });
 });
@@ -430,7 +430,7 @@ New methods:
           data: {
             adminUserId,
             action: "AGENT_PAUSED",
-            targetType: "USER",
+            targetType: "User",
             targetId: userId,
             reason,
             metadata: { duration, until: until ? until.toISOString() : null }
@@ -446,7 +446,7 @@ New methods:
           data: { agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null, agentPausedByUserId: null }
         }),
         client.adminAuditEvent.create({
-          data: { adminUserId, action: "AGENT_RESUMED", targetType: "USER", targetId: userId, reason: null }
+          data: { adminUserId, action: "AGENT_RESUMED", targetType: "User", targetId: userId, reason: null }
         })
       ]);
     }

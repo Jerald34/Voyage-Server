@@ -674,7 +674,7 @@ describe("accountActionRepository", () => {
     expect(ctx.client.user.update).toHaveBeenCalledWith({ where: { id: USER_ID }, data: { status: "DISABLED" } });
     expect(ctx.client.session.deleteMany).toHaveBeenCalledWith({ where: { userId: USER_ID } });
     expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith({
-      data: { adminUserId: "admin-1", action: "USER_DISABLED", targetType: "USER", targetId: USER_ID, reason: "spam" }
+      data: { adminUserId: "admin-1", action: "USER_DISABLED", targetType: "User", targetId: USER_ID, reason: "spam" }
     });
   });
 
@@ -715,7 +715,7 @@ describe("accountActionRepository", () => {
       data: { revokedAt: NOW, revokedByUserId: "admin-1" }
     });
     expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
-      data: { adminUserId: "admin-1", action: "USER_DELETED", targetType: "USER", targetId: USER_ID, reason: "Requested", metadata: { emailDomain: "hops.travel" } }
+      data: { adminUserId: "admin-1", action: "USER_DELETED", targetType: "User", targetId: USER_ID, reason: "Requested", metadata: { emailDomain: "hops.travel" } }
     });
     expect(ctx.tx.agency.update).not.toHaveBeenCalled();
   });
@@ -733,7 +733,7 @@ describe("accountActionRepository", () => {
       data: {
         adminUserId: "admin-1",
         action: "AGENCY_OWNERSHIP_TRANSFERRED",
-        targetType: "AGENCY",
+        targetType: "Agency",
         targetId: transfer.agencyId,
         reason: null,
         metadata: { fromUserId: USER_ID, toUserId: transfer.toUserId }
@@ -838,7 +838,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
         // A disabled user is already rejected on every request; deleting the sessions also clears their devices.
         ...(status === "DISABLED" ? [client.session.deleteMany({ where: { userId } })] : []),
         client.adminAuditEvent.create({
-          data: { adminUserId, action: status === "DISABLED" ? "USER_DISABLED" : "USER_ENABLED", targetType: "USER", targetId: userId, reason }
+          data: { adminUserId, action: status === "DISABLED" ? "USER_DISABLED" : "USER_ENABLED", targetType: "User", targetId: userId, reason }
         })
       ]);
     },
@@ -847,7 +847,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
       await client.$transaction([
         client.session.deleteMany({ where: { userId } }),
         client.adminAuditEvent.create({
-          data: { adminUserId, action: "USER_SESSIONS_REVOKED", targetType: "USER", targetId: userId, reason }
+          data: { adminUserId, action: "USER_SESSIONS_REVOKED", targetType: "User", targetId: userId, reason }
         })
       ]);
     },
@@ -866,7 +866,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
             data: {
               adminUserId,
               action: "AGENCY_OWNERSHIP_TRANSFERRED",
-              targetType: "AGENCY",
+              targetType: "Agency",
               targetId: transfer.agencyId,
               reason,
               metadata: { fromUserId: userId, toUserId: transfer.toUserId }
@@ -898,7 +898,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
           }
         });
         await tx.adminAuditEvent.create({
-          data: { adminUserId, action: "USER_DELETED", targetType: "USER", targetId: userId, reason, metadata: { emailDomain } }
+          data: { adminUserId, action: "USER_DELETED", targetType: "User", targetId: userId, reason, metadata: { emailDomain } }
         });
       });
     }
@@ -1082,7 +1082,7 @@ Add to the `adminAccountRepository` object:
 ```ts
   async listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]> {
     return prisma.adminAuditEvent.findMany({
-      where: { targetType: "USER", targetId: userId },
+      where: { targetType: "User", targetId: userId },
       orderBy: { createdAt: "desc" },
       take: 50,
       select: { id: true, action: true, reason: true, createdAt: true, adminUser: { select: { displayName: true } } }
