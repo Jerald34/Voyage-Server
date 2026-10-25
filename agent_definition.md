@@ -23,6 +23,7 @@ Used during the main inference loop to guide tool selection and planning intelli
 > The full prompt includes detailed policies for Itinerary Planning Intelligence, Place Disambiguation, and Tool Usage (e.g., streaming items one-by-one).
 
 **Key Sections:**
+- **Scope**: Travel work only. Off-topic requests (code, homework, essays, trivia, news, medical/legal/financial advice, casual chat) get a 1–2 sentence decline with no tool call; mixed requests get only the travel part.
 - **Intent Gate**: Classifies requests into categories: General Geography, Explicit Map Action, Trip Planning (New/Edit), Route Feasibility, Place Discovery, etc.
 - **Itinerary Planning Intelligence**:
     - **Transport Mode**: Identified before planning.
