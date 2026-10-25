@@ -1,4 +1,4 @@
-import { Router } from "express";
+import { Router, type NextFunction, type Request, type Response } from "express";
 import { z } from "zod";
 import { requireSuperAdmin } from "../../http/authMiddleware";
 import { idParamsSchema } from "../../http/requestSchemas";
@@ -8,11 +8,15 @@ import { createUsageService, usageQuerySchema } from "./usageService";
 import { usageRepository } from "./usageRepository";
 import { createAdminAccountService } from "./accountService";
 import { adminAccountRepository } from "./accountRepository";
+import { createAdminAccountActionService, type AccountActionActor } from "./accountActionService";
+import { createPrismaAccountActionRepository } from "./accountActionRepository";
+import { accountActionReasonSchema, deleteAccountSchema } from "./accountActionSchemas";
 import { supportService } from "../support/supportService";
 import { updateReportSchema } from "../support/supportSchemas";
 
 const usageService = createUsageService({ repository: usageRepository });
 const accountService = createAdminAccountService({ repository: adminAccountRepository });
+const accountActionService = createAdminAccountActionService({ repository: createPrismaAccountActionRepository() });
 const adminAgencyStatusQuerySchema = z
   .object({
     status: z.enum(["PENDING_REVIEW", "VERIFIED", "REJECTED", "SUSPENDED"]).optional()
@@ -109,6 +113,35 @@ adminRoutes.get("/users/:userId", requireSuperAdmin, async (request, response, n
     const { userId } = userIdParamsSchema.parse(request.params);
     const user = await accountService.getAccount(request.authUser!, userId);
     response.json({ user });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Each account action answers with the refreshed account so the panel can redraw without a second request.
+function accountActionRoute(run: (actor: AccountActionActor, userId: string, reason: string | null) => Promise<void>) {
+  return async (request: Request, response: Response, next: NextFunction) => {
+    try {
+      const { userId } = userIdParamsSchema.parse(request.params);
+      const { reason } = accountActionReasonSchema.parse(request.body ?? {});
+      await run(request.authUser!, userId, reason ?? null);
+      response.json({ user: await accountService.getAccount(request.authUser!, userId) });
+    } catch (error) {
+      next(error);
+    }
+  };
+}
+
+adminRoutes.post("/users/:userId/disable", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.disable(actor, userId, reason)));
+adminRoutes.post("/users/:userId/enable", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.enable(actor, userId, reason)));
+adminRoutes.post("/users/:userId/sign-out", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.signOutEverywhere(actor, userId, reason)));
+
+adminRoutes.post("/users/:userId/delete", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const { userId } = userIdParamsSchema.parse(request.params);
+    const input = deleteAccountSchema.parse(request.body ?? {});
+    await accountActionService.deleteAccount(request.authUser!, userId, input);
+    response.status(204).end();
   } catch (error) {
     next(error);
   }
