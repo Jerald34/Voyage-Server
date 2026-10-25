@@ -14,6 +14,7 @@ enum UserRole {
 enum UserStatus {
   ACTIVE
   DISABLED
+  DELETED
 }
 
 enum AuthProvider {
@@ -66,6 +67,10 @@ enum AdminAuditAction {
   AGENCY_UNSUSPENDED
   USER_PROMOTED_TO_ADMIN
   USER_DISABLED
+  USER_ENABLED
+  USER_SESSIONS_REVOKED
+  USER_DELETED
+  AGENCY_OWNERSHIP_TRANSFERRED
 }
 
 enum ClientTripStatus {
@@ -157,6 +162,8 @@ model User {
   status              UserStatus               @default(ACTIVE)
   accountType         UserAccountType          @default(PENDING)
   emailVerifiedAt     DateTime?
+  /// Set when a Super Admin deletes (anonymizes) the account.
+  deletedAt           DateTime?
   avatarImageId       String?                  @unique @db.Uuid
   avatarImage         ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
   sessions            Session[]

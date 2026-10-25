@@ -1,7 +1,7 @@
 import { ApiError } from "../../http/errors";
 
 export type AdminAccountRole = "USER" | "SUPER_ADMIN";
-export type AdminAccountStatus = "ACTIVE" | "DISABLED";
+export type AdminAccountStatus = "ACTIVE" | "DISABLED" | "DELETED";
 export type AdminAccountType = "PENDING" | "PERSONAL" | "AGENCY_USER";
 export type AdminAccountProvider = "GOOGLE" | "APPLE";
 export type AdminAccountSignInMethod = "PASSWORD" | AdminAccountProvider;

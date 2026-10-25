@@ -4,7 +4,7 @@ import { ApiError } from "../../http/errors";
 
 export type AgencyAccessUser = {
   id: string;
-  status: "ACTIVE" | "DISABLED";
+  status: "ACTIVE" | "DISABLED" | "DELETED";
   accountType: "PENDING" | "PERSONAL" | "AGENCY_USER";
 };
 

@@ -9,7 +9,7 @@ export type AuthUserRecord = {
   passwordHash: string | null;
   displayName: string;
   role: "USER" | "SUPER_ADMIN";
-  status: "ACTIVE" | "DISABLED";
+  status: "ACTIVE" | "DISABLED" | "DELETED";
   accountType: "PENDING" | "PERSONAL" | "AGENCY_USER";
   emailVerifiedAt: Date | null;
   avatarImageId: string | null;
