@@ -120,7 +120,7 @@ describe("adminAccountRepository.listAuditEvents", () => {
     await expect(adminAccountRepository.listAuditEvents(USER_ID)).resolves.toBe(rows);
 
     const args = mockAuditFindMany.mock.calls[0]![0];
-    expect(args.where).toEqual({ targetType: "USER", targetId: USER_ID });
+    expect(args.where).toEqual({ targetType: "User", targetId: USER_ID });
     expect(args.orderBy).toEqual({ createdAt: "desc" });
     expect(args.take).toBe(50);
     expect(args).not.toHaveProperty("include");

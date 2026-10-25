@@ -52,7 +52,11 @@ export type AdminAuditRecord = {
     | "AGENCY_SUSPENDED"
     | "AGENCY_UNSUSPENDED"
     | "USER_PROMOTED_TO_ADMIN"
-    | "USER_DISABLED";
+    | "USER_DISABLED"
+    | "USER_ENABLED"
+    | "USER_SESSIONS_REVOKED"
+    | "USER_DELETED"
+    | "AGENCY_OWNERSHIP_TRANSFERRED";
   targetType: string;
   targetId: string;
   reason: string | null;

@@ -93,12 +93,6 @@ describe("POST /admin/users/:userId/disable", () => {
     expect(res.status).toBe(200);
   });
 
-  it("is super-admin only", async () => {
-    const res = await request(createApp(staff)).post(`/admin/users/${USER_ID}/disable`).send({});
-    expect(res.status).toBe(403);
-    expect(mocks.setStatus).not.toHaveBeenCalled();
-  });
-
   it("rejects unknown body fields", async () => {
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/disable`).send({ reason: "x", force: true });
     expect(res.status).toBe(400);
@@ -125,10 +119,33 @@ describe("POST /admin/users/:userId/enable and /sign-out", () => {
     expect(mocks.revokeSessions).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: null });
   });
 
+  it("stores a null reason as no reason", async () => {
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/sign-out`).send({ reason: null });
+    expect(res.status).toBe(200);
+    expect(mocks.revokeSessions).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: null });
+  });
+
   it("stores a blank reason as no reason", async () => {
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/sign-out`).send({ reason: "   " });
     expect(res.status).toBe(200);
     expect(mocks.revokeSessions).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: null });
+  });
+});
+
+describe("every account action is super-admin only", () => {
+  it.each([
+    ["disable", {}],
+    ["enable", {}],
+    ["sign-out", {}],
+    ["delete", { confirmEmail: "mara@hops.travel" }]
+  ])("%s answers 403 to anyone who is not a super admin", async (action, body) => {
+    const res = await request(createApp(staff)).post(`/admin/users/${USER_ID}/${action}`).send(body);
+
+    expect(res.status).toBe(403);
+    expect(mocks.findTarget).not.toHaveBeenCalled();
+    expect(mocks.setStatus).not.toHaveBeenCalled();
+    expect(mocks.revokeSessions).not.toHaveBeenCalled();
+    expect(mocks.anonymize).not.toHaveBeenCalled();
   });
 });
 
@@ -137,6 +154,12 @@ describe("POST /admin/users/:userId/delete", () => {
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/delete`).send({ confirmEmail: "mara@hops.travel", reason: "Asked" });
     expect(res.status).toBe(204);
     expect(mocks.anonymize).toHaveBeenCalledWith(expect.objectContaining({ userId: USER_ID, reason: "Asked", transfer: null }));
+  });
+
+  it("treats a null reason as no reason", async () => {
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/delete`).send({ confirmEmail: "mara@hops.travel", reason: null });
+    expect(res.status).toBe(204);
+    expect(mocks.anonymize).toHaveBeenCalledWith(expect.objectContaining({ reason: null }));
   });
 
   it("needs confirmEmail", async () => {

@@ -1,9 +1,12 @@
 // src/modules/admin/accountActionRepository.ts
 import type { PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
+import { ApiError } from "../../http/errors";
 import type { AccountActionRepository, OwnedAgency } from "./accountActionService";
 
 type OwnedAgenciesClient = Pick<PrismaClient, "agency">;
+
+const accountDeleted = () => new ApiError(409, "ACCOUNT_DELETED", "This account has been deleted.");
 
 /** Agencies the user owns, each with its other active members (the people who could take it over). */
 export async function findOwnedAgencies(client: OwnedAgenciesClient, userId: string): Promise<OwnedAgency[]> {
@@ -47,21 +50,23 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
     },
 
     async setStatus({ userId, status, adminUserId, reason }) {
-      await client.$transaction([
-        client.user.update({ where: { id: userId }, data: { status } }),
+      await client.$transaction(async (tx) => {
+        // Guarded on status, so a delete that landed after the service's check is never undone.
+        const { count } = await tx.user.updateMany({ where: { id: userId, status: { not: "DELETED" } }, data: { status } });
+        if (count === 0) throw accountDeleted();
         // A disabled user is already rejected on every request; deleting the sessions also clears their devices.
-        ...(status === "DISABLED" ? [client.session.deleteMany({ where: { userId } })] : []),
-        client.adminAuditEvent.create({
-          data: { adminUserId, action: status === "DISABLED" ? "USER_DISABLED" : "USER_ENABLED", targetType: "USER", targetId: userId, reason }
-        })
-      ]);
+        if (status === "DISABLED") await tx.session.deleteMany({ where: { userId } });
+        await tx.adminAuditEvent.create({
+          data: { adminUserId, action: status === "DISABLED" ? "USER_DISABLED" : "USER_ENABLED", targetType: "User", targetId: userId, reason }
+        });
+      });
     },
 
     async revokeSessions({ userId, adminUserId, reason }) {
       await client.$transaction([
         client.session.deleteMany({ where: { userId } }),
         client.adminAuditEvent.create({
-          data: { adminUserId, action: "USER_SESSIONS_REVOKED", targetType: "USER", targetId: userId, reason }
+          data: { adminUserId, action: "USER_SESSIONS_REVOKED", targetType: "User", targetId: userId, reason }
         })
       ]);
     },
@@ -70,17 +75,44 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
       // Unique and unreachable, so the address can never sign in or collide with a real one.
       const deletedEmail = `deleted+${userId}@deleted.invalid`;
       await client.$transaction(async (tx) => {
+        // Claim the row first: of two concurrent deletes only one gets past this, so only one audit row is written.
+        // Trips, itineraries, chats and notes keep pointing at this row and now show "Deleted user".
+        const { count } = await tx.user.updateMany({
+          where: { id: userId, status: { not: "DELETED" } },
+          data: {
+            email: deletedEmail,
+            emailNormalized: deletedEmail,
+            displayName: "Deleted user",
+            passwordHash: null,
+            emailVerifiedAt: null,
+            avatarImageId: null,
+            status: "DELETED",
+            deletedAt: now
+          }
+        });
+        if (count === 0) throw accountDeleted();
+
         if (transfer) {
-          await tx.agencyMembership.update({
-            where: { agencyId_userId: { agencyId: transfer.agencyId, userId: transfer.toUserId } },
+          // Re-checked here, not trusted from the earlier read: the owner or the successor may have changed since.
+          const moved = await tx.agency.updateMany({
+            where: { id: transfer.agencyId, ownerUserId: userId },
+            data: { ownerUserId: transfer.toUserId }
+          });
+          if (moved.count !== 1) {
+            throw new ApiError(409, "OWNERSHIP_CHANGED", "This agency's owner changed. Reload and try again.");
+          }
+          const promoted = await tx.agencyMembership.updateMany({
+            where: { agencyId: transfer.agencyId, userId: transfer.toUserId, status: "ACTIVE", user: { status: "ACTIVE" } },
             data: { role: "OWNER" }
           });
-          await tx.agency.update({ where: { id: transfer.agencyId }, data: { ownerUserId: transfer.toUserId } });
+          if (promoted.count !== 1) {
+            throw new ApiError(400, "INVALID_NEW_OWNER", "The new owner must be an active member of the agency.");
+          }
           await tx.adminAuditEvent.create({
             data: {
               adminUserId,
               action: "AGENCY_OWNERSHIP_TRANSFERRED",
-              targetType: "AGENCY",
+              targetType: "Agency",
               targetId: transfer.agencyId,
               reason,
               metadata: { fromUserId: userId, toUserId: transfer.toUserId }
@@ -97,22 +129,8 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
         await tx.emailVerificationToken.deleteMany({ where: { userId } });
         await tx.passwordResetToken.deleteMany({ where: { userId } });
         await tx.agencyMembership.deleteMany({ where: { userId } });
-        // Trips, itineraries, chats and notes keep pointing at this row and now show "Deleted user".
-        await tx.user.update({
-          where: { id: userId },
-          data: {
-            email: deletedEmail,
-            emailNormalized: deletedEmail,
-            displayName: "Deleted user",
-            passwordHash: null,
-            emailVerifiedAt: null,
-            avatarImageId: null,
-            status: "DELETED",
-            deletedAt: now
-          }
-        });
         await tx.adminAuditEvent.create({
-          data: { adminUserId, action: "USER_DELETED", targetType: "USER", targetId: userId, reason, metadata: { emailDomain } }
+          data: { adminUserId, action: "USER_DELETED", targetType: "User", targetId: userId, reason, metadata: { emailDomain } }
         });
       });
     }

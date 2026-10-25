@@ -51,7 +51,7 @@ export const adminAccountRepository: AdminAccountRepository = {
 
   async listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]> {
     return prisma.adminAuditEvent.findMany({
-      where: { targetType: "USER", targetId: userId },
+      where: { targetType: "User", targetId: userId },
       orderBy: { createdAt: "desc" },
       take: 50,
       select: { id: true, action: true, reason: true, createdAt: true, adminUser: { select: { displayName: true } } }

@@ -4,16 +4,18 @@ import { createPrismaAccountActionRepository } from "../src/modules/admin/accoun
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const NOW = new Date("2026-10-25T08:00:00.000Z");
+const TRANSFER = { agencyId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", toUserId: "22222222-2222-4222-8222-222222222222" };
+const NOT_DELETED = { id: USER_ID, status: { not: "DELETED" } };
 
 function makeClient() {
   const tx = {
-    user: { update: vi.fn(async () => ({})) },
+    user: { updateMany: vi.fn(async () => ({ count: 1 })) },
     session: { deleteMany: vi.fn(async () => ({ count: 2 })) },
     authProviderAccount: { deleteMany: vi.fn(async () => ({ count: 1 })) },
     emailVerificationToken: { deleteMany: vi.fn(async () => ({ count: 0 })) },
     passwordResetToken: { deleteMany: vi.fn(async () => ({ count: 0 })) },
-    agencyMembership: { deleteMany: vi.fn(async () => ({ count: 1 })), update: vi.fn(async () => ({})) },
-    agency: { update: vi.fn(async () => ({})) },
+    agencyMembership: { deleteMany: vi.fn(async () => ({ count: 1 })), updateMany: vi.fn(async () => ({ count: 1 })) },
+    agency: { updateMany: vi.fn(async () => ({ count: 1 })) },
     agencyInvitation: { updateMany: vi.fn(async () => ({ count: 1 })) },
     adminAuditEvent: { create: vi.fn(async () => ({})) }
   };
@@ -33,34 +35,60 @@ beforeEach(() => {
 
 const repo = () => createPrismaAccountActionRepository(ctx.client as never);
 
+/** Resolves with the rejection, so a test can assert on it (and fails if the call did not reject). */
+async function failure(promise: Promise<unknown>) {
+  return promise.then(
+    () => {
+      throw new Error("expected the call to reject");
+    },
+    (error: unknown) => error
+  );
+}
+
 describe("accountActionRepository", () => {
   it("disabling sets the status, deletes sessions and writes USER_DISABLED", async () => {
     await repo().setStatus({ userId: USER_ID, status: "DISABLED", adminUserId: "admin-1", reason: "spam" });
-    expect(ctx.client.user.update).toHaveBeenCalledWith({ where: { id: USER_ID }, data: { status: "DISABLED" } });
-    expect(ctx.client.session.deleteMany).toHaveBeenCalledWith({ where: { userId: USER_ID } });
-    expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith({
-      data: { adminUserId: "admin-1", action: "USER_DISABLED", targetType: "USER", targetId: USER_ID, reason: "spam" }
+    // Guarded on status, so a row that was deleted a moment ago is never flipped back to DISABLED.
+    expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({ where: NOT_DELETED, data: { status: "DISABLED" } });
+    expect(ctx.tx.session.deleteMany).toHaveBeenCalledWith({ where: { userId: USER_ID } });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: { adminUserId: "admin-1", action: "USER_DISABLED", targetType: "User", targetId: USER_ID, reason: "spam" }
     });
   });
 
   it("enabling keeps sessions and writes USER_ENABLED", async () => {
     await repo().setStatus({ userId: USER_ID, status: "ACTIVE", adminUserId: "admin-1", reason: null });
-    expect(ctx.client.session.deleteMany).not.toHaveBeenCalled();
-    expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "USER_ENABLED" }) }));
+    expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({ where: NOT_DELETED, data: { status: "ACTIVE" } });
+    expect(ctx.tx.session.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: { adminUserId: "admin-1", action: "USER_ENABLED", targetType: "User", targetId: USER_ID, reason: null }
+    });
+  });
+
+  it("setStatus on a row that was deleted in the meantime answers 409 and writes nothing else", async () => {
+    ctx.tx.user.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const error = await failure(repo().setStatus({ userId: USER_ID, status: "DISABLED", adminUserId: "admin-1", reason: null }));
+
+    expect(error).toMatchObject({ statusCode: 409, code: "ACCOUNT_DELETED" });
+    expect(ctx.tx.session.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();
   });
 
   it("sign-out deletes sessions and writes USER_SESSIONS_REVOKED", async () => {
     await repo().revokeSessions({ userId: USER_ID, adminUserId: "admin-1", reason: null });
     expect(ctx.client.session.deleteMany).toHaveBeenCalledWith({ where: { userId: USER_ID } });
-    expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "USER_SESSIONS_REVOKED" }) }));
+    expect(ctx.client.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: { adminUserId: "admin-1", action: "USER_SESSIONS_REVOKED", targetType: "User", targetId: USER_ID, reason: null }
+    });
   });
 
   it("anonymize scrubs identity, removes access, revokes their invites, and keeps their work", async () => {
     await repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: "Requested", emailDomain: "hops.travel", now: NOW, transfer: null });
 
     const deletedEmail = `deleted+${USER_ID}@deleted.invalid`;
-    expect(ctx.tx.user.update).toHaveBeenCalledWith({
-      where: { id: USER_ID },
+    expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({
+      where: NOT_DELETED,
       data: {
         email: deletedEmail,
         emailNormalized: deletedEmail,
@@ -79,31 +107,81 @@ describe("accountActionRepository", () => {
       where: { invitedByUserId: USER_ID, acceptedAt: null, revokedAt: null },
       data: { revokedAt: NOW, revokedByUserId: "admin-1" }
     });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledTimes(1);
     expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
-      data: { adminUserId: "admin-1", action: "USER_DELETED", targetType: "USER", targetId: USER_ID, reason: "Requested", metadata: { emailDomain: "hops.travel" } }
+      data: { adminUserId: "admin-1", action: "USER_DELETED", targetType: "User", targetId: USER_ID, reason: "Requested", metadata: { emailDomain: "hops.travel" } }
     });
-    expect(ctx.tx.agency.update).not.toHaveBeenCalled();
+    expect(ctx.tx.agency.updateMany).not.toHaveBeenCalled();
   });
 
-  it("anonymize with a transfer makes the successor owner first and audits it", async () => {
-    const transfer = { agencyId: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", toUserId: "22222222-2222-4222-8222-222222222222" };
-    await repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: null, emailDomain: "x.com", now: NOW, transfer });
+  it("anonymize claims the row first, so a concurrent double delete changes and audits nothing twice", async () => {
+    await repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: null, emailDomain: "x.com", now: NOW, transfer: TRANSFER });
 
-    expect(ctx.tx.agencyMembership.update).toHaveBeenCalledWith({
-      where: { agencyId_userId: { agencyId: transfer.agencyId, userId: transfer.toUserId } },
+    const claimed = ctx.tx.user.updateMany.mock.invocationCallOrder[0]!;
+    expect(claimed).toBeLessThan(ctx.tx.agency.updateMany.mock.invocationCallOrder[0]!);
+    expect(claimed).toBeLessThan(ctx.tx.session.deleteMany.mock.invocationCallOrder[0]!);
+    expect(claimed).toBeLessThan(ctx.tx.agencyMembership.deleteMany.mock.invocationCallOrder[0]!);
+  });
+
+  it("anonymize on a row that is already deleted answers 409 before touching anything else", async () => {
+    ctx.tx.user.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const error = await failure(repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: null, emailDomain: "x.com", now: NOW, transfer: TRANSFER }));
+
+    expect(error).toMatchObject({ statusCode: 409, code: "ACCOUNT_DELETED" });
+    expect(ctx.tx.agency.updateMany).not.toHaveBeenCalled();
+    expect(ctx.tx.agencyMembership.updateMany).not.toHaveBeenCalled();
+    expect(ctx.tx.session.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.agencyMembership.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("anonymize with a transfer hands the agency over (checked at write time) and audits it", async () => {
+    await repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: null, emailDomain: "x.com", now: NOW, transfer: TRANSFER });
+
+    // Only moves the agency if the deleted user still owns it.
+    expect(ctx.tx.agency.updateMany).toHaveBeenCalledWith({
+      where: { id: TRANSFER.agencyId, ownerUserId: USER_ID },
+      data: { ownerUserId: TRANSFER.toUserId }
+    });
+    // Only promotes the successor if they are still an active member with an active account.
+    expect(ctx.tx.agencyMembership.updateMany).toHaveBeenCalledWith({
+      where: { agencyId: TRANSFER.agencyId, userId: TRANSFER.toUserId, status: "ACTIVE", user: { status: "ACTIVE" } },
       data: { role: "OWNER" }
     });
-    expect(ctx.tx.agency.update).toHaveBeenCalledWith({ where: { id: transfer.agencyId }, data: { ownerUserId: transfer.toUserId } });
     expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
       data: {
         adminUserId: "admin-1",
         action: "AGENCY_OWNERSHIP_TRANSFERRED",
-        targetType: "AGENCY",
-        targetId: transfer.agencyId,
+        targetType: "Agency",
+        targetId: TRANSFER.agencyId,
         reason: null,
-        metadata: { fromUserId: USER_ID, toUserId: transfer.toUserId }
+        metadata: { fromUserId: USER_ID, toUserId: TRANSFER.toUserId }
       }
     });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ action: "USER_DELETED", targetType: "User" }) }));
+  });
+
+  it("a transfer whose agency changed owner in the meantime answers 409 OWNERSHIP_CHANGED and stops", async () => {
+    ctx.tx.agency.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const error = await failure(repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: null, emailDomain: "x.com", now: NOW, transfer: TRANSFER }));
+
+    expect(error).toMatchObject({ statusCode: 409, code: "OWNERSHIP_CHANGED" });
+    expect(ctx.tx.agencyMembership.updateMany).not.toHaveBeenCalled();
+    expect(ctx.tx.session.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("a transfer whose successor is no longer an active member answers 400 INVALID_NEW_OWNER and stops", async () => {
+    ctx.tx.agencyMembership.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const error = await failure(repo().anonymize({ userId: USER_ID, adminUserId: "admin-1", reason: null, emailDomain: "x.com", now: NOW, transfer: TRANSFER }));
+
+    expect(error).toMatchObject({ statusCode: 400, code: "INVALID_NEW_OWNER" });
+    expect(ctx.tx.session.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.agencyMembership.deleteMany).not.toHaveBeenCalled();
+    expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();
   });
 
   it("lists agencies the user owns (by Agency.ownerUserId) with their other active members as successors", async () => {
