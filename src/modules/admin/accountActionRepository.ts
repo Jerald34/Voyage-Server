@@ -3,30 +3,29 @@ import type { PrismaClient } from "@prisma/client";
 import { prisma } from "../../db/prisma";
 import type { AccountActionRepository, OwnedAgency } from "./accountActionService";
 
-type OwnedAgenciesClient = Pick<PrismaClient, "agencyMembership">;
+type OwnedAgenciesClient = Pick<PrismaClient, "agency">;
 
 /** Agencies the user owns, each with its other active members (the people who could take it over). */
 export async function findOwnedAgencies(client: OwnedAgenciesClient, userId: string): Promise<OwnedAgency[]> {
-  const rows = await client.agencyMembership.findMany({
-    where: { userId, role: "OWNER", status: "ACTIVE" },
+  // Keyed on Agency.ownerUserId rather than the OWNER membership, so an owner whose membership
+  // was disabled still has to hand the agency over instead of leaving it owned by a deleted user.
+  const agencies = await client.agency.findMany({
+    where: { ownerUserId: userId },
+    orderBy: { createdAt: "asc" },
     select: {
-      agency: {
-        select: {
-          id: true,
-          name: true,
-          memberships: {
-            where: { status: "ACTIVE", userId: { not: userId } },
-            orderBy: { createdAt: "asc" },
-            select: { role: true, user: { select: { id: true, displayName: true } } }
-          }
-        }
+      id: true,
+      name: true,
+      memberships: {
+        where: { status: "ACTIVE", userId: { not: userId }, user: { status: "ACTIVE" } },
+        orderBy: { createdAt: "asc" },
+        select: { role: true, user: { select: { id: true, displayName: true } } }
       }
     }
   });
-  return rows.map((row) => ({
-    agencyId: row.agency.id,
-    agencyName: row.agency.name,
-    successors: row.agency.memberships.map((member) => ({
+  return agencies.map((agency) => ({
+    agencyId: agency.id,
+    agencyName: agency.name,
+    successors: agency.memberships.map((member) => ({
       userId: member.user.id,
       displayName: member.user.displayName,
       role: member.role as "ADMIN" | "STAFF"

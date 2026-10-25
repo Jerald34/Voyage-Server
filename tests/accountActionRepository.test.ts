@@ -20,7 +20,7 @@ function makeClient() {
   const client = {
     ...tx,
     user: { ...tx.user, findUnique: vi.fn() },
-    agencyMembership: { ...tx.agencyMembership, findMany: vi.fn(async () => []) },
+    agency: { ...tx.agency, findMany: vi.fn(async () => []) },
     $transaction: vi.fn(async (arg: unknown) => (typeof arg === "function" ? (arg as (t: typeof tx) => unknown)(tx) : Promise.all(arg as Promise<unknown>[])))
   };
   return { client, tx };
@@ -106,32 +106,28 @@ describe("accountActionRepository", () => {
     });
   });
 
-  it("lists owned agencies with their other active members as successors", async () => {
-    ctx.client.agencyMembership.findMany.mockResolvedValue([
+  it("lists agencies the user owns (by Agency.ownerUserId) with their other active members as successors", async () => {
+    ctx.client.agency.findMany.mockResolvedValue([
       {
-        agency: {
-          id: "a1",
-          name: "Bayani Tours",
-          memberships: [{ role: "ADMIN", user: { id: "u2", displayName: "Liza Cruz" } }]
-        }
+        id: "a1",
+        name: "Bayani Tours",
+        memberships: [{ role: "ADMIN", user: { id: "u2", displayName: "Liza Cruz" } }]
       }
     ] as never);
 
     const owned = await repo().listOwnedAgencies(USER_ID);
 
-    expect(ctx.client.agencyMembership.findMany).toHaveBeenCalledWith({
-      where: { userId: USER_ID, role: "OWNER", status: "ACTIVE" },
+    // Keyed on the owner column, not the OWNER membership: a disabled owner membership must still block the delete.
+    expect(ctx.client.agency.findMany).toHaveBeenCalledWith({
+      where: { ownerUserId: USER_ID },
+      orderBy: { createdAt: "asc" },
       select: {
-        agency: {
-          select: {
-            id: true,
-            name: true,
-            memberships: {
-              where: { status: "ACTIVE", userId: { not: USER_ID } },
-              orderBy: { createdAt: "asc" },
-              select: { role: true, user: { select: { id: true, displayName: true } } }
-            }
-          }
+        id: true,
+        name: true,
+        memberships: {
+          where: { status: "ACTIVE", userId: { not: USER_ID }, user: { status: "ACTIVE" } },
+          orderBy: { createdAt: "asc" },
+          select: { role: true, user: { select: { id: true, displayName: true } } }
         }
       }
     });
