@@ -21,6 +21,8 @@ const googleOAuthErrorSchema = z.string().min(1).max(128);
 const googleOAuthErrorDescriptionSchema = z.string().min(1).max(1024);
 const googleOAuthErrorUriSchema = z.string().url().max(2048);
 const googleOAuthHdSchema = z.string().min(1).max(255);
+// RFC 9207 issuer identifier — Google appends `iss=https://accounts.google.com`.
+const googleOAuthIssSchema = z.string().url().max(255);
 const appleIdTokenSchema = z.string().min(1).max(4096);
 const appleOAuthCodeSchema = z.string().min(1).max(512);
 const appleOAuthUserSchema = z.string().min(1).max(8192);
@@ -94,7 +96,8 @@ export const googleCallbackQuerySchema = z.object({
   error: googleOAuthErrorSchema.optional(),
   error_description: googleOAuthErrorDescriptionSchema.optional(),
   error_uri: googleOAuthErrorUriSchema.optional(),
-  hd: googleOAuthHdSchema.optional()
+  hd: googleOAuthHdSchema.optional(),
+  iss: googleOAuthIssSchema.optional()
 }).strict();
 
 export const appleCallbackBodySchema = z.object({

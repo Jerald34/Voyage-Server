@@ -494,7 +494,7 @@ describe("F3 — OAuth callback allowlist and provider denial handling", () => {
 
     const response = await request(app)
       .get(
-        `/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${stateValue}&scope=${encodeURIComponent(VALID_GOOGLE_SCOPE)}&authuser=${VALID_GOOGLE_AUTHUSER}&prompt=${VALID_GOOGLE_PROMPT}`
+        `/auth/google/callback?code=${VALID_GOOGLE_CODE}&state=${stateValue}&scope=${encodeURIComponent(VALID_GOOGLE_SCOPE)}&authuser=${VALID_GOOGLE_AUTHUSER}&prompt=${VALID_GOOGLE_PROMPT}&iss=${encodeURIComponent("https://accounts.google.com")}`
       )
       .set("Cookie", stateCookie);
 
