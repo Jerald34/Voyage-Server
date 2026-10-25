@@ -16,6 +16,7 @@ export type OwnerWorklistUnreadComment = {
   id: string;
   tripId: string;
   tripTitle: string;
+  authorName: string;
   commentExcerpt: string;
   createdAt: string;
 };
@@ -57,6 +58,31 @@ export type OwnerWorklist = {
   lowRated: OwnerWorklistLowRated[];
 };
 
+/** One client comment on the dashboard's "Client comments" card. */
+export type ClientCommentRow = {
+  id: string;
+  shareId: string;
+  tripId: string;
+  tripTitle: string;
+  /** Who the link was shared with, else the trip's client. */
+  clientName: string | null;
+  authorName: string;
+  excerpt: string;
+  dayNumber: number | null;
+  /** The stop's title; null for a day-level comment or a deleted stop. */
+  itemTitle: string | null;
+  createdAt: string;
+  agencyReply: string | null;
+  agencyRepliedAt: string | null;
+};
+
+export type ClientComments = {
+  /** No reply yet, oldest first. */
+  waiting: ClientCommentRow[];
+  /** Replied in the last 30 days, newest reply first. */
+  answered: ClientCommentRow[];
+};
+
 /**
  * `value` is null when the period has no signal (e.g. no closed trips, no
  * replied comments); `deltaVsPrior` is null unless both periods have signal.
@@ -87,8 +113,21 @@ export type FunnelStage = {
   dropOffPct: number | null;
 };
 
+export type TripStatus = "DRAFT" | "IN_REVIEW" | "APPROVED_INTERNAL" | "ARCHIVED";
+
+/** One trip in a dashboard trip list (a funnel stage, a staff counter). */
+export type TripListRow = {
+  tripId: string;
+  tripTitle: string;
+  clientName: string | null;
+  status: TripStatus;
+};
+
+/** A funnel stage with the trips behind its count (at most 50; `count` stays exact). */
+export type FunnelStageWithTrips = FunnelStage & { trips: TripListRow[] };
+
 export type OwnerFunnel = {
-  stages: FunnelStage[];
+  stages: FunnelStageWithTrips[];
 };
 
 export type OwnerRecentReview = {
@@ -124,6 +163,7 @@ export type OwnerDashboardPayload = {
   period: DashboardPeriod;
   generatedAt: string;
   worklist: OwnerWorklist;
+  clientComments: ClientComments;
   kpis: OwnerKpis;
   funnel: OwnerFunnel;
   recentReviews: OwnerRecentReview[];
@@ -186,6 +226,14 @@ export type StaffPipeline = {
   activeNow: number;
 };
 
+/** The trips behind each staff counter, at most 50 each, most recently updated first. */
+export type StaffPipelineTrips = {
+  drafts: TripListRow[];
+  inReview: TripListRow[];
+  approvedThisMonth: TripListRow[];
+  activeNow: TripListRow[];
+};
+
 export type StaffStartingSoonCard = {
   tripId: string;
   tripTitle: string;
@@ -202,7 +250,9 @@ export type StaffDashboardPayload = {
   hero: StaffHero | null;
   secondaryRecent: StaffSecondaryRecent[];
   worklist: StaffWorklist;
+  clientComments: ClientComments;
   pipeline: StaffPipeline;
+  pipelineTrips: StaffPipelineTrips;
   startingSoon: StaffStartingSoonCard[];
   recentViews: RecentView[];
 };
@@ -254,4 +304,47 @@ export type CalendarPayload = {
   tripsWithoutDates: number;
   trips: CalendarTrip[];
   events: CalendarEvent[];
+};
+
+// ---------- Trip panel ----------
+
+export type TripPreviewComment = {
+  id: string;
+  shareId: string;
+  authorName: string;
+  content: string;
+  status: "PENDING" | "SEEN" | "ADDRESSED";
+  dayNumber: number | null;
+  itemId: string | null;
+  /** Null for a day-level comment, or when the stop was deleted. */
+  itemTitle: string | null;
+  agencyReply: string | null;
+  agencyRepliedAt: string | null;
+  createdAt: string;
+};
+
+export type TripPreview = {
+  trip: {
+    id: string;
+    title: string;
+    status: TripStatus;
+    clientName: string | null;
+    startDate: string | null;
+    endDate: string | null;
+    travelerCount: number | null;
+    destinationSummary: string | null;
+  };
+  /** The newest live link, else the newest link; null when never shared. */
+  share: {
+    id: string;
+    clientName: string | null;
+    viewCount: number;
+    lastViewedAt: string | null;
+    expiresAt: string | null;
+    revokedAt: string | null;
+    proposalRating: number | null;
+    createdAt: string;
+  } | null;
+  /** Every comment on every link of the trip, oldest first. */
+  comments: TripPreviewComment[];
 };

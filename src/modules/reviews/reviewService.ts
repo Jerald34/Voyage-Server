@@ -1,5 +1,6 @@
 import { prisma } from "../../db/prisma";
 import { ApiError } from "../../http/errors";
+import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 import { reviewRepository } from "./reviewRepository";
 import type {
   ProposalRatingInput,
@@ -35,6 +36,7 @@ export function createReviewService(deps: { repository: ReviewRepository }) {
       where: { token },
       select: {
         id: true,
+        agencyId: true,
         revokedAt: true,
         expiresAt: true,
         proposalRating: true,
@@ -68,6 +70,15 @@ export function createReviewService(deps: { repository: ReviewRepository }) {
       },
       select: { proposalRating: true, proposalRatingComment: true, proposalRatedAt: true }
     });
+
+    // The low-rating to-do row and the calendar's rating mark change with it.
+    if (share.agencyId) {
+      try {
+        invalidateAgencyDashboards(share.agencyId);
+      } catch {
+        // The rating is saved; a cache hiccup must not fail the public request.
+      }
+    }
 
     return {
       rating: updated.proposalRating!,

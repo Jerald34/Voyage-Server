@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { idParamsSchema } from "../../http/requestSchemas";
 import { isIsoDate } from "../../services/weather/dates";
 
 export const dashboardViewSchema = z.enum(["owner", "staff"]);
@@ -8,6 +9,9 @@ export const dashboardQuerySchema = z.object({
   view: dashboardViewSchema.optional(),
   period: dashboardPeriodSchema.optional()
 });
+
+/** `/agencies/:agencyId/dashboard/trips/:tripId` (mergeParams carries agencyId). */
+export const tripPreviewParamsSchema = idParamsSchema("agencyId", "tripId");
 
 const kpiTileSchema = z.object({
   value: z.number().nullable(),
@@ -23,10 +27,38 @@ const avgProposalRatingKpiSchema = kpiTileSchema.extend({
   })
 });
 
+const tripListRowSchema = z.object({
+  tripId: z.string(),
+  tripTitle: z.string(),
+  clientName: z.string().nullable(),
+  status: z.enum(["DRAFT", "IN_REVIEW", "APPROVED_INTERNAL", "ARCHIVED"])
+});
+
+const clientCommentRowSchema = z.object({
+  id: z.string(),
+  shareId: z.string(),
+  tripId: z.string(),
+  tripTitle: z.string(),
+  clientName: z.string().nullable(),
+  authorName: z.string(),
+  excerpt: z.string(),
+  dayNumber: z.number().int().nullable(),
+  itemTitle: z.string().nullable(),
+  createdAt: z.string(),
+  agencyReply: z.string().nullable(),
+  agencyRepliedAt: z.string().nullable()
+});
+
+const clientCommentsSchema = z.object({
+  waiting: z.array(clientCommentRowSchema),
+  answered: z.array(clientCommentRowSchema)
+});
+
 const funnelStageSchema = z.object({
   key: z.enum(["created", "drafted", "sent", "viewed", "approved"]),
   count: z.number().int().nonnegative(),
-  dropOffPct: z.number().nullable()
+  dropOffPct: z.number().nullable(),
+  trips: z.array(tripListRowSchema)
 });
 
 const recentViewSchema = z.object({
@@ -43,6 +75,7 @@ const ownerWorklistSchema = z.object({
       id: z.string(),
       tripId: z.string(),
       tripTitle: z.string(),
+      authorName: z.string(),
       commentExcerpt: z.string(),
       createdAt: z.string()
     })
@@ -87,6 +120,7 @@ export const ownerDashboardPayloadSchema = z.object({
   period: dashboardPeriodSchema,
   generatedAt: z.string(),
   worklist: ownerWorklistSchema,
+  clientComments: clientCommentsSchema,
   kpis: z.object({
     winRate: kpiTileSchema,
     timeToFirstShareDays: kpiTileSchema,
@@ -122,6 +156,7 @@ const staffWorklistSchema = z.object({
       id: z.string(),
       tripId: z.string(),
       tripTitle: z.string(),
+      authorName: z.string(),
       commentExcerpt: z.string(),
       createdAt: z.string()
     })
@@ -175,11 +210,18 @@ export const staffDashboardPayloadSchema = z.object({
     })
   ),
   worklist: staffWorklistSchema,
+  clientComments: clientCommentsSchema,
   pipeline: z.object({
     drafts: z.number().int().nonnegative(),
     inReview: z.number().int().nonnegative(),
     approvedThisMonth: z.number().int().nonnegative(),
     activeNow: z.number().int().nonnegative()
+  }),
+  pipelineTrips: z.object({
+    drafts: z.array(tripListRowSchema),
+    inReview: z.array(tripListRowSchema),
+    approvedThisMonth: z.array(tripListRowSchema),
+    activeNow: z.array(tripListRowSchema)
   }),
   startingSoon: z.array(
     z.object({

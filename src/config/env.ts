@@ -27,7 +27,13 @@ const envSchema = z.object({
   // the loopback PORT so local dev works; production must set this to the deployed URL.
   PUBLIC_API_ORIGIN: z.string().default(""),
   SESSION_COOKIE_NAME: z.string().default("voyage_session"),
+  // Idle window for "Keep me signed in" sessions (renewed on use).
   SESSION_TTL_DAYS: z.coerce.number().int().positive().default(30),
+  // Idle window for sessions where the user unticked "Keep me signed in".
+  // At least 2: renewal is throttled to once an hour, so a 1-hour window would never renew.
+  SESSION_SHORT_TTL_HOURS: z.coerce.number().int().min(2).default(12),
+  // Hard limit from sign-in; sliding renewal never pushes a session past it.
+  SESSION_MAX_AGE_DAYS: z.coerce.number().int().positive().default(90),
   PASSWORD_PEPPER: z.string().default(""),
   ADMIN_EMAILS: z.string().default(""),
   RESEND_API_KEY: z.string().default(""),
@@ -98,6 +104,15 @@ const envSchema = z.object({
   GOOGLE_SA_CREDENTIALS: z.string().default(""),
   GOOGLE_AI_API_KEY: z.string().default(""),
   GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-3-flash-preview"),
+  // Gemini 3.x thinkingConfig.thinkingLevel for the Vertex provider. Gemini 3.5 Flash-Lite
+  // defaults to MINIMAL, which Google warns can end tool-calling runs early.
+  GOOGLE_AI_THINKING_LEVEL: z.preprocess(
+    (value) => {
+      const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+      return normalized === "" ? "medium" : normalized;
+    },
+    z.enum(["minimal", "low", "medium", "high"]).default("medium")
+  ),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
   GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   // --- Place freshness gate -------------------------------------------------

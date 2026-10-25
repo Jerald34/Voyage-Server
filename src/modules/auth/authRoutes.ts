@@ -27,6 +27,7 @@ import { authService } from "./authService";
 
 const OAUTH_STATE_COOKIE = "voyage_oauth_state";
 const OAUTH_NONCE_COOKIE = "voyage_oauth_nonce";
+const OAUTH_REMEMBER_COOKIE = "voyage_oauth_remember";
 /** 10 minutes — enough time for the user to complete the OAuth flow. */
 const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
 const OAUTH_PROVIDER_DENIED_MESSAGE = "The OAuth provider denied the sign-in request. Please try again.";
@@ -53,9 +54,26 @@ function generateOAuthCsrfTokens(response: import("express").Response) {
   return { state, nonce };
 }
 
+const OAUTH_CLEAR_OPTS = { httpOnly: true, secure: true, sameSite: "none" as const, path: "/" };
+
 function clearOAuthStateCookies(response: import("express").Response) {
-  response.clearCookie(OAUTH_STATE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
-  response.clearCookie(OAUTH_NONCE_COOKIE, { httpOnly: true, secure: true, sameSite: "none", path: "/" });
+  response.clearCookie(OAUTH_STATE_COOKIE, OAUTH_CLEAR_OPTS);
+  response.clearCookie(OAUTH_NONCE_COOKIE, OAUTH_CLEAR_OPTS);
+  response.clearCookie(OAUTH_REMEMBER_COOKIE, OAUTH_CLEAR_OPTS);
+}
+
+// "Keep me signed in" can't ride the provider round-trip, so the start route
+// parks an opt-out (?remember=0) in a short cookie and the callback reads it back.
+function rememberOAuthChoice(request: import("express").Request, response: import("express").Response) {
+  if (request.query.remember === "0") {
+    response.cookie(OAUTH_REMEMBER_COOKIE, "0", OAUTH_COOKIE_OPTS);
+  } else {
+    response.clearCookie(OAUTH_REMEMBER_COOKIE, OAUTH_CLEAR_OPTS);
+  }
+}
+
+function readOAuthRemember(request: import("express").Request) {
+  return request.cookies?.[OAUTH_REMEMBER_COOKIE] !== "0";
 }
 
 function consumeExpectedOAuthState(
@@ -115,7 +133,7 @@ authRoutes.post("/login", async (request, response, next) => {
   try {
     const input = loginSchema.parse(request.body);
     const result = await authService.loginWithEmail(input);
-    setSessionCookie(response, result.sessionToken);
+    setSessionCookie(response, result.sessionToken, result.session);
     response.json({ user: serializeUser(result.user as NonNullable<Express.Request["authUser"]>) });
   } catch (error) {
     next(error);
@@ -208,13 +226,14 @@ authRoutes.post("/password/reset/confirm", async (request, response, next) => {
   }
 });
 
-authRoutes.get("/google/start", (_request, response, next) => {
+authRoutes.get("/google/start", (request, response, next) => {
   if (!env.GOOGLE_CLIENT_ID || !env.GOOGLE_CLIENT_SECRET || !env.GOOGLE_REDIRECT_URI) {
     return next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Google sign-in is not configured."));
   }
 
   // F3: Generate state (CSRF protection) and nonce, bind to session via httpOnly cookies.
   const { state, nonce } = generateOAuthCsrfTokens(response);
+  rememberOAuthChoice(request, response);
 
   const url = new URL("https://accounts.google.com/o/oauth2/v2/auth");
   url.searchParams.set("client_id", env.GOOGLE_CLIENT_ID);
@@ -230,6 +249,7 @@ authRoutes.get("/google/start", (_request, response, next) => {
 
 authRoutes.get("/google/callback", async (request, response, next) => {
   try {
+    const persistent = readOAuthRemember(request);
     const expectedState = consumeExpectedOAuthState(request, response);
     const { code, error, state } = googleCallbackQuerySchema.parse(request.query);
 
@@ -244,15 +264,15 @@ authRoutes.get("/google/callback", async (request, response, next) => {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Google authorization code is required.");
     }
     const claims = await verifyGoogleAuthorizationCode(code);
-    const result = await authService.signInWithVerifiedOAuth(claims);
-    setSessionCookie(response, result.sessionToken);
+    const result = await authService.signInWithVerifiedOAuth(claims, { persistent });
+    setSessionCookie(response, result.sessionToken, result.session);
     response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
   } catch (error) {
     next(error);
   }
 });
 
-authRoutes.get("/apple/start", (_request, response, next) => {
+authRoutes.get("/apple/start", (request, response, next) => {
   if (!env.APPLE_CLIENT_ID || !env.APPLE_REDIRECT_URI) {
     return next(new ApiError(501, "OAUTH_NOT_CONFIGURED", "Apple sign-in is not configured."));
   }
@@ -260,6 +280,7 @@ authRoutes.get("/apple/start", (_request, response, next) => {
   // F3: Generate state (CSRF protection) and nonce, bind to session via httpOnly cookies.
   // Apple uses response_mode=form_post, so state is round-tripped through the POST body.
   const { state, nonce } = generateOAuthCsrfTokens(response);
+  rememberOAuthChoice(request, response);
 
   const url = new URL("https://appleid.apple.com/auth/authorize");
   url.searchParams.set("client_id", env.APPLE_CLIENT_ID);
@@ -274,6 +295,7 @@ authRoutes.get("/apple/start", (_request, response, next) => {
 
 authRoutes.post("/apple/callback", async (request, response, next) => {
   try {
+    const persistent = readOAuthRemember(request);
     const expectedState = consumeExpectedOAuthState(request, response);
     const { error, id_token: idToken, state } = appleCallbackBodySchema.parse(request.body);
 
@@ -288,8 +310,8 @@ authRoutes.post("/apple/callback", async (request, response, next) => {
       throw new ApiError(400, "OAUTH_TOKEN_REQUIRED", "Apple id_token is required.");
     }
     const claims = await verifyAppleIdToken(idToken);
-    const result = await authService.signInWithVerifiedOAuth(claims);
-    setSessionCookie(response, result.sessionToken);
+    const result = await authService.signInWithVerifiedOAuth(claims, { persistent });
+    setSessionCookie(response, result.sessionToken, result.session);
     response.redirect(`${env.APP_ORIGIN}/?authenticated=1`);
   } catch (error) {
     next(error);

@@ -7,8 +7,10 @@ import { invalidateAgencyDashboards } from "../dashboard/dashboardFreshness";
 import {
   commentIdParamsSchema,
   createShareInputSchema,
+  extendShareInputSchema,
   itineraryIdParamsSchema,
   listSharesQuerySchema,
+  regenerateShareInputSchema,
   replyCommentInputSchema,
   shareIdParamsSchema
 } from "./shareSchemas";
@@ -44,6 +46,8 @@ shareRoutes.post("/:itineraryId", async (request, response, next) => {
     const { itineraryId } = itineraryIdParamsSchema.parse(request.params);
     const input = createShareInputSchema.parse(request.body);
     const share = await shareService.createShare(agencyId, itineraryId, input);
+    // Expiry rows, calendar marks and Recently viewed follow the agency's links.
+    invalidateAgencyDashboards(agencyId);
     response.status(201).json({ share });
   } catch (error) {
     next(error);
@@ -92,6 +96,38 @@ shareRoutes.delete("/:shareId", async (request, response, next) => {
     const agencyId = getAgencyId(request);
     const { shareId } = shareIdParamsSchema.parse(request.params);
     const share = await shareService.revokeShare(agencyId, shareId);
+    // Expiry rows, calendar marks and Recently viewed follow the agency's links.
+    invalidateAgencyDashboards(agencyId);
+    response.json({ share });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /agencies/:agencyId/shares/:shareId/regenerate — new link, same client, email and expiry; old link off
+shareRoutes.post("/:shareId/regenerate", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { shareId } = shareIdParamsSchema.parse(request.params);
+    regenerateShareInputSchema.parse(request.body ?? {});
+    const share = await shareService.regenerateShare(agencyId, shareId);
+    // Expiry rows, calendar marks and Recently viewed follow the agency's links.
+    invalidateAgencyDashboards(agencyId);
+    response.status(201).json({ share });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// PATCH /agencies/:agencyId/shares/:shareId/expiry — push a link's expiry out by 7 or 30 days
+shareRoutes.patch("/:shareId/expiry", async (request, response, next) => {
+  try {
+    const agencyId = getAgencyId(request);
+    const { shareId } = shareIdParamsSchema.parse(request.params);
+    const { extendDays } = extendShareInputSchema.parse(request.body);
+    const share = await shareService.extendShare(agencyId, shareId, extendDays);
+    // "Link expires" rows and calendar marks change with the expiry.
+    invalidateAgencyDashboards(agencyId);
     response.json({ share });
   } catch (error) {
     next(error);

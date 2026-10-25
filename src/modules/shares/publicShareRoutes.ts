@@ -1,7 +1,7 @@
 import { Router } from "express";
 import { addCommentInputSchema, publicShareTokenParamsSchema } from "./shareSchemas";
 import { shareService } from "./shareService";
-import { buildShareResponse } from "./publicShareService";
+import { buildShareResponseFromData, computeShareRevision, toPublicComment } from "./publicShareService";
 import { proposalRatingInputSchema } from "../reviews/reviewSchemas";
 import { reviewService } from "../reviews/reviewService";
 import { itineraryWeatherService } from "../weather/weatherService";
@@ -13,14 +13,35 @@ publicShareRoutes.get("/:token", async (request, response, next) => {
   try {
     const { token } = publicShareTokenParamsSchema.parse(request.params);
     const data = await shareService.getShareByToken(token);
-    const result = buildShareResponse({
-      share: data.share,
-      agency: data.agency,
-      itinerary: data.itinerary as Record<string, unknown>,
-      trip: data.trip as Record<string, unknown> | null,
-      creator: data.creator
-    });
-    response.json(result);
+    const result = buildShareResponseFromData(data);
+    // `revision` fingerprints the itinerary this response carries, so an open page
+    // can compare it with GET /shared/:token/revision to see whether it was edited.
+    response.json({ ...result, revision: computeShareRevision(result) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// GET /shared/:token/revision — cheap "has the itinerary changed?" check for an open
+// share page (no auth, not a view). Same 404/410 as the page itself.
+publicShareRoutes.get("/:token/revision", async (request, response, next) => {
+  try {
+    const { token } = publicShareTokenParamsSchema.parse(request.params);
+    const revision = await shareService.getShareRevision(token);
+    response.setHeader("Cache-Control", "no-store");
+    response.json({ revision });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// POST /shared/:token/view — the page records one client visit (no auth). Loading the
+// share itself never counts, so reloads and "Show latest" do not inflate the number.
+publicShareRoutes.post("/:token/view", async (request, response, next) => {
+  try {
+    const { token } = publicShareTokenParamsSchema.parse(request.params);
+    await shareService.recordView(token);
+    response.status(204).end();
   } catch (error) {
     next(error);
   }
@@ -43,7 +64,7 @@ publicShareRoutes.post("/:token/comments", async (request, response, next) => {
     const { token } = publicShareTokenParamsSchema.parse(request.params);
     const input = addCommentInputSchema.parse(request.body);
     const comment = await shareService.addComment(token, input);
-    response.status(201).json({ comment });
+    response.status(201).json({ comment: toPublicComment(comment) });
   } catch (error) {
     next(error);
   }
@@ -54,7 +75,8 @@ publicShareRoutes.get("/:token/comments", async (request, response, next) => {
   try {
     const { token } = publicShareTokenParamsSchema.parse(request.params);
     const comments = await shareService.listPublicComments(token);
-    response.json({ comments });
+    // Anyone with the link reads this list, so commenters' emails stay out of it.
+    response.json({ comments: comments.map(toPublicComment) });
   } catch (error) {
     next(error);
   }

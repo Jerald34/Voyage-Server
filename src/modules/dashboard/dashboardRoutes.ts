@@ -3,9 +3,10 @@ import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
 import { agencyAccessService } from "../agencyAccess/agencyAccessService";
 import { calendarService } from "./calendarService";
-import { calendarQuerySchema, dashboardQuerySchema } from "./dashboardSchemas";
+import { calendarQuerySchema, dashboardQuerySchema, tripPreviewParamsSchema } from "./dashboardSchemas";
 import { dashboardService } from "./dashboardService";
 import { getPlanUsage } from "./planUsageService";
+import { tripPreviewService } from "./tripPreviewService";
 
 /**
  * Mounted at `/agencies/:agencyId/dashboard`.
@@ -17,6 +18,10 @@ import { getPlanUsage } from "./planUsageService";
  * GET /calendar — trips and client activity for the dashboard calendar.
  *   Query: from, to (YYYY-MM-DD local dates, inclusive, at most 42 days).
  *   STAFF get only the trips they created or organize.
+ *
+ * GET /trips/:tripId — the dashboard trip panel: the trip, its share link and
+ *   every client comment, with stop names. Any verified member of the agency.
+ *   Another agency's trip is a 404.
  *
  * GET /plan-usage — this month's usage for the owner's "Plan and usage" card in Settings.
  *   Owners only. Display only: no plan is stored or enforced.
@@ -75,6 +80,21 @@ dashboardRoutes.get("/calendar", requireAuth, async (request, response, next) =>
     });
 
     response.json(payload);
+  } catch (error) {
+    next(error);
+  }
+});
+
+dashboardRoutes.get("/trips/:tripId", requireAuth, async (request, response, next) => {
+  try {
+    const { agencyId, tripId } = tripPreviewParamsSchema.parse(request.params);
+
+    const access = await agencyAccessService.requireVerifiedAgencyMember(request.authUser!, agencyId);
+    if (!access.membership) {
+      throw new ApiError(403, "AGENCY_ACCESS_REQUIRED", "You do not have access to this agency workspace.");
+    }
+
+    response.json(await tripPreviewService.getTripPreview(access.agency.id, tripId));
   } catch (error) {
     next(error);
   }

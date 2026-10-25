@@ -108,6 +108,19 @@ export interface ShareRepository {
   findShareByToken(token: string): Promise<PublicShareData | null>;
   incrementViewCount(shareId: string): Promise<void>;
   revokeShare(agencyId: string, shareId: string): Promise<ShareRecord>;
+  /**
+   * In one transaction: turns the agency's live link off and creates a new one
+   * (the given token) with the same itinerary, client, email and expiry. Null,
+   * creating nothing, when the link was already off or is not theirs.
+   */
+  replaceShare(agencyId: string, shareId: string, token: string): Promise<ShareRecord | null>;
+  /** The agency's link by id, or null when it is not theirs. */
+  findShareForAgency(agencyId: string, shareId: string): Promise<ShareRecord | null>;
+  /**
+   * Sets the expiry of the agency's link only while it is not revoked, so a link
+   * revoked after it was read is never touched. Null when no such link matched.
+   */
+  updateShareExpiry(agencyId: string, shareId: string, expiresAt: Date): Promise<ShareRecord | null>;
   listSharesForTrip(agencyId: string, tripId: string): Promise<ShareRecord[]>;
   listAllSharesForAgency(agencyId: string): Promise<ShareRecord[]>;
   addComment(shareId: string, input: AddCommentInput): Promise<CommentRecord>;

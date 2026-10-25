@@ -1471,12 +1471,49 @@ describe("agent orchestrator", () => {
     await orchestrator.run(createRunInput());
 
     expect(run.status).toBe("COMPLETED");
-    expect(modelProvider.streamCalls).toBe(2);
-    expect(modelProvider.completeCalls).toBe(2);
+    expect(modelProvider.streamCalls).toBe(3);
+    expect(modelProvider.completeCalls).toBe(1);
     expect(events.at(-2)).toMatchObject({
       type: "message.completed",
       payload: { content: "Created a draft itinerary with the requested updates." }
     });
+  });
+
+  it("records thoughts from tool-loop continuation calls", async () => {
+    const { service, events, run } = createFakeAgentService();
+    const contents = [
+      JSON.stringify({
+        assistantMessage: "Created a draft itinerary.",
+        toolCalls: [{ name: "record_agent_task", input: { label: "Create draft", status: "COMPLETED" } }]
+      }),
+      "Created a draft itinerary with the requested updates."
+    ];
+    let streamCalls = 0;
+    const modelProvider: ModelProvider = {
+      async complete() {
+        return { content: contents.at(-1) ?? "" };
+      },
+      async *completeStream() {
+        streamCalls += 1;
+        yield { kind: "thought" as const, value: `Thinking in call ${streamCalls}` };
+        yield { kind: "text" as const, value: contents.shift() ?? contents.at(-1) ?? "" };
+      }
+    };
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([createRecordAgentTaskTool({ agentService: service })])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const toolCompletedIndex = events.findIndex((event) => event.type === "tool.completed");
+    const continuationThoughtIndex = events.findIndex(
+      (event) => event.type === "thought.delta" && event.payload.delta === "Thinking in call 2"
+    );
+    expect(toolCompletedIndex).toBeGreaterThan(-1);
+    expect(continuationThoughtIndex).toBeGreaterThan(toolCompletedIndex);
   });
 
   it("includes active itinerary context so update requests can call update_itinerary", async () => {

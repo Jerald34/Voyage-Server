@@ -33,12 +33,19 @@ const GOOGLE_VERTEX_MODEL_PRICING: Record<
   "gemini-3-pro-preview": {
     inputPerMillionTokens: 2,
     outputPerMillionTokens: 12
+  },
+  "gemini-3.5-flash-lite": {
+    inputPerMillionTokens: 0.3,
+    outputPerMillionTokens: 2.5
   }
 };
+
+type VertexThinkingLevel = "minimal" | "low" | "medium" | "high";
 
 type VertexAiModelProviderOptions = {
   apiKey?: string;
   model?: string;
+  thinkingLevel?: VertexThinkingLevel;
   projectId?: string;
   location?: string;
   auth?: GoogleAuth;
@@ -496,6 +503,7 @@ function buildVertexModelResource(model: string, projectId: string, location: st
 
 export function createGoogleVertexModelProvider(options: VertexAiModelProviderOptions = {}): ModelProvider {
   const model = options.model ?? env.GOOGLE_AI_MODEL ?? DEFAULT_GOOGLE_AI_MODEL;
+  const thinkingLevel = options.thinkingLevel ?? env.GOOGLE_AI_THINKING_LEVEL;
   const resolvedAuth = options.auth ?? resolveServiceAccountAuth();
   const hasAdc = resolvedAuth !== null || hasLocalAdcCredentials();
   const apiKey = hasAdc ? "" : (options.apiKey ?? env.GOOGLE_CLOUD_API_KEY).trim();
@@ -675,14 +683,16 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
             contents,
             cachedContent,
             generationConfig: {
-              temperature: input.temperature ?? 0.2
+              temperature: input.temperature ?? 0.2,
+              thinkingConfig: { thinkingLevel }
             }
           }
         : {
             contents,
             ...(systemInstruction ? { systemInstruction } : {}),
             generationConfig: {
-              temperature: input.temperature ?? 0.2
+              temperature: input.temperature ?? 0.2,
+              thinkingConfig: { thinkingLevel }
             }
           };
 
@@ -749,7 +759,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
               cachedContent,
               generationConfig: {
                 temperature: input.temperature ?? 0.2,
-                thinkingConfig: { includeThoughts: true }
+                thinkingConfig: { thinkingLevel, includeThoughts: true }
               }
             }
           : {
@@ -757,7 +767,7 @@ export function createGoogleVertexModelProvider(options: VertexAiModelProviderOp
               ...(systemInstruction ? { systemInstruction } : {}),
               generationConfig: {
                 temperature: input.temperature ?? 0.2,
-                thinkingConfig: { includeThoughts: true }
+                thinkingConfig: { thinkingLevel, includeThoughts: true }
               }
             };
 
