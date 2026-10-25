@@ -1,7 +1,13 @@
 // src/modules/admin/accountActionSchemas.ts
 import { z } from "zod";
 
-const reason = z.string().trim().max(500).optional();
+// A blank note means no note, so the audit trail never shows an empty reason.
+const reason = z
+  .string()
+  .trim()
+  .max(500)
+  .transform((value) => value || undefined)
+  .optional();
 
 /** Disable / enable / sign out: an optional note for the audit trail, nothing else. */
 export const accountActionReasonSchema = z.object({ reason }).strict();

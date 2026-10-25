@@ -124,6 +124,12 @@ describe("POST /admin/users/:userId/enable and /sign-out", () => {
     expect(res.status).toBe(200);
     expect(mocks.revokeSessions).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: null });
   });
+
+  it("stores a blank reason as no reason", async () => {
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/sign-out`).send({ reason: "   " });
+    expect(res.status).toBe(200);
+    expect(mocks.revokeSessions).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: null });
+  });
 });
 
 describe("POST /admin/users/:userId/delete", () => {
