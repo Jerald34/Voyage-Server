@@ -190,11 +190,25 @@ function comment(overrides: Partial<Parameters<typeof selectOwnerWorklistRows>[0
     status: "PENDING" as const,
     agencyRepliedAt: null,
     createdAt: NOW,
+    authorName: "Maria Santos",
+    agencyReply: null,
+    dayNumber: null,
+    itemId: null,
     ...overrides
   };
 }
 
 describe("selectOwnerWorklistRows", () => {
+  it("names who wrote each unread comment", () => {
+    const result = selectOwnerWorklistRows({
+      trips: [trip()],
+      shares: [share()],
+      comments: [comment({ authorName: "Leo Cruz" })],
+      now: NOW
+    });
+    expect(result.unreadComments[0]).toMatchObject({ id: "c1", authorName: "Leo Cruz" });
+  });
+
   it("returns empty groups for empty inputs", () => {
     const r = selectOwnerWorklistRows({ trips: [], shares: [], comments: [], now: NOW });
     expect(r.unreadComments).toHaveLength(0);

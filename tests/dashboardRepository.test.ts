@@ -10,6 +10,7 @@ function fakeClient() {
     itinerary: { findMany: vi.fn().mockResolvedValue([]) },
     itineraryShare: { findMany: vi.fn().mockResolvedValue([]) },
     itineraryComment: { findMany: vi.fn().mockResolvedValue([]) },
+    itineraryItem: { findMany: vi.fn().mockResolvedValue([]) },
     tripReview: { findMany: vi.fn().mockResolvedValue([]) }
   };
 }
@@ -24,5 +25,53 @@ describe("dashboard repository", () => {
       viewCount: true,
       lastViewedAt: true
     });
+  });
+
+  it("reads which itinerary each link shows, so a comment's stop can be checked against it", async () => {
+    const client = fakeClient();
+    await createPrismaDashboardRepository(client as never).fetchAgencyDashboardData("agency-1");
+
+    expect(client.itineraryShare.findMany.mock.calls[0][0].select).toMatchObject({ itineraryId: true });
+  });
+
+  it("reads each comment's author, reply and stop, and looks up the stop titles once", async () => {
+    const client = fakeClient();
+    client.itineraryShare.findMany.mockResolvedValue([{ id: "share-1" }]);
+    client.itineraryComment.findMany.mockResolvedValue([
+      { id: "c1", shareId: "share-1", itemId: "item-1" },
+      { id: "c2", shareId: "share-1", itemId: "item-1" },
+      { id: "c3", shareId: "share-1", itemId: null }
+    ]);
+    client.itineraryItem.findMany.mockResolvedValue([
+      { id: "item-1", title: "Ryokan check-in", itineraryDay: { itineraryId: "itinerary-1" } }
+    ]);
+
+    const raw = await createPrismaDashboardRepository(client as never).fetchAgencyDashboardData("agency-1");
+
+    expect(client.itineraryComment.findMany.mock.calls[0][0].select).toMatchObject({
+      authorName: true,
+      agencyReply: true,
+      dayNumber: true,
+      itemId: true
+    });
+    expect(client.itineraryItem.findMany).toHaveBeenCalledWith({
+      // Scoped to this agency: a comment's itemId comes from the public page.
+      where: { id: { in: ["item-1"] }, itineraryDay: { itinerary: { agencyId: "agency-1" } } },
+      // Each title carries the itinerary it sits in, so the service can tell
+      // whether it belongs to the link the comment was made on.
+      select: { id: true, title: true, itineraryDay: { select: { itineraryId: true } } }
+    });
+    expect(raw.itemTitles).toEqual([{ id: "item-1", title: "Ryokan check-in", itineraryId: "itinerary-1" }]);
+  });
+
+  it("skips the stop lookup when no comment points at a stop", async () => {
+    const client = fakeClient();
+    client.itineraryShare.findMany.mockResolvedValue([{ id: "share-1" }]);
+    client.itineraryComment.findMany.mockResolvedValue([{ id: "c1", shareId: "share-1", itemId: null }]);
+
+    const raw = await createPrismaDashboardRepository(client as never).fetchAgencyDashboardData("agency-1");
+
+    expect(client.itineraryItem.findMany).not.toHaveBeenCalled();
+    expect(raw.itemTitles).toEqual([]);
   });
 });

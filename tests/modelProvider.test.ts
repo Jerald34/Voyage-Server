@@ -159,6 +159,7 @@ describe("Google Vertex AI model provider", () => {
     const provider = createGoogleVertexModelProvider({
       apiKey: "test-cloud-key",
       model: "gemini-3-flash-preview",
+      thinkingLevel: "high",
       fetchImpl
     });
 
@@ -200,9 +201,31 @@ describe("Google Vertex AI model provider", () => {
         parts: [{ text: "You are Voyage." }]
       },
       generationConfig: {
-        temperature: 0.4
+        temperature: 0.4,
+        thinkingConfig: { thinkingLevel: "high" }
       }
     });
+  });
+
+  it("prices gemini-3.5-flash-lite usage", async () => {
+    const fetchImpl: typeof fetch = async () =>
+      new Response(
+        JSON.stringify({
+          candidates: [{ content: { parts: [{ text: "Done." }] } }],
+          usageMetadata: { promptTokenCount: 1000, candidatesTokenCount: 500, totalTokenCount: 1500 }
+        }),
+        { status: 200 }
+      );
+    const provider = createGoogleVertexModelProvider({
+      apiKey: "test-cloud-key",
+      model: "gemini-3.5-flash-lite",
+      fetchImpl
+    });
+
+    const result = await provider.complete({ messages: [{ role: "user", content: "Hi." }] });
+
+    expect(result.usage?.estimatedCostUsd).toMatchObject({ prompt: 0.0003, output: 0.00125 });
+    expect(result.usage?.estimatedCostUsd?.total).toBeCloseTo(0.00155, 8);
   });
 
   it("streams generateContent deltas from SSE frames", async () => {
@@ -227,6 +250,7 @@ describe("Google Vertex AI model provider", () => {
     const provider = createGoogleVertexModelProvider({
       apiKey: "test-cloud-key",
       model: "gemini-3-flash-preview",
+      thinkingLevel: "medium",
       fetchImpl
     });
 
@@ -255,7 +279,7 @@ describe("Google Vertex AI model provider", () => {
       contents: [{ role: "user", parts: [{ text: "Stream this." }] }],
       generationConfig: {
         temperature: 0.2,
-        thinkingConfig: { includeThoughts: true }
+        thinkingConfig: { thinkingLevel: "medium", includeThoughts: true }
       }
     });
     expect(JSON.parse(String(calls[0].init.body))).not.toHaveProperty("stream");
@@ -321,6 +345,7 @@ describe("Google Vertex AI model provider", () => {
     const provider = createGoogleVertexModelProvider({
       apiKey: "test-cloud-key",
       model: "gemini-3-flash-preview",
+      thinkingLevel: "medium",
       fetchImpl
     });
 
@@ -400,6 +425,7 @@ describe("Google Vertex AI model provider", () => {
     const provider = createGoogleVertexModelProvider({
       apiKey: "test-cloud-key",
       model: "gemini-3-flash-preview",
+      thinkingLevel: "medium",
       fetchImpl
     });
 

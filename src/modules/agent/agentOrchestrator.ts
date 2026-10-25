@@ -857,12 +857,33 @@ export function createAgentOrchestrator(options: {
           let nextContent: string;
           let nextUsage: ModelUsage | undefined;
           try {
-            const completion = await options.modelProvider.complete({
-              messages: continuationMessages,
-              temperature: 0.6
+            // Streamed only so the step's thoughts reach the process bubble; its text is
+            // tool-call JSON or a summary handled below, so no message.delta is sent here.
+            const streamed = await streamModelCompletion({
+              modelProvider: options.modelProvider,
+              input: {
+                messages: continuationMessages,
+                temperature: 0.6
+              },
+              onThought: async (delta) => {
+                await options.agentService.recordRunEvent(run, {
+                  type: "thought.delta",
+                  payload: { delta }
+                });
+              },
+              onDelta: async () => {}
             });
-            nextContent = completion.content;
-            nextUsage = completion.usage;
+            if (streamed && streamed.content.trim().length > 0) {
+              nextContent = streamed.content;
+              nextUsage = streamed.usage;
+            } else {
+              const completion = await options.modelProvider.complete({
+                messages: continuationMessages,
+                temperature: 0.6
+              });
+              nextContent = completion.content;
+              nextUsage = completion.usage;
+            }
             agentLogger.modelOutput(input.runId, nextContent, nextUsage);
             usage.add("loop", nextUsage);
           } catch (error) {

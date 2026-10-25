@@ -140,12 +140,13 @@ export type WorklistInputs = {
     status: "PENDING" | "SEEN" | "ADDRESSED";
     agencyRepliedAt: Date | null;
     createdAt: Date;
+    authorName: string;
   }>;
   now: Date;
 };
 
 export type OwnerWorklistResult = {
-  unreadComments: Array<{ id: string; tripId: string; tripTitle: string; commentExcerpt: string; createdAt: string }>;
+  unreadComments: Array<{ id: string; tripId: string; tripTitle: string; authorName: string; commentExcerpt: string; createdAt: string }>;
   viewedNotReplied: Array<{ shareId: string; tripId: string; tripTitle: string; viewCount: number; lastViewedAt: string }>;
   draftsStuck: Array<{ tripId: string; tripTitle: string; updatedAt: string }>;
   sharesExpiring: Array<{ shareId: string; tripId: string; tripTitle: string; expiresAt: string }>;
@@ -193,6 +194,7 @@ export function selectOwnerWorklistRows(inputs: WorklistInputs): OwnerWorklistRe
         id: c.id,
         tripId,
         tripTitle: trip?.title ?? "(untitled)",
+        authorName: c.authorName,
         commentExcerpt: c.content.slice(0, 140),
         createdAt: c.createdAt.toISOString()
       };

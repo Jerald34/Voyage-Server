@@ -104,6 +104,15 @@ const envSchema = z.object({
   GOOGLE_SA_CREDENTIALS: z.string().default(""),
   GOOGLE_AI_API_KEY: z.string().default(""),
   GOOGLE_AI_MODEL: z.string().transform(v => v === "" ? undefined : v).default("gemini-3-flash-preview"),
+  // Gemini 3.x thinkingConfig.thinkingLevel for the Vertex provider. Gemini 3.5 Flash-Lite
+  // defaults to MINIMAL, which Google warns can end tool-calling runs early.
+  GOOGLE_AI_THINKING_LEVEL: z.preprocess(
+    (value) => {
+      const normalized = typeof value === "string" ? value.trim().toLowerCase() : "";
+      return normalized === "" ? "medium" : normalized;
+    },
+    z.enum(["minimal", "low", "medium", "high"]).default("medium")
+  ),
   GOOGLE_MAPS_API_KEY: z.string().default(""),
   GOOGLE_MAPS_MAX_CALLS_PER_RUN: z.coerce.number().int().nonnegative().default(30),
   // --- Place freshness gate -------------------------------------------------

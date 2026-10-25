@@ -50,13 +50,16 @@ vi.mock("../src/modules/shares/shareService", () => ({
       trip: null,
       creator: null
     })),
+    getShareRevision: vi.fn(async () => "0123456789abcdef"),
     addComment: vi.fn(async () => ({ id: "comment-1" })),
     listPublicComments: vi.fn(async () => [])
   }
 }));
 
-vi.mock("../src/modules/shares/publicShareService", () => ({
-  buildShareResponse: vi.fn(() => ({ share: { token: "share-token" }, itinerary: {} }))
+vi.mock("../src/modules/shares/publicShareService", async (importOriginal) => ({
+  toPublicComment: (await importOriginal<typeof import("../src/modules/shares/publicShareService")>()).toPublicComment,
+  buildShareResponseFromData: vi.fn(() => ({ share: { token: "share-token" }, itinerary: {}, trip: null })),
+  computeShareRevision: vi.fn(() => "0123456789abcdef")
 }));
 
 vi.mock("../src/modules/weather/weatherService", () => ({
@@ -311,6 +314,7 @@ const publicRateLimitRouteCases: RateLimitRouteCase[] = [
   { name: "public share read", method: "get", path: "/shared/share-token", limit: 60 },
   { name: "public share comments read", method: "get", path: "/shared/share-token/comments", limit: 60 },
   { name: "public share weather read", method: "get", path: "/shared/share-token/weather", limit: 60 },
+  { name: "public share revision read", method: "get", path: "/shared/share-token/revision", limit: 60 },
   { name: "public share comment write", method: "post", path: "/shared/share-token/comments", limit: 10, body: {} },
   { name: "public share rating write", method: "post", path: "/shared/share-token/rate", limit: 10, body: {} },
   { name: "review check", method: "get", path: "/reviews/trip-token/check", limit: 30 },
