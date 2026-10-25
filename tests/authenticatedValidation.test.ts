@@ -188,7 +188,9 @@ vi.mock("../src/modules/agencies/agencyService", () => ({
 vi.mock("../src/modules/admin/accountRepository", () => ({
   adminAccountRepository: {
     listAccounts: mockListAdminAccounts,
-    findAccount: mockFindAdminAccount
+    findAccount: mockFindAdminAccount,
+    listAuditEvents: vi.fn(async () => []),
+    listOwnedAgencies: vi.fn(async () => [])
   }
 }));
 
@@ -695,7 +697,9 @@ describe("authenticated route validation", () => {
         id: VALID_USER_ID,
         emailVerifiedAt: "2026-09-01T08:00:00.000Z",
         updatedAt: "2026-09-15T12:30:00.000Z",
-        activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 }
+        activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 },
+        auditEvents: [],
+        ownedAgencies: []
       });
       expect(JSON.stringify(response.body)).not.toContain("passwordHash");
       expect(JSON.stringify(response.body)).not.toContain(PASSWORD_HASH);

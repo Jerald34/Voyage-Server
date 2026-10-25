@@ -1,5 +1,6 @@
 import { prisma } from "../../db/prisma";
-import type { AdminAccountDetailRow, AdminAccountRepository, AdminAccountRow } from "./accountService";
+import { findOwnedAgencies } from "./accountActionRepository";
+import type { AdminAccountAuditRow, AdminAccountDetailRow, AdminAccountRepository, AdminAccountRow } from "./accountService";
 
 /**
  * Explicit `select` only — never `include` on User — so no column the admin page does not
@@ -46,5 +47,18 @@ export const adminAccountRepository: AdminAccountRepository = {
         }
       }
     });
+  },
+
+  async listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]> {
+    return prisma.adminAuditEvent.findMany({
+      where: { targetType: "USER", targetId: userId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { id: true, action: true, reason: true, createdAt: true, adminUser: { select: { displayName: true } } }
+    });
+  },
+
+  listOwnedAgencies(userId: string) {
+    return findOwnedAgencies(prisma, userId);
   }
 };

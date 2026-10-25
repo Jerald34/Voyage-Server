@@ -1,4 +1,5 @@
 import { ApiError } from "../../http/errors";
+import type { OwnedAgency } from "./accountActionService";
 
 export type AdminAccountRole = "USER" | "SUPER_ADMIN";
 export type AdminAccountStatus = "ACTIVE" | "DISABLED" | "DELETED";
@@ -42,9 +43,28 @@ export interface AdminAccountDetailRow extends AdminAccountRow {
   };
 }
 
+export interface AdminAccountAuditRow {
+  id: string;
+  action: string;
+  reason: string | null;
+  createdAt: Date;
+  adminUser: { displayName: string };
+}
+
+export interface AdminAccountAuditEvent {
+  id: string;
+  action: string;
+  reason: string | null;
+  createdAt: string;
+  adminName: string;
+}
+
 export interface AdminAccountRepository {
   listAccounts(): Promise<AdminAccountRow[]>;
   findAccount(id: string): Promise<AdminAccountDetailRow | null>;
+  /** Admin audit events whose target is this user, newest first, at most 50. */
+  listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]>;
+  listOwnedAgencies(userId: string): Promise<OwnedAgency[]>;
 }
 
 export interface AdminAccountServiceUser {
@@ -77,6 +97,11 @@ export interface AdminAccountDetail extends AdminAccountSummary {
   emailVerifiedAt: string | null;
   updatedAt: string;
   activity: { itineraries: number; clientTrips: number; agentThreads: number };
+}
+
+export interface AdminAccountDetailResponse extends AdminAccountDetail {
+  auditEvents: AdminAccountAuditEvent[];
+  ownedAgencies: OwnedAgency[];
 }
 
 function toSignInMethods(row: AdminAccountRow): AdminAccountSignInMethod[] {
@@ -144,13 +169,27 @@ export function createAdminAccountService(options: { repository: AdminAccountRep
       return rows.map(toAccountSummary);
     },
 
-    async getAccount(user: AdminAccountServiceUser, userId: string): Promise<AdminAccountDetail> {
+    async getAccount(user: AdminAccountServiceUser, userId: string): Promise<AdminAccountDetailResponse> {
       assertSuperAdmin(user);
       const row = await options.repository.findAccount(userId);
       if (!row) {
         throw new ApiError(404, "ACCOUNT_NOT_FOUND", "Account not found.");
       }
-      return toAccountDetail(row);
+      const [audit, ownedAgencies] = await Promise.all([
+        options.repository.listAuditEvents(userId),
+        options.repository.listOwnedAgencies(userId)
+      ]);
+      return {
+        ...toAccountDetail(row),
+        auditEvents: audit.map((event) => ({
+          id: event.id,
+          action: event.action,
+          reason: event.reason,
+          createdAt: event.createdAt.toISOString(),
+          adminName: event.adminUser.displayName
+        })),
+        ownedAgencies
+      };
     }
   };
 }

@@ -3,10 +3,12 @@ import {
   createAdminAccountService,
   toAccountDetail,
   toAccountSummary,
+  type AdminAccountAuditRow,
   type AdminAccountDetailRow,
   type AdminAccountRepository,
   type AdminAccountRow
 } from "../src/modules/admin/accountService";
+import type { OwnedAgency } from "../src/modules/admin/accountActionService";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const AGENCY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -42,10 +44,14 @@ function makeDetailRow(overrides: Partial<AdminAccountDetailRow> = {}): AdminAcc
   };
 }
 
-function makeRepository(options: { rows?: AdminAccountRow[]; detail?: AdminAccountDetailRow | null } = {}) {
+function makeRepository(
+  options: { rows?: AdminAccountRow[]; detail?: AdminAccountDetailRow | null; audit?: AdminAccountAuditRow[]; owned?: OwnedAgency[] } = {}
+) {
   const repository = {
     listAccounts: vi.fn(async () => options.rows ?? []),
-    findAccount: vi.fn(async () => (options.detail === undefined ? null : options.detail))
+    findAccount: vi.fn(async () => (options.detail === undefined ? null : options.detail)),
+    listAuditEvents: vi.fn(async () => options.audit ?? []),
+    listOwnedAgencies: vi.fn(async () => options.owned ?? [])
   } satisfies AdminAccountRepository;
   return repository;
 }
@@ -293,5 +299,28 @@ describe("adminAccountService.getAccount", () => {
       code: "ACCOUNT_NOT_FOUND",
       message: "Account not found."
     });
+  });
+});
+
+describe("getAccount audit trail and owned agencies", () => {
+  it("adds the account's audit events (newest first, admin name, ISO dates) and owned agencies", async () => {
+    const repository = makeRepository({
+      detail: makeDetailRow(),
+      audit: [
+        { id: "e2", action: "USER_ENABLED", reason: null, createdAt: new Date("2026-10-19T00:00:00.000Z"), adminUser: { displayName: "Jerald" } },
+        { id: "e1", action: "USER_DISABLED", reason: "left", createdAt: new Date("2026-10-18T00:00:00.000Z"), adminUser: { displayName: "Jerald" } }
+      ],
+      owned: [{ agencyId: AGENCY_A, agencyName: "Alpha", successors: [] }]
+    });
+    const service = createAdminAccountService({ repository });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(repository.listAuditEvents).toHaveBeenCalledWith(USER_ID);
+    expect(account.auditEvents).toEqual([
+      { id: "e2", action: "USER_ENABLED", reason: null, createdAt: "2026-10-19T00:00:00.000Z", adminName: "Jerald" },
+      { id: "e1", action: "USER_DISABLED", reason: "left", createdAt: "2026-10-18T00:00:00.000Z", adminName: "Jerald" }
+    ]);
+    expect(account.ownedAgencies).toEqual([{ agencyId: AGENCY_A, agencyName: "Alpha", successors: [] }]);
   });
 });
