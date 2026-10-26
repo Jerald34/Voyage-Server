@@ -71,6 +71,8 @@ enum AdminAuditAction {
   USER_SESSIONS_REVOKED
   USER_DELETED
   AGENCY_OWNERSHIP_TRANSFERRED
+  AGENT_PAUSED
+  AGENT_RESUMED
 }
 
 enum ClientTripStatus {
@@ -164,6 +166,11 @@ model User {
   emailVerifiedAt     DateTime?
   /// Set when a Super Admin deletes (anonymizes) the account.
   deletedAt           DateTime?
+  /// Agent pause set by a Super Admin. Active while agentPausedAt is set and agentPausedUntil is null (until lifted) or in the future.
+  agentPausedAt       DateTime?
+  agentPausedUntil    DateTime?
+  agentPauseReason    String?
+  agentPausedByUserId String?                  @db.Uuid
   avatarImageId       String?                  @unique @db.Uuid
   avatarImage         ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
   sessions            Session[]

@@ -8,6 +8,7 @@ import { errorHandler, notFoundHandler } from "./http/errors";
 import { createRateLimiters, type RateLimiterStoreFactory } from "./http/rateLimiters";
 import { adminRoutes } from "./modules/admin/adminRoutes";
 import { agencyRoutes } from "./modules/agencies/agencyRoutes";
+import { requireAgentNotPaused } from "./modules/agentPause/agentPause";
 import { agentRoutes } from "./modules/agent/agentRoutes";
 import { authRoutes } from "./modules/auth/authRoutes";
 import { dashboardRoutes } from "./modules/dashboard/dashboardRoutes";
@@ -128,11 +129,12 @@ export function createApp(options: CreateAppOptions = {}) {
   // the signed-in user instead of the IP.
   app.post(
     "/agencies/:agencyId/agent/threads/:id/messages",
+    requireAgentNotPaused,
     rateLimiters.agentMessageBurst,
     rateLimiters.agentMessageDaily,
     rateLimiters.agencyAgentMessageDaily
   );
-  app.post("/agencies/:agencyId/agent/threads/:id/images", rateLimiters.agentImageUpload);
+  app.post("/agencies/:agencyId/agent/threads/:id/images", requireAgentNotPaused, rateLimiters.agentImageUpload);
   app.post("/images/upload-url", rateLimiters.imageUpload);
   app.post("/agencies/:agencyId/team", rateLimiters.teamInvite);
   app.post("/support/reports", rateLimiters.supportReport);
