@@ -1,5 +1,6 @@
 import { prisma } from "../../db/prisma";
-import type { AdminAccountDetailRow, AdminAccountRepository, AdminAccountRow } from "./accountService";
+import { findOwnedAgencies } from "./accountActionRepository";
+import type { AdminAccountAuditRow, AdminAccountDetailRow, AdminAccountRepository, AdminAccountRow } from "./accountService";
 
 /**
  * Explicit `select` only — never `include` on User — so no column the admin page does not
@@ -16,6 +17,9 @@ const accountSelect = {
   emailVerifiedAt: true,
   createdAt: true,
   passwordHash: true,
+  agentPausedAt: true,
+  agentPausedUntil: true,
+  agentPauseReason: true,
   providerAccounts: { orderBy: { createdAt: "asc" }, select: { provider: true } },
   memberships: {
     orderBy: { createdAt: "asc" },
@@ -46,5 +50,34 @@ export const adminAccountRepository: AdminAccountRepository = {
         }
       }
     });
+  },
+
+  async listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]> {
+    return prisma.adminAuditEvent.findMany({
+      where: { targetType: "User", targetId: userId },
+      orderBy: { createdAt: "desc" },
+      take: 50,
+      select: { id: true, action: true, reason: true, createdAt: true, adminUser: { select: { displayName: true } } }
+    });
+  },
+
+  listOwnedAgencies(userId: string) {
+    return findOwnedAgencies(prisma, userId);
+  },
+
+  async usageSince(userId: string, from: Date) {
+    // Same definition of "metered" as the Usage tab: finished runs that recorded token counts.
+    const metered = {
+      usageUserId: userId,
+      createdAt: { gte: from },
+      status: { in: ["COMPLETED" as const, "FAILED" as const] },
+      totalTokens: { not: null }
+    };
+    const [result, unpriced] = await Promise.all([
+      prisma.agentRun.aggregate({ where: metered, _sum: { costUsd: true }, _count: { _all: true } }),
+      // A run that used a model with no price recorded a cost without it; the total is then a floor.
+      prisma.agentRun.count({ where: { ...metered, costComplete: false } })
+    ]);
+    return { costUsd: Number(result._sum.costUsd ?? 0), runCount: result._count._all, costComplete: unpriced === 0 };
   }
 };

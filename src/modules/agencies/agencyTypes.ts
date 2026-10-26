@@ -1,7 +1,9 @@
+import type { AdminAuditAction } from "@prisma/client";
+
 export type AgencyUser = {
   id: string;
   role: "USER" | "SUPER_ADMIN";
-  status: "ACTIVE" | "DISABLED";
+  status: "ACTIVE" | "DISABLED" | "DELETED";
   accountType: "PENDING" | "PERSONAL" | "AGENCY_USER";
   emailVerifiedAt: Date | null;
 };
@@ -46,13 +48,7 @@ export type AgencyMembershipRecord = {
 export type AdminAuditRecord = {
   id: string;
   adminUserId: string;
-  action:
-    | "AGENCY_APPROVED"
-    | "AGENCY_REJECTED"
-    | "AGENCY_SUSPENDED"
-    | "AGENCY_UNSUSPENDED"
-    | "USER_PROMOTED_TO_ADMIN"
-    | "USER_DISABLED";
+  action: AdminAuditAction;
   targetType: string;
   targetId: string;
   reason: string | null;

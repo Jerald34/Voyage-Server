@@ -6,7 +6,7 @@ import { s3ImageStorage } from "../../services/storage";
 
 export type ImageUser = {
   id: string;
-  status: "ACTIVE" | "DISABLED";
+  status: "ACTIVE" | "DISABLED" | "DELETED";
 };
 
 export type ImagePurpose =

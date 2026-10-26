@@ -1,5 +1,5 @@
 import { replaceItinerarySchema, structuredItineraryInputSchema } from "../itineraries/itinerarySchemas";
-import type { ModelProvider } from "../../services/modelProvider";
+import type { ModelProvider, ModelUsage } from "../../services/modelProvider";
 import { canonicalToolName, type ParsedModelOutput, parseModelOutput } from "./agentParser";
 import {
   isStructuredCreateItineraryInput,
@@ -40,10 +40,14 @@ export function enrichToolInputFromUserRequest(toolName: string, input: Record<s
   return inferCreateItineraryInputFromRequest(input, userContent);
 }
 
+/** Receives the usage of a model call this module made, so the run can meter it. */
+export type OnModelUsage = (usage: ModelUsage | undefined) => void;
+
 export async function customizeCreateItineraryInput(options: {
   modelProvider: ModelProvider;
   input: Record<string, unknown>;
   userContent: string;
+  onUsage?: OnModelUsage;
 }) {
   try {
     const completion = await options.modelProvider.complete({
@@ -74,6 +78,9 @@ export async function customizeCreateItineraryInput(options: {
       ]
     });
 
+    // Reported before parsing: the tokens were spent even when the reply is unusable.
+    options.onUsage?.(completion.usage);
+
     const parsedJson = JSON.parse(completion.content);
     const candidate =
       isRecord(parsedJson) && isRecord(parsedJson.input)
@@ -95,6 +102,7 @@ export async function enrichToolInputFromUserRequestForExecution(options: {
   toolName: string;
   input: Record<string, unknown>;
   userContent: string;
+  onUsage?: OnModelUsage;
 }) {
   if (canonicalToolName(options.toolName) !== "create_itinerary" || !isPlaceholderCreateItineraryInput(options.input, options.userContent)) {
     return options.input;
@@ -103,7 +111,8 @@ export async function enrichToolInputFromUserRequestForExecution(options: {
   return customizeCreateItineraryInput({
     modelProvider: options.modelProvider,
     input: options.input,
-    userContent: options.userContent
+    userContent: options.userContent,
+    onUsage: options.onUsage
   });
 }
 
@@ -219,6 +228,7 @@ export async function recoverPlainItineraryToolOutput(options: {
   modelProvider: ModelProvider;
   userContent: string;
   assistantContent: string;
+  onUsage?: OnModelUsage;
 }) {
   const recovery = await options.modelProvider.complete({
     temperature: 0,
@@ -245,6 +255,8 @@ export async function recoverPlainItineraryToolOutput(options: {
       }
     ]
   });
+
+  options.onUsage?.(recovery.usage);
 
   const parsed = parseModelOutput(recovery.content);
   return parsed.type === "json" && parsed.toolCalls.length > 0 ? parsed : null;

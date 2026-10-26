@@ -9,7 +9,8 @@ import {
   transferOwnershipSchema
 } from "./teamSchemas";
 import { createTeamService } from "./teamService";
-import { createPrismaTeamRepository } from "./teamRepository";
+import { createPrismaTeamRepository, type TeamMembershipRecord } from "./teamRepository";
+import { getActiveAgentPause } from "../agentPause/agentPause";
 import { createInvitationService } from "./invitationService";
 import { createPrismaInvitationRepository } from "./invitationRepository";
 
@@ -38,6 +39,18 @@ const invitationService = createInvitationService({
 export { invitationService };
 
 export const teamRoutes = Router({ mergeParams: true });
+
+/**
+ * Owners and admins see a member's agent pause (when it ends and why); everyone else gets null.
+ * The raw pause columns are stripped from `user` either way, so they never leave the server.
+ */
+function toTeamMember(member: TeamMembershipRecord, canSeePause: boolean) {
+  const { agentPausedAt, agentPausedUntil, agentPauseReason, ...user } = member.user;
+  const pause = canSeePause
+    ? getActiveAgentPause({ agentPausedAt: agentPausedAt ?? null, agentPausedUntil: agentPausedUntil ?? null, agentPauseReason: agentPauseReason ?? null })
+    : null;
+  return { ...member, user, agentPause: pause ? { until: pause.until, reason: pause.reason } : null };
+}
 const agencyIdParamsSchema = idParamsSchema("agencyId");
 const invitationParamsSchema = idParamsSchema("agencyId", "invitationId");
 const membershipParamsSchema = idParamsSchema("agencyId", "membershipId");
@@ -49,7 +62,9 @@ teamRoutes.get("/", async (request, response, next) => {
     const { agencyId } = agencyIdParamsSchema.parse(request.params);
     const access = await agencyAccessService.requireVerifiedAgencyMember(request.authUser!, agencyId);
     const members = await teamService.listMembers(access.agency.id);
-    response.json({ members, viewerRole: access.membership!.role });
+    const viewerRole = access.membership!.role;
+    const canSeePause = viewerRole === "OWNER" || viewerRole === "ADMIN";
+    response.json({ members: members.map((member) => toTeamMember(member, canSeePause)), viewerRole });
   } catch (error) {
     next(error);
   }
