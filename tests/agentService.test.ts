@@ -598,6 +598,19 @@ describe("agent service", () => {
     expect(seen).toEqual([usage]);
   });
 
+  it("records the selected model on new runs when modelInfo is given", async () => {
+    const repository = createMemoryRepository();
+    const service = createAgentService({
+      repository,
+      modelInfo: () => ({ provider: "vertex", model: "gemini-3.5-flash-lite" })
+    });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+
+    expect(run).toMatchObject({ modelProvider: "vertex", modelName: "gemini-3.5-flash-lite" });
+  });
+
   it("appends a user message and creates a queued run", async () => {
     const repository = createMemoryRepository();
     const service = createAgentService({
