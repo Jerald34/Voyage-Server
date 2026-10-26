@@ -92,7 +92,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
       });
     },
 
-    async clearAgentPause({ userId, adminUserId }) {
+    async clearAgentPause({ userId, adminUserId, reason }) {
       await client.$transaction(async (tx) => {
         const { count } = await tx.user.updateMany({
           where: { id: userId, status: { not: "DELETED" } },
@@ -100,7 +100,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
         });
         if (count === 0) throw accountDeleted();
         await tx.adminAuditEvent.create({
-          data: { adminUserId, action: "AGENT_RESUMED", targetType: "User", targetId: userId, reason: null }
+          data: { adminUserId, action: "AGENT_RESUMED", targetType: "User", targetId: userId, reason }
         });
       });
     },

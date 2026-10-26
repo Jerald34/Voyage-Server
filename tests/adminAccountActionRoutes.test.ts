@@ -257,8 +257,18 @@ describe("agent pause routes", () => {
     });
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/agent-resume`).send({});
     expect(res.status).toBe(200);
-    expect(mocks.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1" });
+    expect(mocks.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: null });
     expect(res.body.user.agentPause).toBeNull();
+  });
+
+  it("passes a resume note through to the audit row", async () => {
+    mocks.findTarget.mockResolvedValue({
+      id: USER_ID, email: "mara@hops.travel", role: "USER", status: "ACTIVE",
+      agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "x"
+    });
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/agent-resume`).send({ reason: "  Checked with the owner  " });
+    expect(res.status).toBe(200);
+    expect(mocks.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1", reason: "Checked with the owner" });
   });
 
   it("resume with no body at all works, and a user who is not paused is a no-op success", async () => {

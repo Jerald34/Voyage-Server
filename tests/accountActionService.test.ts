@@ -218,7 +218,13 @@ describe("agent pause", () => {
   it("resumes an active pause", async () => {
     const repo = makeRepo({ target: target({ agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "x" }) });
     await service(repo).resumeAgent(ADMIN, USER_ID);
-    expect(repo.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: ADMIN.id });
+    expect(repo.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: ADMIN.id, reason: null });
+  });
+
+  it("passes the resume note through to the repository", async () => {
+    const repo = makeRepo({ target: target({ agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "x" }) });
+    await service(repo).resumeAgent(ADMIN, USER_ID, "Checked with the owner");
+    expect(repo.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: ADMIN.id, reason: "Checked with the owner" });
   });
 
   it("treats resuming someone who isn't paused (or whose pause ended) as done", async () => {
@@ -228,7 +234,7 @@ describe("agent pause", () => {
     await service(repo).resumeAgent(ADMIN, USER_ID);
     expect(repo.clearAgentPause).not.toHaveBeenCalled();
     const never = makeRepo();
-    await service(never).resumeAgent(ADMIN, USER_ID);
+    await service(never).resumeAgent(ADMIN, USER_ID, "a note on a no-op");
     expect(never.clearAgentPause).not.toHaveBeenCalled();
   });
 });

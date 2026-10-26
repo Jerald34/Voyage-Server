@@ -161,8 +161,8 @@ adminRoutes.post("/users/:userId/agent-pause", requireSuperAdmin, async (request
   }
 });
 
-// Resuming needs no input. The shared helper accepts an empty body (and ignores a note); unknown fields are still rejected.
-adminRoutes.post("/users/:userId/agent-resume", requireSuperAdmin, accountActionRoute((actor, userId) => accountActionService.resumeAgent(actor, userId)));
+// Resuming needs no input. The shared helper accepts an empty body and an optional note, which lands on the audit row; unknown fields are still rejected.
+adminRoutes.post("/users/:userId/agent-resume", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.resumeAgent(actor, userId, reason)));
 
 adminRoutes.post("/users/:userId/delete", requireSuperAdmin, async (request, response, next) => {
   try {

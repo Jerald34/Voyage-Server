@@ -256,7 +256,7 @@ describe("accountActionRepository", () => {
   });
 
   it("clearAgentPause clears the pause (guarded on status) and audits AGENT_RESUMED", async () => {
-    await repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1" });
+    await repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1", reason: null });
     expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({
       where: NOT_DELETED,
       data: { agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null, agentPausedByUserId: null }
@@ -266,10 +266,17 @@ describe("accountActionRepository", () => {
     });
   });
 
+  it("clearAgentPause records the resume note on the AGENT_RESUMED audit row", async () => {
+    await repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1", reason: "Checked with the owner" });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: { adminUserId: "admin-1", action: "AGENT_RESUMED", targetType: "User", targetId: USER_ID, reason: "Checked with the owner" }
+    });
+  });
+
   it("clearAgentPause on a row that was deleted in the meantime answers 409 and audits nothing", async () => {
     ctx.tx.user.updateMany.mockResolvedValueOnce({ count: 0 });
 
-    const error = await failure(repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1" }));
+    const error = await failure(repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1", reason: null }));
 
     expect(error).toMatchObject({ statusCode: 409, code: "ACCOUNT_DELETED" });
     expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();

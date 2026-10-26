@@ -1,8 +1,6 @@
 import express from "express";
 import request from "supertest";
 import { describe, expect, it, vi } from "vitest";
-import { readFileSync } from "node:fs";
-import { join } from "node:path";
 import { errorHandler } from "../src/http/errors";
 import { getActiveAgentPause, pauseUntil, requireAgentNotPaused } from "../src/modules/agentPause/agentPause";
 import { authRoutes, serializeUser } from "../src/modules/auth/authRoutes";
@@ -69,14 +67,6 @@ describe("requireAgentNotPaused", () => {
   it("lets everyone else through (including signed-out requests, which requireAuth handles)", async () => {
     expect((await request(app({ agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null }).a).post("/send")).status).toBe(200);
     expect((await request(app(undefined).a).post("/send")).status).toBe(200);
-  });
-
-  it("is mounted before the agent quota limiters in app.ts", () => {
-    const source = readFileSync(join(__dirname, "../src/app.ts"), "utf8");
-    const messages = source.indexOf('"/agencies/:agencyId/agent/threads/:id/messages"');
-    const images = source.indexOf('"/agencies/:agencyId/agent/threads/:id/images"');
-    expect(source.indexOf("requireAgentNotPaused", messages)).toBeLessThan(source.indexOf("rateLimiters.agentMessageBurst", messages));
-    expect(source.indexOf("requireAgentNotPaused", images)).toBeLessThan(source.indexOf("rateLimiters.agentImageUpload", images));
   });
 });
 

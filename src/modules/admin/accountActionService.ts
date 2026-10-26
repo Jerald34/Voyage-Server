@@ -51,7 +51,7 @@ export interface AccountActionRepository {
     reason: string;
     duration: AgentPauseDuration;
   }): Promise<void>;
-  clearAgentPause(input: { userId: string; adminUserId: string }): Promise<void>;
+  clearAgentPause(input: { userId: string; adminUserId: string; reason: string | null }): Promise<void>;
 }
 
 export interface AccountActionActor {
@@ -126,11 +126,11 @@ export function createAdminAccountActionService(options: { repository: AccountAc
       });
     },
 
-    async resumeAgent(actor: AccountActionActor, userId: string) {
+    async resumeAgent(actor: AccountActionActor, userId: string, reason: string | null = null) {
       const target = await loadTarget(actor, userId);
       // Resuming someone who isn't paused (or whose pause already ended) is done; no audit row for a no-op.
       if (!getActiveAgentPause(target, now())) return;
-      await repository.clearAgentPause({ userId, adminUserId: actor.id });
+      await repository.clearAgentPause({ userId, adminUserId: actor.id, reason });
     },
 
     async deleteAccount(actor: AccountActionActor, userId: string, input: DeleteAccountInput) {
