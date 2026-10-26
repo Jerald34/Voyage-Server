@@ -64,16 +64,17 @@ export const adminAccountRepository: AdminAccountRepository = {
 
   async usageSince(userId: string, from: Date) {
     // Same definition of "metered" as the Usage tab: finished runs that recorded token counts.
-    const result = await prisma.agentRun.aggregate({
-      where: {
-        usageUserId: userId,
-        createdAt: { gte: from },
-        status: { in: ["COMPLETED", "FAILED"] },
-        totalTokens: { not: null }
-      },
-      _sum: { costUsd: true },
-      _count: { _all: true }
-    });
-    return { costUsd: Number(result._sum.costUsd ?? 0), runCount: result._count._all };
+    const metered = {
+      usageUserId: userId,
+      createdAt: { gte: from },
+      status: { in: ["COMPLETED" as const, "FAILED" as const] },
+      totalTokens: { not: null }
+    };
+    const [result, unpriced] = await Promise.all([
+      prisma.agentRun.aggregate({ where: metered, _sum: { costUsd: true }, _count: { _all: true } }),
+      // A run that used a model with no price recorded a cost without it; the total is then a floor.
+      prisma.agentRun.count({ where: { ...metered, costComplete: false } })
+    ]);
+    return { costUsd: Number(result._sum.costUsd ?? 0), runCount: result._count._all, costComplete: unpriced === 0 };
   }
 };

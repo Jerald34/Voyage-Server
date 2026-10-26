@@ -50,7 +50,7 @@ function makeRepository(
     detail?: AdminAccountDetailRow | null;
     audit?: AdminAccountAuditRow[];
     owned?: OwnedAgency[];
-    usage?: { costUsd: number; runCount: number };
+    usage?: { costUsd: number; runCount: number; costComplete: boolean };
   } = {}
 ) {
   const repository = {
@@ -58,7 +58,7 @@ function makeRepository(
     findAccount: vi.fn(async () => (options.detail === undefined ? null : options.detail)),
     listAuditEvents: vi.fn(async () => options.audit ?? []),
     listOwnedAgencies: vi.fn(async () => options.owned ?? []),
-    usageSince: vi.fn(async (_userId: string, _from: Date) => options.usage ?? { costUsd: 0, runCount: 0 })
+    usageSince: vi.fn(async (_userId: string, _from: Date) => options.usage ?? { costUsd: 0, runCount: 0, costComplete: true })
   } satisfies AdminAccountRepository;
   return repository;
 }
@@ -334,13 +334,22 @@ describe("getAccount audit trail and owned agencies", () => {
 
 describe("getAccount usage this month", () => {
   it("adds this calendar month's (UTC) spend and runs", async () => {
-    const repository = makeRepository({ detail: makeDetailRow(), usage: { costUsd: 1.4, runCount: 71 } });
+    const repository = makeRepository({ detail: makeDetailRow(), usage: { costUsd: 1.4, runCount: 71, costComplete: true } });
     const service = createAdminAccountService({ repository, now: () => new Date("2026-10-25T12:00:00.000Z") });
 
     const account = await service.getAccount(admin, USER_ID);
 
     expect(repository.usageSince).toHaveBeenCalledWith(USER_ID, new Date("2026-10-01T00:00:00.000Z"));
-    expect(account.usageThisMonth).toEqual({ costUsd: 1.4, runCount: 71 });
+    expect(account.usageThisMonth).toEqual({ costUsd: 1.4, runCount: 71, costComplete: true });
+  });
+
+  it("passes through that some of this month's runs have no price", async () => {
+    const repository = makeRepository({ detail: makeDetailRow(), usage: { costUsd: 0.9, runCount: 12, costComplete: false } });
+    const service = createAdminAccountService({ repository });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(account.usageThisMonth).toEqual({ costUsd: 0.9, runCount: 12, costComplete: false });
   });
 
   it("starts the month at UTC midnight even when the local date is still the previous month", async () => {
@@ -358,7 +367,7 @@ describe("getAccount usage this month", () => {
 
     const account = await service.getAccount(admin, USER_ID);
 
-    expect(account.usageThisMonth).toEqual({ costUsd: 0, runCount: 0 });
+    expect(account.usageThisMonth).toEqual({ costUsd: 0, runCount: 0, costComplete: true });
   });
 
   it("does not read usage for a caller who is not a super admin", async () => {

@@ -1,11 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockFindMany, mockFindUnique, mockAuditFindMany, mockAgencyFindMany, mockRunAggregate } = vi.hoisted(() => ({
+const { mockFindMany, mockFindUnique, mockAuditFindMany, mockAgencyFindMany, mockRunAggregate, mockRunCount } = vi.hoisted(() => ({
   mockFindMany: vi.fn(),
   mockFindUnique: vi.fn(),
   mockAuditFindMany: vi.fn(),
   mockAgencyFindMany: vi.fn(),
-  mockRunAggregate: vi.fn()
+  mockRunAggregate: vi.fn(),
+  mockRunCount: vi.fn()
 }));
 
 vi.mock("../src/db/prisma", () => ({
@@ -13,7 +14,7 @@ vi.mock("../src/db/prisma", () => ({
     user: { findMany: mockFindMany, findUnique: mockFindUnique },
     adminAuditEvent: { findMany: mockAuditFindMany },
     agency: { findMany: mockAgencyFindMany },
-    agentRun: { aggregate: mockRunAggregate }
+    agentRun: { aggregate: mockRunAggregate, count: mockRunCount }
   }
 }));
 
@@ -38,6 +39,7 @@ beforeEach(() => {
   mockAuditFindMany.mockResolvedValue([]);
   mockAgencyFindMany.mockResolvedValue([]);
   mockRunAggregate.mockResolvedValue({ _sum: { costUsd: null }, _count: { _all: 0 } });
+  mockRunCount.mockResolvedValue(0);
 });
 
 describe("adminAccountRepository.listAccounts", () => {
@@ -163,7 +165,7 @@ describe("adminAccountRepository.usageSince", () => {
     mockRunAggregate.mockResolvedValue({ _sum: { costUsd: "1.400000" }, _count: { _all: 71 } });
     const from = new Date("2026-10-01T00:00:00.000Z");
 
-    await expect(adminAccountRepository.usageSince(USER_ID, from)).resolves.toEqual({ costUsd: 1.4, runCount: 71 });
+    await expect(adminAccountRepository.usageSince(USER_ID, from)).resolves.toEqual({ costUsd: 1.4, runCount: 71, costComplete: true });
 
     expect(mockRunAggregate).toHaveBeenCalledWith({
       where: {
@@ -180,7 +182,27 @@ describe("adminAccountRepository.usageSince", () => {
   it("treats a person with no runs as zero spend (a null sum)", async () => {
     await expect(adminAccountRepository.usageSince(USER_ID, new Date("2026-10-01T00:00:00.000Z"))).resolves.toEqual({
       costUsd: 0,
-      runCount: 0
+      runCount: 0,
+      costComplete: true
+    });
+  });
+
+  it("reports the cost as incomplete when any of those runs used a model with no price", async () => {
+    mockRunAggregate.mockResolvedValue({ _sum: { costUsd: "0.900000" }, _count: { _all: 12 } });
+    mockRunCount.mockResolvedValue(3);
+    const from = new Date("2026-10-01T00:00:00.000Z");
+
+    await expect(adminAccountRepository.usageSince(USER_ID, from)).resolves.toEqual({ costUsd: 0.9, runCount: 12, costComplete: false });
+
+    // Same window and same definition of "metered", narrowed to runs whose cost is incomplete.
+    expect(mockRunCount).toHaveBeenCalledWith({
+      where: {
+        usageUserId: USER_ID,
+        createdAt: { gte: from },
+        status: { in: ["COMPLETED", "FAILED"] },
+        totalTokens: { not: null },
+        costComplete: false
+      }
     });
   });
 });

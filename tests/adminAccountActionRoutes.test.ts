@@ -34,7 +34,7 @@ vi.mock("../src/modules/admin/accountRepository", () => ({
     findAccount: mocks.findAccount,
     listAuditEvents: vi.fn(async () => []),
     listOwnedAgencies: vi.fn(async () => []),
-    usageSince: vi.fn(async () => ({ costUsd: 0, runCount: 0 }))
+    usageSince: vi.fn(async () => ({ costUsd: 0, runCount: 0, costComplete: true }))
   }
 }));
 
@@ -90,7 +90,7 @@ describe("POST /admin/users/:userId/disable", () => {
       status: "DISABLED",
       auditEvents: [],
       ownedAgencies: [],
-      usageThisMonth: { costUsd: 0, runCount: 0 }
+      usageThisMonth: { costUsd: 0, runCount: 0, costComplete: true }
     });
     expect(mocks.setStatus).toHaveBeenCalledWith({ userId: USER_ID, status: "DISABLED", adminUserId: "admin-1", reason: "spam" });
   });

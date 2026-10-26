@@ -65,8 +65,8 @@ export interface AdminAccountRepository {
   /** Admin audit events whose target is this user, newest first, at most 50. */
   listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]>;
   listOwnedAgencies(userId: string): Promise<OwnedAgency[]>;
-  /** Spend and run count for metered runs this user triggered since `from`. */
-  usageSince(userId: string, from: Date): Promise<{ costUsd: number; runCount: number }>;
+  /** Spend and run count for metered runs this user triggered since `from`; `costComplete` is false if any of them used an unpriced model. */
+  usageSince(userId: string, from: Date): Promise<AdminAccountUsage>;
 }
 
 export interface AdminAccountServiceUser {
@@ -104,6 +104,8 @@ export interface AdminAccountDetail extends AdminAccountSummary {
 export interface AdminAccountUsage {
   costUsd: number;
   runCount: number;
+  /** false when some of these runs used a model with no price, so `costUsd` is a lower bound. */
+  costComplete: boolean;
 }
 
 export interface AdminAccountDetailResponse extends AdminAccountDetail {
