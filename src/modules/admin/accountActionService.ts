@@ -1,10 +1,11 @@
 // src/modules/admin/accountActionService.ts
 import { ApiError } from "../../http/errors";
+import { getActiveAgentPause, pauseUntil, type AgentPauseDuration, type AgentPauseFields } from "../agentPause/agentPause";
 
 export type AccountActionUserStatus = "ACTIVE" | "DISABLED" | "DELETED";
 
 /** The fields the rules need about the account being acted on. */
-export interface AccountActionTarget {
+export interface AccountActionTarget extends AgentPauseFields {
   id: string;
   email: string;
   role: string;
@@ -41,11 +42,27 @@ export interface AccountActionRepository {
   setStatus(input: { userId: string; status: "ACTIVE" | "DISABLED"; adminUserId: string; reason: string | null }): Promise<void>;
   revokeSessions(input: { userId: string; adminUserId: string; reason: string | null }): Promise<void>;
   anonymize(input: AnonymizeInput): Promise<void>;
+  /** Sets the pause and writes the audit row in one transaction; never writes to a deleted account. */
+  setAgentPause(input: {
+    userId: string;
+    adminUserId: string;
+    pausedAt: Date;
+    until: Date | null;
+    reason: string;
+    duration: AgentPauseDuration;
+  }): Promise<void>;
+  clearAgentPause(input: { userId: string; adminUserId: string }): Promise<void>;
 }
 
 export interface AccountActionActor {
   id: string;
   role: string;
+}
+
+export interface PauseAgentInput {
+  duration: AgentPauseDuration;
+  /** Shown to the user and their agency owner, so it is required. */
+  reason: string;
 }
 
 export interface DeleteAccountInput {
@@ -94,6 +111,26 @@ export function createAdminAccountActionService(options: { repository: AccountAc
     async signOutEverywhere(actor: AccountActionActor, userId: string, reason: string | null = null) {
       await loadTarget(actor, userId);
       await repository.revokeSessions({ userId, adminUserId: actor.id, reason });
+    },
+
+    async pauseAgent(actor: AccountActionActor, userId: string, input: PauseAgentInput) {
+      await loadTarget(actor, userId);
+      const pausedAt = now();
+      await repository.setAgentPause({
+        userId,
+        adminUserId: actor.id,
+        pausedAt,
+        until: pauseUntil(input.duration, pausedAt),
+        reason: input.reason.trim(),
+        duration: input.duration
+      });
+    },
+
+    async resumeAgent(actor: AccountActionActor, userId: string) {
+      const target = await loadTarget(actor, userId);
+      // Resuming someone who isn't paused (or whose pause already ended) is done; no audit row for a no-op.
+      if (!getActiveAgentPause(target, now())) return;
+      await repository.clearAgentPause({ userId, adminUserId: actor.id });
     },
 
     async deleteAccount(actor: AccountActionActor, userId: string, input: DeleteAccountInput) {

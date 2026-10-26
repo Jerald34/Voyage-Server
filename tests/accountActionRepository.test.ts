@@ -97,7 +97,11 @@ describe("accountActionRepository", () => {
         emailVerifiedAt: null,
         avatarImageId: null,
         status: "DELETED",
-        deletedAt: NOW
+        deletedAt: NOW,
+        agentPausedAt: null,
+        agentPausedUntil: null,
+        agentPauseReason: null,
+        agentPausedByUserId: null
       }
     });
     for (const table of ["session", "authProviderAccount", "emailVerificationToken", "passwordResetToken", "agencyMembership"] as const) {
@@ -210,5 +214,64 @@ describe("accountActionRepository", () => {
       }
     });
     expect(owned).toEqual([{ agencyId: "a1", agencyName: "Bayani Tours", successors: [{ userId: "u2", displayName: "Liza Cruz", role: "ADMIN" }] }]);
+  });
+
+  it("setAgentPause sets the pause (guarded on status) and audits AGENT_PAUSED with the duration", async () => {
+    const until = new Date("2026-10-26T08:00:00.000Z");
+    await repo().setAgentPause({ userId: USER_ID, adminUserId: "admin-1", pausedAt: NOW, until, reason: "High usage", duration: "24h" });
+    expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({
+      where: NOT_DELETED,
+      data: { agentPausedAt: NOW, agentPausedUntil: until, agentPauseReason: "High usage", agentPausedByUserId: "admin-1" }
+    });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: {
+        adminUserId: "admin-1",
+        action: "AGENT_PAUSED",
+        targetType: "User",
+        targetId: USER_ID,
+        reason: "High usage",
+        metadata: { duration: "24h", until: "2026-10-26T08:00:00.000Z" }
+      }
+    });
+  });
+
+  it("an indefinite pause audits a null end", async () => {
+    await repo().setAgentPause({ userId: USER_ID, adminUserId: "admin-1", pausedAt: NOW, until: null, reason: "Abuse", duration: "indefinite" });
+    expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({
+      where: NOT_DELETED,
+      data: { agentPausedAt: NOW, agentPausedUntil: null, agentPauseReason: "Abuse", agentPausedByUserId: "admin-1" }
+    });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: "AGENT_PAUSED", metadata: { duration: "indefinite", until: null } })
+    });
+  });
+
+  it("setAgentPause on a row that was deleted in the meantime answers 409 and audits nothing", async () => {
+    ctx.tx.user.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const error = await failure(repo().setAgentPause({ userId: USER_ID, adminUserId: "admin-1", pausedAt: NOW, until: null, reason: "x", duration: "indefinite" }));
+
+    expect(error).toMatchObject({ statusCode: 409, code: "ACCOUNT_DELETED" });
+    expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();
+  });
+
+  it("clearAgentPause clears the pause (guarded on status) and audits AGENT_RESUMED", async () => {
+    await repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1" });
+    expect(ctx.tx.user.updateMany).toHaveBeenCalledWith({
+      where: NOT_DELETED,
+      data: { agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null, agentPausedByUserId: null }
+    });
+    expect(ctx.tx.adminAuditEvent.create).toHaveBeenCalledWith({
+      data: { adminUserId: "admin-1", action: "AGENT_RESUMED", targetType: "User", targetId: USER_ID, reason: null }
+    });
+  });
+
+  it("clearAgentPause on a row that was deleted in the meantime answers 409 and audits nothing", async () => {
+    ctx.tx.user.updateMany.mockResolvedValueOnce({ count: 0 });
+
+    const error = await failure(repo().clearAgentPause({ userId: USER_ID, adminUserId: "admin-1" }));
+
+    expect(error).toMatchObject({ statusCode: 409, code: "ACCOUNT_DELETED" });
+    expect(ctx.tx.adminAuditEvent.create).not.toHaveBeenCalled();
   });
 });

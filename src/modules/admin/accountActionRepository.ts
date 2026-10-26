@@ -41,7 +41,7 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
     async findTarget(userId) {
       return client.user.findUnique({
         where: { id: userId },
-        select: { id: true, email: true, role: true, status: true }
+        select: { id: true, email: true, role: true, status: true, agentPausedAt: true, agentPausedUntil: true, agentPauseReason: true }
       });
     },
 
@@ -71,6 +71,40 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
       ]);
     },
 
+    async setAgentPause({ userId, adminUserId, pausedAt, until, reason, duration }) {
+      await client.$transaction(async (tx) => {
+        // Guarded on status, so a delete that landed after the service's check never gets a pause written onto it.
+        const { count } = await tx.user.updateMany({
+          where: { id: userId, status: { not: "DELETED" } },
+          data: { agentPausedAt: pausedAt, agentPausedUntil: until, agentPauseReason: reason, agentPausedByUserId: adminUserId }
+        });
+        if (count === 0) throw accountDeleted();
+        await tx.adminAuditEvent.create({
+          data: {
+            adminUserId,
+            action: "AGENT_PAUSED",
+            targetType: "User",
+            targetId: userId,
+            reason,
+            metadata: { duration, until: until ? until.toISOString() : null }
+          }
+        });
+      });
+    },
+
+    async clearAgentPause({ userId, adminUserId }) {
+      await client.$transaction(async (tx) => {
+        const { count } = await tx.user.updateMany({
+          where: { id: userId, status: { not: "DELETED" } },
+          data: { agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null, agentPausedByUserId: null }
+        });
+        if (count === 0) throw accountDeleted();
+        await tx.adminAuditEvent.create({
+          data: { adminUserId, action: "AGENT_RESUMED", targetType: "User", targetId: userId, reason: null }
+        });
+      });
+    },
+
     async anonymize({ userId, adminUserId, reason, emailDomain, now, transfer }) {
       // Unique and unreachable, so the address can never sign in or collide with a real one.
       const deletedEmail = `deleted+${userId}@deleted.invalid`;
@@ -87,7 +121,11 @@ export function createPrismaAccountActionRepository(client: PrismaClient = prism
             emailVerifiedAt: null,
             avatarImageId: null,
             status: "DELETED",
-            deletedAt: now
+            deletedAt: now,
+            agentPausedAt: null,
+            agentPausedUntil: null,
+            agentPauseReason: null,
+            agentPausedByUserId: null
           }
         });
         if (count === 0) throw accountDeleted();
