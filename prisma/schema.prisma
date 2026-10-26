@@ -595,6 +595,8 @@ model AgentRun {
   cachedTokens   Int?
   thoughtsTokens Int?
   costUsd        Decimal? @db.Decimal(12, 6)
+  /// false when some model call in the run had no price, so costUsd under-counts.
+  costComplete   Boolean  @default(true)
   usageDetail    Json?
   usageUserId    String?  @db.Uuid
   startedAt        DateTime?
@@ -617,6 +619,7 @@ model AgentRun {
   @@index([status])
   @@index([usageUserId, createdAt])
   @@index([agencyId, createdAt])
+  @@index([status, createdAt])
 }
 
 model AgentToolCall {

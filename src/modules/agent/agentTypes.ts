@@ -10,6 +10,7 @@ export interface CompleteRunUsage {
   cachedTokens: number;
   thoughtsTokens: number;
   costUsd: number;
+  costComplete: boolean;
   detail: UsageSummary["detail"];
 }
 

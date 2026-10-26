@@ -46,3 +46,24 @@ describe("summarizeUsage", () => {
     expect(s.detail).toHaveLength(2);
   });
 });
+
+describe("unpriced calls", () => {
+  it("records a call without a price as null cost", () => {
+    const e = usageEntryFromModel(0, "loop", model({ model: "mystery-model", estimatedCostUsd: undefined }));
+    expect(e.costUsd).toBeNull();
+  });
+
+  it("sums known costs and marks the summary incomplete when any call is unpriced", () => {
+    const s = summarizeUsage([
+      usageEntryFromModel(0, "loop", model()),
+      usageEntryFromModel(1, "loop", model({ model: "mystery-model", estimatedCostUsd: undefined }))
+    ]);
+    expect(s.costUsd).toBeCloseTo(0.003, 9);
+    expect(s.costComplete).toBe(false);
+  });
+
+  it("is complete when every call is priced, and for no calls", () => {
+    expect(summarizeUsage([usageEntryFromModel(0, "loop", model())]).costComplete).toBe(true);
+    expect(summarizeUsage([]).costComplete).toBe(true);
+  });
+});
