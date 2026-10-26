@@ -1,6 +1,7 @@
 import { Router } from "express";
 import { randomBytes, randomUUID } from "node:crypto";
 import { getUserCapabilities } from "../../services/capabilities";
+import { getActiveAgentPause } from "../agentPause/agentPause";
 import { clearSessionCookie, setSessionCookie } from "../../http/cookies";
 import { requireAuth } from "../../http/authMiddleware";
 import { ApiError } from "../../http/errors";
@@ -107,6 +108,9 @@ export function serializeUser(user: NonNullable<Express.Request["authUser"]>) {
     status: user.status,
     emailVerifiedAt: user.emailVerifiedAt,
     capabilities: getUserCapabilities(user),
+    // The user's own pause (reason included) so the client can lock the composer before the first send.
+    // Built field by field: the raw pause columns and who paused them are never copied.
+    agentPause: getActiveAgentPause(user),
     memberships: user.memberships.map(m => ({
       agencyId: m.agencyId,
       role: m.role,

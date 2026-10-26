@@ -6,7 +6,9 @@ export class ApiError extends Error {
   constructor(
     public readonly statusCode: number,
     public readonly code: string,
-    message: string
+    message: string,
+    /** Extra fields for the client (e.g. which agency blocked a delete). Never secrets. */
+    public readonly details?: Record<string, unknown>
   ) {
     super(message);
   }
@@ -20,6 +22,7 @@ export function errorHandler(error: unknown, _request: Request, response: Respon
   if (error instanceof ApiError) {
     return response.status(error.statusCode).json({
       error: {
+        ...(error.details ?? {}),
         code: error.code,
         message: error.message
       }

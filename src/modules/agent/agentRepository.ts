@@ -13,6 +13,7 @@ import type {
   AgentTaskRecord,
   AgentSourceRecord,
   AgentRunStatus,
+  CompleteRunUsage,
   ListTasksOptions,
   AgentTaskUpdateInput
 } from "./agentTypes";
@@ -39,6 +40,21 @@ function includeThreadDetails() {
     // (e.g. `[...thread.events].reverse()` in buildActiveItineraryContext).
     events: { orderBy: { createdAt: "asc" as const }, take: -THREAD_EVENT_TAIL_LIMIT }
   } as const;
+}
+
+/** The AgentRun usage columns, shared by completed and failed runs. */
+function usageColumns(usage: CompleteRunUsage | undefined) {
+  if (!usage) return {};
+  return {
+    promptTokens: usage.promptTokens,
+    outputTokens: usage.outputTokens,
+    totalTokens: usage.totalTokens,
+    cachedTokens: usage.cachedTokens,
+    thoughtsTokens: usage.thoughtsTokens,
+    costUsd: usage.costUsd,
+    costComplete: usage.costComplete,
+    usageDetail: toJsonInput(usage.detail)
+  };
 }
 
 function toJsonInput(value: unknown): Prisma.InputJsonValue | undefined {
@@ -644,17 +660,7 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           data: {
             status: "COMPLETED",
             completedAt: data.completedAt,
-            ...(data.usage
-              ? {
-                  promptTokens: data.usage.promptTokens,
-                  outputTokens: data.usage.outputTokens,
-                  totalTokens: data.usage.totalTokens,
-                  cachedTokens: data.usage.cachedTokens,
-                  thoughtsTokens: data.usage.thoughtsTokens,
-                  costUsd: data.usage.costUsd,
-                  usageDetail: toJsonInput(data.usage.detail)
-                }
-              : {})
+            ...usageColumns(data.usage)
           }
         });
         if (update.count === 0) {
@@ -722,7 +728,8 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           status: "FAILED",
           failedAt: data.failedAt,
           errorCode: data.errorCode,
-          errorMessage: data.errorMessage
+          errorMessage: data.errorMessage,
+          ...usageColumns(data.usage)
         }
       });
       if (update.count === 0) {

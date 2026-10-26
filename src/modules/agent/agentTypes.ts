@@ -10,6 +10,7 @@ export interface CompleteRunUsage {
   cachedTokens: number;
   thoughtsTokens: number;
   costUsd: number;
+  costComplete: boolean;
   detail: UsageSummary["detail"];
 }
 
@@ -222,7 +223,7 @@ export type AgentOrchestratorAgentService = {
     usage?: CompleteRunUsage,
     options?: CompleteRunOptions
   ): Promise<{ run: AgentRunRecord; message: AgentMessageRecord; events: AgentRunEventRecord[] }>;
-  failRun(runId: string, code: string, message: string): Promise<AgentRunRecord>;
+  failRun(runId: string, code: string, message: string, usage?: CompleteRunUsage): Promise<AgentRunRecord>;
   listOpenTasksForThread(threadId: string): Promise<Array<{ id: string; label: string; status: string }>>;
 };
 
@@ -336,6 +337,7 @@ export interface AgentRepository {
       failedAt: Date;
       errorCode: string;
       errorMessage: string;
+      usage?: CompleteRunUsage;
     }
   ): Promise<AgentRunRecord | null>;
   cancelRunIfOpen(id: string): Promise<AgentRunRecord | null>;

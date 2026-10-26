@@ -36,6 +36,7 @@ import {
   type AskUserAnswersInput
 } from "./askUser";
 import { createPrismaAgentRepository } from "./agentRepository";
+import { getModelProviderInfo } from "../../services/modelProvider";
 
 // ---------------------------------------------------------------------------
 // ProcessSnapshot — server-side representation of a completed run's process.
@@ -216,6 +217,8 @@ export function createAgentService(options: {
   now?: () => Date;
   modelProvider?: string;
   modelName?: string;
+  /** Read per run so the stored model matches the provider selection in use. */
+  modelInfo?: () => { provider: string; model: string };
 }) {
   const now = options.now ?? (() => new Date());
   const modelProvider = options.modelProvider ?? "openai";
@@ -389,6 +392,7 @@ export function createAgentService(options: {
         ...(parsed.imageUrls?.length ? { imageUrls: parsed.imageUrls } : {}),
         ...(storedAnswers ? { answers: storedAnswers } : {})
       };
+      const selected = options.modelInfo?.() ?? { provider: modelProvider, model: modelName };
       const result = await options.repository.createUserMessageAndRun({
         agencyId,
         threadId,
@@ -397,8 +401,8 @@ export function createAgentService(options: {
         metadata: Object.keys(metadata).length > 0 ? metadata : undefined,
         ...(storedAnswers ? { answersTo: storedAnswers.messageId } : {}),
         travelerNeeds: parsed.travelerNeeds,
-        modelProvider,
-        modelName
+        modelProvider: selected.provider,
+        modelName: selected.model
       });
       await touchThread(threadId);
       await maybeRenameFromFirstMessage(threadId, parsed.content);
@@ -584,14 +588,15 @@ export function createAgentService(options: {
       return completed;
     },
 
-    async failRun(runId: string, code: string, message: string) {
+    async failRun(runId: string, code: string, message: string, usage?: CompleteRunUsage) {
       const run = await getRun(runId);
       assertRunOpen(run);
       const failedAt = now();
       const failedRun = await options.repository.failRunIfOpen(runId, {
         failedAt,
         errorCode: code,
-        errorMessage: message
+        errorMessage: message,
+        usage
       });
       if (!failedRun) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");
@@ -622,5 +627,6 @@ export function createAgentService(options: {
 }
 
 export const agentService = createAgentService({
-  repository: createPrismaAgentRepository()
+  repository: createPrismaAgentRepository(),
+  modelInfo: getModelProviderInfo
 });

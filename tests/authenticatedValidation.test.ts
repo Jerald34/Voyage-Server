@@ -188,7 +188,10 @@ vi.mock("../src/modules/agencies/agencyService", () => ({
 vi.mock("../src/modules/admin/accountRepository", () => ({
   adminAccountRepository: {
     listAccounts: mockListAdminAccounts,
-    findAccount: mockFindAdminAccount
+    findAccount: mockFindAdminAccount,
+    listAuditEvents: vi.fn(async () => []),
+    listOwnedAgencies: vi.fn(async () => []),
+    usageSince: vi.fn(async () => ({ costUsd: 0, runCount: 0, costComplete: true }))
   }
 }));
 
@@ -597,11 +600,13 @@ describe("authenticated route validation", () => {
 
     const agencyResponse = await request(app).get("/admin/agencies?status=UNKNOWN");
     const reportResponse = await request(app).get("/admin/reports?status=UNKNOWN");
-    const usageResponse = await request(app).get("/admin/usage?period=century");
+    const usageResponse = await request(app).get("/admin/usage?range=century");
+    const usageRunsResponse = await request(app).get("/admin/usage/runs");
 
     expectValidationError(agencyResponse);
     expectValidationError(reportResponse);
     expectValidationError(usageResponse);
+    expectValidationError(usageRunsResponse);
     expect(mockListAllAgencies).not.toHaveBeenCalled();
     expect(mockListReports).not.toHaveBeenCalled();
   });
@@ -621,6 +626,9 @@ describe("authenticated route validation", () => {
         emailVerifiedAt: new Date("2026-09-01T08:00:00.000Z"),
         createdAt: new Date("2026-08-30T10:00:00.000Z"),
         passwordHash: PASSWORD_HASH,
+        agentPausedAt: null,
+        agentPausedUntil: null,
+        agentPauseReason: null,
         providerAccounts: [{ provider: "GOOGLE" }],
         memberships: [
           { role: "OWNER", status: "ACTIVE", agency: { id: VALID_AGENCY_ID, name: "Alpha Travel", status: "VERIFIED" } }
@@ -672,7 +680,8 @@ describe("authenticated route validation", () => {
                 role: "OWNER",
                 status: "ACTIVE"
               }
-            ]
+            ],
+            agentPause: null
           }
         ]
       });
@@ -695,7 +704,11 @@ describe("authenticated route validation", () => {
         id: VALID_USER_ID,
         emailVerifiedAt: "2026-09-01T08:00:00.000Z",
         updatedAt: "2026-09-15T12:30:00.000Z",
-        activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 }
+        activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 },
+        agentPause: null,
+        auditEvents: [],
+        ownedAgencies: [],
+        usageThisMonth: { costUsd: 0, runCount: 0, costComplete: true }
       });
       expect(JSON.stringify(response.body)).not.toContain("passwordHash");
       expect(JSON.stringify(response.body)).not.toContain(PASSWORD_HASH);

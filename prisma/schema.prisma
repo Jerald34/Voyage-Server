@@ -14,6 +14,7 @@ enum UserRole {
 enum UserStatus {
   ACTIVE
   DISABLED
+  DELETED
 }
 
 enum AuthProvider {
@@ -66,6 +67,12 @@ enum AdminAuditAction {
   AGENCY_UNSUSPENDED
   USER_PROMOTED_TO_ADMIN
   USER_DISABLED
+  USER_ENABLED
+  USER_SESSIONS_REVOKED
+  USER_DELETED
+  AGENCY_OWNERSHIP_TRANSFERRED
+  AGENT_PAUSED
+  AGENT_RESUMED
 }
 
 enum ClientTripStatus {
@@ -157,6 +164,13 @@ model User {
   status              UserStatus               @default(ACTIVE)
   accountType         UserAccountType          @default(PENDING)
   emailVerifiedAt     DateTime?
+  /// Set when a Super Admin deletes (anonymizes) the account.
+  deletedAt           DateTime?
+  /// Agent pause set by a Super Admin. Active while agentPausedAt is set and agentPausedUntil is null (until lifted) or in the future.
+  agentPausedAt       DateTime?
+  agentPausedUntil    DateTime?
+  agentPauseReason    String?
+  agentPausedByUserId String?                  @db.Uuid
   avatarImageId       String?                  @unique @db.Uuid
   avatarImage         ImageAsset?              @relation("UserAvatar", fields: [avatarImageId], references: [id], onDelete: SetNull)
   sessions            Session[]
@@ -588,6 +602,8 @@ model AgentRun {
   cachedTokens   Int?
   thoughtsTokens Int?
   costUsd        Decimal? @db.Decimal(12, 6)
+  /// false when some model call in the run had no price, so costUsd under-counts.
+  costComplete   Boolean  @default(true)
   usageDetail    Json?
   usageUserId    String?  @db.Uuid
   startedAt        DateTime?
@@ -610,6 +626,7 @@ model AgentRun {
   @@index([status])
   @@index([usageUserId, createdAt])
   @@index([agencyId, createdAt])
+  @@index([status, createdAt])
 }
 
 model AgentToolCall {

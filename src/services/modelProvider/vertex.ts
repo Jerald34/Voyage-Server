@@ -19,25 +19,23 @@ type GoogleModelProviderOptions = {
 };
 
 const DEFAULT_GOOGLE_AI_MODEL = "gemini-3-flash-preview";
+// USD per 1M tokens, Standard tier, from https://ai.google.dev/gemini-api/docs/pricing (checked 2026-10-25).
+// Output prices include thinking tokens. Cached input is the context-caching read rate.
+// A model missing here is recorded with a null cost and shown as "unpriced" on the admin Usage tab.
 const GOOGLE_VERTEX_MODEL_PRICING: Record<
   string,
   {
     inputPerMillionTokens: number;
+    cachedInputPerMillionTokens: number;
     outputPerMillionTokens: number;
   }
 > = {
-  "gemini-3-flash-preview": {
-    inputPerMillionTokens: 0.5,
-    outputPerMillionTokens: 3
-  },
-  "gemini-3-pro-preview": {
-    inputPerMillionTokens: 2,
-    outputPerMillionTokens: 12
-  },
-  "gemini-3.5-flash-lite": {
-    inputPerMillionTokens: 0.3,
-    outputPerMillionTokens: 2.5
-  }
+  "gemini-3-flash-preview": { inputPerMillionTokens: 0.5, cachedInputPerMillionTokens: 0.05, outputPerMillionTokens: 3 },
+  "gemini-3-pro-preview": { inputPerMillionTokens: 2, cachedInputPerMillionTokens: 0.2, outputPerMillionTokens: 12 },
+  "gemini-3.1-pro-preview": { inputPerMillionTokens: 2, cachedInputPerMillionTokens: 0.2, outputPerMillionTokens: 12 },
+  "gemini-3.5-flash-lite": { inputPerMillionTokens: 0.3, cachedInputPerMillionTokens: 0.03, outputPerMillionTokens: 2.5 },
+  // Older runs used this model; checked 2026-10-26.
+  "gemini-2.5-flash": { inputPerMillionTokens: 0.3, cachedInputPerMillionTokens: 0.03, outputPerMillionTokens: 2.5 }
 };
 
 type VertexThinkingLevel = "minimal" | "low" | "medium" | "high";
@@ -429,7 +427,17 @@ function resolveServiceAccountAuth(): GoogleAuth | null {
   }
 }
 
-function estimateVertexCost(model: string, usage: ReturnType<typeof extractVertexUsage>) {
+export function estimateVertexCost(
+  model: string,
+  usage:
+    | {
+        promptTokenCount?: number;
+        candidatesTokenCount?: number;
+        cachedContentTokenCount?: number;
+        thoughtsTokenCount?: number;
+      }
+    | undefined
+) {
   if (!usage) {
     return undefined;
   }
@@ -439,12 +447,15 @@ function estimateVertexCost(model: string, usage: ReturnType<typeof extractVerte
     return undefined;
   }
 
+  // promptTokenCount already includes the cached tokens; price each part at its own rate.
   const cachedTokens = usage.cachedContentTokenCount ?? 0;
   const uncachedPromptTokens = usage.promptTokenCount - cachedTokens;
   const promptCost =
     (uncachedPromptTokens / 1_000_000) * pricing.inputPerMillionTokens +
-    (cachedTokens / 1_000_000) * pricing.inputPerMillionTokens * 0.25;
-  const outputCost = (usage.candidatesTokenCount / 1_000_000) * pricing.outputPerMillionTokens;
+    (cachedTokens / 1_000_000) * pricing.cachedInputPerMillionTokens;
+  // Thinking tokens are billed as output.
+  const outputTokens = usage.candidatesTokenCount + (usage.thoughtsTokenCount ?? 0);
+  const outputCost = (outputTokens / 1_000_000) * pricing.outputPerMillionTokens;
 
   return {
     promptCost,

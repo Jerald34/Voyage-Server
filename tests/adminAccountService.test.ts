@@ -3,10 +3,12 @@ import {
   createAdminAccountService,
   toAccountDetail,
   toAccountSummary,
+  type AdminAccountAuditRow,
   type AdminAccountDetailRow,
   type AdminAccountRepository,
   type AdminAccountRow
 } from "../src/modules/admin/accountService";
+import type { OwnedAgency } from "../src/modules/admin/accountActionService";
 
 const USER_ID = "11111111-1111-4111-8111-111111111111";
 const AGENCY_A = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
@@ -27,6 +29,9 @@ function makeRow(overrides: Partial<AdminAccountRow> = {}): AdminAccountRow {
     emailVerifiedAt: new Date("2026-09-01T08:00:00.000Z"),
     createdAt: new Date("2026-08-30T10:00:00.000Z"),
     passwordHash: PASSWORD_HASH,
+    agentPausedAt: null,
+    agentPausedUntil: null,
+    agentPauseReason: null,
     providerAccounts: [],
     memberships: [],
     ...overrides
@@ -42,10 +47,21 @@ function makeDetailRow(overrides: Partial<AdminAccountDetailRow> = {}): AdminAcc
   };
 }
 
-function makeRepository(options: { rows?: AdminAccountRow[]; detail?: AdminAccountDetailRow | null } = {}) {
+function makeRepository(
+  options: {
+    rows?: AdminAccountRow[];
+    detail?: AdminAccountDetailRow | null;
+    audit?: AdminAccountAuditRow[];
+    owned?: OwnedAgency[];
+    usage?: { costUsd: number; runCount: number; costComplete: boolean };
+  } = {}
+) {
   const repository = {
     listAccounts: vi.fn(async () => options.rows ?? []),
-    findAccount: vi.fn(async () => (options.detail === undefined ? null : options.detail))
+    findAccount: vi.fn(async () => (options.detail === undefined ? null : options.detail)),
+    listAuditEvents: vi.fn(async () => options.audit ?? []),
+    listOwnedAgencies: vi.fn(async () => options.owned ?? []),
+    usageSince: vi.fn(async (_userId: string, _from: Date) => options.usage ?? { costUsd: 0, runCount: 0, costComplete: true })
   } satisfies AdminAccountRepository;
   return repository;
 }
@@ -87,7 +103,8 @@ describe("toAccountSummary", () => {
       emailVerified: true,
       createdAt: "2026-08-30T10:00:00.000Z",
       signInMethods: ["PASSWORD"],
-      memberships: []
+      memberships: [],
+      agentPause: null
     });
   });
 
@@ -183,7 +200,8 @@ describe("toAccountSummary", () => {
         "memberships",
         "role",
         "signInMethods",
-        "status"
+        "status",
+        "agentPause"
       ].sort()
     );
     expect(Object.keys(summary.memberships[0]!).sort()).toEqual(
@@ -193,6 +211,38 @@ describe("toAccountSummary", () => {
     expect(json).not.toContain("session-token-hash");
     expect(json).not.toContain("alpha-secret-slug");
     expect(json).not.toContain("membership-secret-id");
+  });
+});
+
+describe("agentPause on accounts", () => {
+  it("shows an active pause and hides an expired one", () => {
+    const active = toAccountSummary(makeRow({ agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "Abuse" }));
+    expect(active.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "Abuse" });
+    const expired = toAccountSummary(
+      makeRow({ agentPausedAt: new Date("2020-01-01T00:00:00.000Z"), agentPausedUntil: new Date("2020-01-02T00:00:00.000Z"), agentPauseReason: "Old" })
+    );
+    expect(expired.agentPause).toBeNull();
+  });
+
+  it("shows a timed pause that has not ended, and never exposes the raw columns", () => {
+    const summary = toAccountSummary(
+      makeRow({
+        agentPausedAt: new Date("2026-10-25T07:00:00.000Z"),
+        agentPausedUntil: new Date("2999-01-01T00:00:00.000Z"),
+        agentPauseReason: "High usage"
+      })
+    );
+    expect(summary.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: "2999-01-01T00:00:00.000Z", reason: "High usage" });
+    expect(summary).not.toHaveProperty("agentPausedAt");
+    expect(summary).not.toHaveProperty("agentPausedUntil");
+    expect(summary).not.toHaveProperty("agentPauseReason");
+  });
+
+  it("carries the pause into the detail too", () => {
+    const detail = toAccountDetail(
+      makeDetailRow({ agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "Abuse" })
+    );
+    expect(detail.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "Abuse" });
   });
 });
 
@@ -209,6 +259,7 @@ describe("toAccountDetail", () => {
       createdAt: "2026-08-30T10:00:00.000Z",
       signInMethods: ["PASSWORD"],
       memberships: [],
+      agentPause: null,
       emailVerifiedAt: "2026-09-01T08:00:00.000Z",
       updatedAt: "2026-09-15T12:30:00.000Z",
       activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 }
@@ -293,5 +344,75 @@ describe("adminAccountService.getAccount", () => {
       code: "ACCOUNT_NOT_FOUND",
       message: "Account not found."
     });
+  });
+});
+
+describe("getAccount audit trail and owned agencies", () => {
+  it("adds the account's audit events (newest first, admin name, ISO dates) and owned agencies", async () => {
+    const repository = makeRepository({
+      detail: makeDetailRow(),
+      audit: [
+        { id: "e2", action: "USER_ENABLED", reason: null, createdAt: new Date("2026-10-19T00:00:00.000Z"), adminUser: { displayName: "Jerald" } },
+        { id: "e1", action: "USER_DISABLED", reason: "left", createdAt: new Date("2026-10-18T00:00:00.000Z"), adminUser: { displayName: "Jerald" } }
+      ],
+      owned: [{ agencyId: AGENCY_A, agencyName: "Alpha", successors: [] }]
+    });
+    const service = createAdminAccountService({ repository });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(repository.listAuditEvents).toHaveBeenCalledWith(USER_ID);
+    expect(account.auditEvents).toEqual([
+      { id: "e2", action: "USER_ENABLED", reason: null, createdAt: "2026-10-19T00:00:00.000Z", adminName: "Jerald" },
+      { id: "e1", action: "USER_DISABLED", reason: "left", createdAt: "2026-10-18T00:00:00.000Z", adminName: "Jerald" }
+    ]);
+    expect(account.ownedAgencies).toEqual([{ agencyId: AGENCY_A, agencyName: "Alpha", successors: [] }]);
+  });
+});
+
+describe("getAccount usage this month", () => {
+  it("adds this calendar month's (UTC) spend and runs", async () => {
+    const repository = makeRepository({ detail: makeDetailRow(), usage: { costUsd: 1.4, runCount: 71, costComplete: true } });
+    const service = createAdminAccountService({ repository, now: () => new Date("2026-10-25T12:00:00.000Z") });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(repository.usageSince).toHaveBeenCalledWith(USER_ID, new Date("2026-10-01T00:00:00.000Z"));
+    expect(account.usageThisMonth).toEqual({ costUsd: 1.4, runCount: 71, costComplete: true });
+  });
+
+  it("passes through that some of this month's runs have no price", async () => {
+    const repository = makeRepository({ detail: makeDetailRow(), usage: { costUsd: 0.9, runCount: 12, costComplete: false } });
+    const service = createAdminAccountService({ repository });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(account.usageThisMonth).toEqual({ costUsd: 0.9, runCount: 12, costComplete: false });
+  });
+
+  it("starts the month at UTC midnight even when the local date is still the previous month", async () => {
+    const repository = makeRepository({ detail: makeDetailRow() });
+    const service = createAdminAccountService({ repository, now: () => new Date("2026-11-01T00:30:00.000Z") });
+
+    await service.getAccount(admin, USER_ID);
+
+    expect(repository.usageSince).toHaveBeenCalledWith(USER_ID, new Date("2026-11-01T00:00:00.000Z"));
+  });
+
+  it("reports zero spend for someone who has never used the agent", async () => {
+    const repository = makeRepository({ detail: makeDetailRow() });
+    const service = createAdminAccountService({ repository });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(account.usageThisMonth).toEqual({ costUsd: 0, runCount: 0, costComplete: true });
+  });
+
+  it("does not read usage for a caller who is not a super admin", async () => {
+    const repository = makeRepository({ detail: makeDetailRow() });
+    const service = createAdminAccountService({ repository });
+
+    await expect(service.getAccount(regularUser, USER_ID)).rejects.toMatchObject({ statusCode: 403 });
+    expect(repository.usageSince).not.toHaveBeenCalled();
   });
 });

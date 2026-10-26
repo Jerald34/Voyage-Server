@@ -1,7 +1,9 @@
 import { ApiError } from "../../http/errors";
+import { getActiveAgentPause, type ActiveAgentPause } from "../agentPause/agentPause";
+import type { OwnedAgency } from "./accountActionService";
 
 export type AdminAccountRole = "USER" | "SUPER_ADMIN";
-export type AdminAccountStatus = "ACTIVE" | "DISABLED";
+export type AdminAccountStatus = "ACTIVE" | "DISABLED" | "DELETED";
 export type AdminAccountType = "PENDING" | "PERSONAL" | "AGENCY_USER";
 export type AdminAccountProvider = "GOOGLE" | "APPLE";
 export type AdminAccountSignInMethod = "PASSWORD" | AdminAccountProvider;
@@ -29,6 +31,9 @@ export interface AdminAccountRow {
   emailVerifiedAt: Date | null;
   createdAt: Date;
   passwordHash: string | null;
+  agentPausedAt: Date | null;
+  agentPausedUntil: Date | null;
+  agentPauseReason: string | null;
   providerAccounts: Array<{ provider: AdminAccountProvider }>;
   memberships: AdminAccountMembershipRow[];
 }
@@ -42,9 +47,30 @@ export interface AdminAccountDetailRow extends AdminAccountRow {
   };
 }
 
+export interface AdminAccountAuditRow {
+  id: string;
+  action: string;
+  reason: string | null;
+  createdAt: Date;
+  adminUser: { displayName: string };
+}
+
+export interface AdminAccountAuditEvent {
+  id: string;
+  action: string;
+  reason: string | null;
+  createdAt: string;
+  adminName: string;
+}
+
 export interface AdminAccountRepository {
   listAccounts(): Promise<AdminAccountRow[]>;
   findAccount(id: string): Promise<AdminAccountDetailRow | null>;
+  /** Admin audit events whose target is this user, newest first, at most 50. */
+  listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]>;
+  listOwnedAgencies(userId: string): Promise<OwnedAgency[]>;
+  /** Spend and run count for metered runs this user triggered since `from`; `costComplete` is false if any of them used an unpriced model. */
+  usageSince(userId: string, from: Date): Promise<AdminAccountUsage>;
 }
 
 export interface AdminAccountServiceUser {
@@ -71,12 +97,27 @@ export interface AdminAccountSummary {
   createdAt: string;
   signInMethods: AdminAccountSignInMethod[];
   memberships: AdminAccountMembership[];
+  /** null when the agent is not paused (or the pause has already ended). */
+  agentPause: ActiveAgentPause | null;
 }
 
 export interface AdminAccountDetail extends AdminAccountSummary {
   emailVerifiedAt: string | null;
   updatedAt: string;
   activity: { itineraries: number; clientTrips: number; agentThreads: number };
+}
+
+export interface AdminAccountUsage {
+  costUsd: number;
+  runCount: number;
+  /** false when some of these runs used a model with no price, so `costUsd` is a lower bound. */
+  costComplete: boolean;
+}
+
+export interface AdminAccountDetailResponse extends AdminAccountDetail {
+  auditEvents: AdminAccountAuditEvent[];
+  ownedAgencies: OwnedAgency[];
+  usageThisMonth: AdminAccountUsage;
 }
 
 function toSignInMethods(row: AdminAccountRow): AdminAccountSignInMethod[] {
@@ -113,7 +154,8 @@ export function toAccountSummary(row: AdminAccountRow): AdminAccountSummary {
       agencyStatus: membership.agency.status,
       role: membership.role,
       status: membership.status
-    }))
+    })),
+    agentPause: getActiveAgentPause(row)
   };
 }
 
@@ -136,7 +178,8 @@ function assertSuperAdmin(user: AdminAccountServiceUser) {
   }
 }
 
-export function createAdminAccountService(options: { repository: AdminAccountRepository }) {
+export function createAdminAccountService(options: { repository: AdminAccountRepository; now?: () => Date }) {
+  const now = options.now ?? (() => new Date());
   return {
     async listAccounts(user: AdminAccountServiceUser): Promise<AdminAccountSummary[]> {
       assertSuperAdmin(user);
@@ -144,13 +187,32 @@ export function createAdminAccountService(options: { repository: AdminAccountRep
       return rows.map(toAccountSummary);
     },
 
-    async getAccount(user: AdminAccountServiceUser, userId: string): Promise<AdminAccountDetail> {
+    async getAccount(user: AdminAccountServiceUser, userId: string): Promise<AdminAccountDetailResponse> {
       assertSuperAdmin(user);
       const row = await options.repository.findAccount(userId);
       if (!row) {
         throw new ApiError(404, "ACCOUNT_NOT_FOUND", "Account not found.");
       }
-      return toAccountDetail(row);
+      // "This month" is the UTC calendar month, matching how the Usage tab buckets days.
+      const current = now();
+      const monthStart = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 1));
+      const [audit, ownedAgencies, usageThisMonth] = await Promise.all([
+        options.repository.listAuditEvents(userId),
+        options.repository.listOwnedAgencies(userId),
+        options.repository.usageSince(userId, monthStart)
+      ]);
+      return {
+        ...toAccountDetail(row),
+        auditEvents: audit.map((event) => ({
+          id: event.id,
+          action: event.action,
+          reason: event.reason,
+          createdAt: event.createdAt.toISOString(),
+          adminName: event.adminUser.displayName
+        })),
+        ownedAgencies,
+        usageThisMonth
+      };
     }
   };
 }

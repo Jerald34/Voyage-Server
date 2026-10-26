@@ -25,7 +25,7 @@ import { createWeatherForecastTool } from "../src/modules/agent/tools/weatherToo
 import { createItineraryService } from "../src/modules/itineraries/itineraryService";
 import type { AgentRunRecord } from "../src/modules/agent/agentService";
 import type { AgentEvent } from "../src/modules/agent/agentSchemas";
-import type { ModelProvider } from "../src/services/modelProvider";
+import type { ModelProvider, ModelUsage } from "../src/services/modelProvider";
 import { ASK_USER_RESUME_BLOCK, DEFAULT_ASK_USER_LEAD_IN, normalizeAskUserInput } from "../src/modules/agent/askUser";
 
 function createRun(overrides: Partial<AgentRunRecord> = {}): AgentRunRecord {
@@ -89,6 +89,8 @@ function createFakeAgentService(run = createRun()) {
   // Captures every completeRun invocation (incl. the optional usage summary) so tests
   // can assert the orchestrator forwards accumulated model usage.
   const completeRunCalls: Array<{ runId: string; assistantContent: string; usage: unknown; options?: any }> = [];
+  // Captures every failRun invocation (incl. the usage spent before the failure).
+  const failRunCalls: Array<{ runId: string; code: string; message: string; usage: unknown }> = [];
   const service: AgentOrchestratorAgentService = {
     async getThread() {
       return {
@@ -261,7 +263,8 @@ function createFakeAgentService(run = createRun()) {
       ];
       return { run, message, events: completedEvents };
     },
-    async failRun(runId, code, message) {
+    async failRun(runId, code, message, usage) {
+      failRunCalls.push({ runId, code, message, usage });
       run.status = "FAILED";
       run.failedAt = new Date("2026-04-28T00:00:00.000Z");
       run.errorCode = code;
@@ -274,7 +277,7 @@ function createFakeAgentService(run = createRun()) {
     }
   };
 
-  return { service, events, run, toolCalls, tasks, sources, completeRunCalls };
+  return { service, events, run, toolCalls, tasks, sources, completeRunCalls, failRunCalls };
 }
 
 // Shared fake usage so every model call reports tokens/cost; the orchestrator should
@@ -1397,6 +1400,33 @@ describe("agent orchestrator", () => {
       "message.completed",
       "run.completed"
     ]);
+  });
+
+  it("passes the usage already spent to failRun when a run fails", async () => {
+    const { service, failRunCalls } = createFakeAgentService();
+    const failingService: AgentOrchestratorAgentService = {
+      ...service,
+      async completeRun() {
+        throw new ApiError(500, "DB_DOWN", "Could not save the reply.");
+      }
+    };
+    const modelProvider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: failingService,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(failRunCalls).toHaveLength(1);
+    expect(failRunCalls[0]).toMatchObject({ code: "DB_DOWN" });
+    expect(failRunCalls[0].usage).toMatchObject({
+      totalTokens: FAKE_MODEL_USAGE.totalTokenCount,
+      promptTokens: FAKE_MODEL_USAGE.promptTokenCount,
+      calls: 1,
+      costComplete: true
+    });
   });
 
   it("falls back to the planned assistant message when second synthesis fails", async () => {
@@ -3384,5 +3414,286 @@ describe("ask_user", () => {
     await createAskOrchestrator(service, provider).run(createRunInput());
 
     expect(provider.calls[0].messages.at(-1)?.content).not.toContain(ASK_USER_RESUME_BLOCK);
+  });
+});
+
+describe("usage metering of side calls", () => {
+  type ScriptedCall = { via: "stream" | "complete"; content: string; usage?: ModelUsage };
+
+  const usageOf = (totalTokenCount: number, total = 0.001): ModelUsage => ({
+    model: "test-model",
+    promptTokenCount: totalTokenCount - 10,
+    candidatesTokenCount: 10,
+    totalTokenCount,
+    cachedContentTokenCount: 0,
+    estimatedCostUsd: { prompt: total / 2, output: total / 2, total }
+  });
+
+  /** Replays an ordered script of stream/complete calls and fails on any call that is off-script. */
+  function createScriptedModelProvider(script: ScriptedCall[]): ModelProvider {
+    const queue = [...script];
+    return {
+      async complete() {
+        const next = queue.shift();
+        if (!next || next.via !== "complete") throw new Error(`Unscripted complete(); next scripted call is ${next?.via ?? "none"}`);
+        return { content: next.content, usage: next.usage };
+      },
+      async *completeStream(input) {
+        const next = queue.shift();
+        if (!next || next.via !== "stream") throw new Error(`Unscripted completeStream(); next scripted call is ${next?.via ?? "none"}`);
+        if (next.content) yield { kind: "text" as const, value: next.content };
+        if (next.usage) input.onUsage?.(next.usage);
+      }
+    };
+  }
+
+  const taskToolCall = JSON.stringify({
+    assistantMessage: "Created a draft itinerary.",
+    toolCalls: [{ name: "record_agent_task", input: { label: "Create draft", status: "COMPLETED" } }]
+  });
+
+  function lastCompletedUsage(completeRunCalls: Array<{ usage: unknown }>) {
+    return completeRunCalls.at(-1)?.usage as {
+      calls: number;
+      totalTokens: number;
+      costUsd: number;
+      detail: Array<{ phase: string; totalTokens: number }>;
+    };
+  }
+
+  const weakCreateItineraryCall = JSON.stringify({
+    assistantMessage: "Creating your Olongapo itinerary now.",
+    toolCalls: [{ name: "create_itinerary", input: { destination: "Olongapo City" } }]
+  });
+  const WEAK_REQUEST = "Create a one-day nature and restaurant itinerary in Olongapo City from 10:00 AM to 4:00 PM.";
+
+  function createItineraryRegistry(service: ReturnType<typeof createFakeAgentService>["service"]) {
+    return createAgentToolRegistry([
+      createCreateItineraryTool({
+        agentService: service,
+        itineraryService: {
+          async createDraftFromStructuredInput() {
+            return { trip: { id: "trip-1" }, itinerary: { id: "itinerary-1" } };
+          }
+        }
+      })
+    ]);
+  }
+
+  it("meters the model call that customizes a weak create_itinerary input", async () => {
+    const { service, completeRunCalls, run } = createFakeAgentService();
+    const customized = JSON.stringify({
+      trip: { title: "1-Day Olongapo Trip", destinationSummary: "Olongapo City" },
+      itinerary: {
+        title: "Olongapo City Day",
+        summary: "A one-day Olongapo City plan.",
+        days: [
+          {
+            dayNumber: 1,
+            title: "Nature And Dining",
+            items: [
+              { type: "ACTIVITY", title: "Nature walk near Subic Bay", startTime: "10:00 AM", endTime: "12:15 PM" },
+              { type: "MEAL", title: "Local restaurant lunch", startTime: "12:30 PM", endTime: "1:45 PM" },
+              { type: "ACTIVITY", title: "Scenic afternoon stop", startTime: "2:00 PM", endTime: "4:00 PM" }
+            ]
+          }
+        ]
+      }
+    });
+    const modelProvider = createModelProvider([weakCreateItineraryCall, customized, "Your one-day Olongapo itinerary has been created."]);
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createItineraryRegistry(service),
+      availableToolNames: ["create_itinerary"]
+    }).run({ ...createRunInput(), userContent: WEAK_REQUEST });
+
+    expect(run.status).toBe("COMPLETED");
+    // initial call + the customizing call + synthesis: all three are metered
+    expect(modelProvider.calls).toHaveLength(3);
+    const usage = lastCompletedUsage(completeRunCalls);
+    expect(usage.calls).toBe(3);
+    expect(usage.totalTokens).toBe(FAKE_MODEL_USAGE.totalTokenCount * 3);
+    expect(usage.detail.map((entry) => entry.phase)).toEqual(["loop", "loop", "synthesis"]);
+  });
+
+  it("still meters the customizing call when its reply cannot be used", async () => {
+    const { service, completeRunCalls, run } = createFakeAgentService();
+    // The customizing reply is not JSON; the deterministic fallback takes over, but the tokens were spent.
+    const modelProvider = createModelProvider([weakCreateItineraryCall, "this is not json", "Done."]);
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createItineraryRegistry(service),
+      availableToolNames: ["create_itinerary"]
+    }).run({ ...createRunInput(), userContent: WEAK_REQUEST });
+
+    expect(run.status).toBe("COMPLETED");
+    const usage = lastCompletedUsage(completeRunCalls);
+    expect(modelProvider.calls).toHaveLength(3);
+    expect(usage.calls).toBe(3);
+  });
+
+  it("meters the model call that recovers a plain-prose itinerary", async () => {
+    const { service, completeRunCalls, run } = createFakeAgentService();
+    const proseItinerary = [
+      "**Olongapo City Nature & Dining Itinerary Plan**",
+      "Morning (10:00 AM - 12:30 PM): Nature Experience",
+      "- Activity: Visit Subic Bay Freeport Zone for beach, hiking, and scenic nature options.",
+      "Lunch (12:30 PM - 1:30 PM): Dining Experience",
+      "- Activity: Eat at a restaurant within or near the Subic Bay Freeport Zone."
+    ].join("\n");
+    const recovered = JSON.stringify({
+      assistantMessage: "Creating the Olongapo draft itinerary now.",
+      toolCalls: [
+        {
+          name: "create_itinerary",
+          input: {
+            trip: { title: "Olongapo City Nature & Dining Trip", destinationSummary: "Olongapo City" },
+            itinerary: {
+              title: "Olongapo City Nature & Dining Itinerary Plan",
+              summary: "A 1-day nature and dining itinerary in Olongapo City.",
+              days: [
+                {
+                  dayNumber: 1,
+                  title: "Nature And Dining",
+                  items: [
+                    { type: "ACTIVITY", title: "Subic Bay Freeport Zone nature experience", startTime: "10:00 AM", endTime: "12:30 PM" },
+                    { type: "MEAL", title: "Dining near Subic Bay Freeport Zone", startTime: "12:30 PM", endTime: "1:30 PM" }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+      ]
+    });
+    const modelProvider = createModelProvider([proseItinerary, recovered, "Your Olongapo City draft itinerary has been created."]);
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createItineraryRegistry(service),
+      availableToolNames: ["create_itinerary"]
+    }).run({ ...createRunInput(), userContent: "Create a proper itinerary plan for Olongapo City from 10am to 4pm." });
+
+    expect(run.status).toBe("COMPLETED");
+    // the prose reply + the recovery call + synthesis: all three are metered
+    expect(modelProvider.calls).toHaveLength(3);
+    const usage = lastCompletedUsage(completeRunCalls);
+    expect(usage.calls).toBe(3);
+    expect(usage.totalTokens).toBe(FAKE_MODEL_USAGE.totalTokenCount * 3);
+  });
+
+  it("keeps the streamed tokens when an empty continuation stream falls back to complete()", async () => {
+    const { service, completeRunCalls, run } = createFakeAgentService();
+    const modelProvider = createScriptedModelProvider([
+      { via: "stream", content: taskToolCall, usage: usageOf(100, 0.001) },
+      // continuation: the stream comes back empty but still spent tokens ...
+      { via: "stream", content: "", usage: usageOf(200, 0.002) },
+      // ... so the fallback call runs, and its tokens are in addition
+      { via: "complete", content: "Created a draft itinerary with the requested updates.", usage: usageOf(300, 0.003) },
+      { via: "stream", content: "All done.", usage: usageOf(400, 0.004) }
+    ]);
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([createRecordAgentTaskTool({ agentService: service })])
+    }).run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const usage = lastCompletedUsage(completeRunCalls);
+    expect(usage.calls).toBe(4);
+    expect(usage.totalTokens).toBe(100 + 200 + 300 + 400);
+    expect(usage.costUsd).toBeCloseTo(0.01, 9);
+    expect(usage.detail.map((entry) => entry.phase)).toEqual(["loop", "loop", "loop", "synthesis"]);
+  });
+
+  it("keeps the streamed tokens when an empty synthesis stream falls back to complete()", async () => {
+    const { service, completeRunCalls, run } = createFakeAgentService();
+    const modelProvider = createScriptedModelProvider([
+      { via: "stream", content: taskToolCall, usage: usageOf(100, 0.001) },
+      { via: "stream", content: "Created a draft itinerary with the requested updates.", usage: usageOf(200, 0.002) },
+      // synthesis: empty stream (tokens spent), then the fallback call
+      { via: "stream", content: "", usage: usageOf(300, 0.003) },
+      { via: "complete", content: "Here is your summary.", usage: usageOf(400, 0.004) }
+    ]);
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([createRecordAgentTaskTool({ agentService: service })])
+    }).run(createRunInput());
+
+    expect(run.status).toBe("COMPLETED");
+    const usage = lastCompletedUsage(completeRunCalls);
+    expect(usage.calls).toBe(4);
+    expect(usage.totalTokens).toBe(100 + 200 + 300 + 400);
+    expect(usage.detail.map((entry) => entry.phase)).toEqual(["loop", "loop", "synthesis", "synthesis"]);
+  });
+
+  it("records no usage on a run that fails before any model call", async () => {
+    const { service, failRunCalls } = createFakeAgentService();
+    const modelProvider: ModelProvider = {
+      async complete() {
+        throw new ApiError(503, "MODEL_UNAVAILABLE", "The model is down.");
+      }
+    };
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    }).run(createRunInput());
+
+    expect(failRunCalls).toHaveLength(1);
+    expect(failRunCalls[0]).toMatchObject({ code: "MODEL_UNAVAILABLE" });
+    expect(failRunCalls[0].usage).toBeUndefined();
+  });
+
+  it("records no usage when a streaming provider fails before any model call", async () => {
+    const { service, failRunCalls } = createFakeAgentService();
+    const modelProvider: ModelProvider = {
+      async complete() {
+        throw new Error("unused");
+      },
+      // eslint-disable-next-line require-yield
+      async *completeStream() {
+        throw new ApiError(503, "MODEL_UNAVAILABLE", "The model is down.");
+      }
+    };
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: service,
+      toolRegistry: createAgentToolRegistry([])
+    }).run(createRunInput());
+
+    expect(failRunCalls).toHaveLength(1);
+    expect(failRunCalls[0].usage).toBeUndefined();
+  });
+
+  it("records the spent usage on a run that fails after a model call", async () => {
+    const { service, failRunCalls } = createFakeAgentService();
+    const modelProvider = createScriptedModelProvider([{ via: "stream", content: taskToolCall, usage: usageOf(100, 0.001) }]);
+    const failingService: AgentOrchestratorAgentService = {
+      ...service,
+      async recordToolCallStarted() {
+        throw new ApiError(500, "DB_DOWN", "Could not record the tool call.");
+      }
+    };
+
+    await createAgentOrchestrator({
+      modelProvider,
+      agentService: failingService,
+      toolRegistry: createAgentToolRegistry([createRecordAgentTaskTool({ agentService: service })])
+    }).run(createRunInput());
+
+    expect(failRunCalls).toHaveLength(1);
+    expect(failRunCalls[0]).toMatchObject({ code: "DB_DOWN" });
+    expect(failRunCalls[0].usage).toMatchObject({ calls: 1, totalTokens: 100 });
   });
 });
