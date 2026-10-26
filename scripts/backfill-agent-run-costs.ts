@@ -1,10 +1,15 @@
 /**
  * backfill-agent-run-costs.ts
  *
- * One-off operator command: reprices historic `AgentRun` rows from their per-call `usageDetail`
- * using the current price table, and fixes `modelName` (it was always "gpt-5-mini"). It
- * corrects `costUsd`, `costComplete`, `usageDetail` and `modelName` only; token columns are
- * never touched. Safe to re-run: a second pass changes nothing.
+ * One-off operator command, meant to be run once after deploying the new pricing: reprices
+ * historic `AgentRun` rows from their per-call `usageDetail` using the current price table, and
+ * fixes `modelName` (it was always "gpt-5-mini") and, for Gemini models, `modelProvider` (it was
+ * always "openai"). It corrects `costUsd`, `costComplete`, `usageDetail`, `modelName` and
+ * `modelProvider` only; token columns are never touched.
+ *
+ * Re-running with an unchanged price table changes nothing. Re-running after a LATER price-table
+ * change re-prices every historic row at the new prices, rewriting past costs; do that only on
+ * purpose. A run whose stored detail is malformed is skipped and listed, never rewritten.
  *
  * Usage:
  *   npm run backfill:run-costs                 dry run (default): print what would change
@@ -25,10 +30,10 @@ function printUsage() {
     [
       "Usage: npm run backfill:run-costs -- [--apply] [--allow-remote] [--batch-size <n>]",
       "",
-      "  (no flags)       Dry run: print each run whose cost/model/costComplete would change,",
+      "  (no flags)       Dry run: print each run whose cost/model/provider/costComplete would change,",
       "                   plus a summary. Writes nothing.",
-      "  --apply          Write costUsd, costComplete, usageDetail and modelName. Refused unless",
-      "                   DATABASE_URL host is localhost/127.0.0.1.",
+      "  --apply          Write costUsd, costComplete, usageDetail, modelName and modelProvider.",
+      "                   Refused unless DATABASE_URL host is localhost/127.0.0.1.",
       "  --allow-remote   Permit --apply against a non-local database (production).",
       "  --batch-size <n> Rows fetched per page (default 200)."
     ].join("\n")
@@ -81,6 +86,7 @@ async function main() {
   const line = (label: string, value: string | number) => console.log(`  ${`${label}:`.padEnd(20)} ${value}`);
   line("runs scanned", summary.scanned);
   line("runs skipped", `${summary.skippedNoDetail} (usageDetail is not a non-empty array of calls)`);
+  line("skipped: malformed", `${summary.skippedMalformed.length} (detail has non-object entries or unusable numbers; left untouched)`);
   line(args.apply ? "runs changed" : "runs to change", summary.changed);
   if (args.apply) line("runs written", summary.applied);
   line("old total cost", usd(summary.oldTotalUsd));
@@ -92,6 +98,13 @@ async function main() {
   if (unpriced.length) {
     console.log("  (runs using an unpriced model keep cost for their priced calls only and are marked costComplete=false;");
     console.log("   add the model to GOOGLE_VERTEX_MODEL_PRICING and re-run to price them.)");
+  }
+  if (summary.skippedMalformed.length > 0) {
+    const shown = summary.skippedMalformed.slice(0, 50);
+    console.log("");
+    console.log("Skipped: malformed detail (fix or review these by hand)");
+    for (const m of shown) console.log(`  ${m.id}  ${m.reason}`);
+    if (summary.skippedMalformed.length > shown.length) console.log(`  ... and ${summary.skippedMalformed.length - shown.length} more`);
   }
   if (!args.apply && summary.changed > 0) console.log("\nDry run only. Re-run with --apply to write these changes.");
 }

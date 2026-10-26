@@ -16,6 +16,8 @@ export interface RepricedUsage {
 
 const UNKNOWN_MODEL = "unknown";
 
+const isEntryObject = (e: unknown): e is Record<string, unknown> => typeof e === "object" && e !== null && !Array.isArray(e);
+
 const count = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) && v > 0 ? v : 0);
 
 function normalizeEntry(raw: Record<string, unknown>, index: number): UsageEntry {
@@ -79,9 +81,7 @@ export function repriceUsageDetail(detail: unknown): RepricedUsage | null;
 export function repriceUsageDetail(detail: unknown): RepricedUsage | null {
   if (!Array.isArray(detail)) return null;
 
-  const entries = detail
-    .filter((e): e is Record<string, unknown> => typeof e === "object" && e !== null && !Array.isArray(e))
-    .map(normalizeEntry);
+  const entries = detail.filter(isEntryObject).map(normalizeEntry);
 
   const summary = summarizeUsage(entries);
   const unpricedModels = [...new Set(entries.filter((e) => e.costUsd === null).map((e) => e.modelName))];
@@ -93,4 +93,33 @@ export function repriceUsageDetail(detail: unknown): RepricedUsage | null {
     modelName: dominantModel(entries),
     unpricedModels
   };
+}
+
+/** Numeric fields `normalizeEntry` rewrites when their value is not a usable count. */
+const COUNT_FIELDS = ["promptTokens", "outputTokens", "cachedTokens", "thoughtsTokens", "totalTokens"] as const;
+
+/**
+ * What `repriceUsageDetail` would silently destroy in a stored detail: entries it drops (not
+ * objects) and numeric fields it rewrites (present but not a non-negative finite number, or a
+ * call index that is not a non-negative integer). A field that is simply absent or null is not a
+ * problem: old rows legitimately lack some of them and read as 0.
+ */
+export function detailProblems(detail: unknown): { dropped: number; coerced: number } {
+  if (!Array.isArray(detail)) return { dropped: 0, coerced: 0 };
+
+  let dropped = 0;
+  let coerced = 0;
+  for (const raw of detail) {
+    if (!isEntryObject(raw)) {
+      dropped += 1;
+      continue;
+    }
+    for (const field of COUNT_FIELDS) {
+      const value = raw[field];
+      if (value !== undefined && value !== null && count(value) !== value) coerced += 1;
+    }
+    const index = raw.callIndex;
+    if (index !== undefined && index !== null && !(typeof index === "number" && Number.isInteger(index) && index >= 0)) coerced += 1;
+  }
+  return { dropped, coerced };
 }

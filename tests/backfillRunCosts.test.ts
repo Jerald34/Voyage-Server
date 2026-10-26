@@ -27,6 +27,7 @@ const row = (id: string, over: Partial<RunRow> = {}): RunRow => ({
   id,
   createdAt: new Date("2026-10-05T00:00:00Z"),
   updatedAt: new Date("2026-10-06T00:00:00Z"),
+  modelProvider: "openai",
   modelName: "gpt-5-mini",
   costUsd: "0.000000",
   costComplete: true,
@@ -96,7 +97,7 @@ describe("planRunUpdate", () => {
     const plan = planRunUpdate(row("a"))!;
     const expected = repriceUsageDetail([call()]).costUsd;
     expect(plan.changed).toBe(true);
-    expect(plan.old).toEqual({ costUsd: 0, costComplete: true, modelName: "gpt-5-mini" });
+    expect(plan.old).toEqual({ costUsd: 0, costComplete: true, modelName: "gpt-5-mini", modelProvider: "openai" });
     expect(plan.next.costUsd).toBeCloseTo(expected, 6);
     expect(plan.next.modelName).toBe("gemini-3-flash-preview");
     expect(plan.data).toMatchObject({ costComplete: true, modelName: "gemini-3-flash-preview" });
@@ -105,7 +106,7 @@ describe("planRunUpdate", () => {
   it("only writes cost bookkeeping: no token columns, updatedAt preserved", () => {
     const r = row("a");
     const keys = Object.keys(planRunUpdate(r)!.data).sort();
-    expect(keys).toEqual(["costComplete", "costUsd", "modelName", "updatedAt", "usageDetail"]);
+    expect(keys).toEqual(["costComplete", "costUsd", "modelName", "modelProvider", "updatedAt", "usageDetail"]);
     expect(planRunUpdate(r)!.data.updatedAt).toBe(r.updatedAt);
   });
 
@@ -119,6 +120,7 @@ describe("planRunUpdate", () => {
   it("reports no change for a run that is already correct", () => {
     const fixed = repriceUsageDetail([call()]);
     const r = row("a", {
+      modelProvider: "vertex",
       modelName: "gemini-3-flash-preview",
       costUsd: fixed.costUsd.toFixed(6),
       costComplete: true,
@@ -135,6 +137,43 @@ describe("planRunUpdate", () => {
     const plan = planRunUpdate(row("a", { usageDetail: [{ promptTokens: 5 }] }))!;
     expect(plan.next.modelName).toBe("gpt-5-mini");
     expect(plan.data).not.toHaveProperty("modelName");
+  });
+
+  it("names the real provider when it names a Gemini model on a run still stamped with the legacy provider", () => {
+    const plan = planRunUpdate(row("a"))!;
+    expect(plan.next.modelProvider).toBe("vertex");
+    expect(plan.data).toMatchObject({ modelName: "gemini-3-flash-preview", modelProvider: "vertex" });
+  });
+
+  it("fixes the provider alone when cost and model are already right", () => {
+    const fixed = repriceUsageDetail([call()]);
+    const r = row("a", {
+      modelName: "gemini-3-flash-preview",
+      costUsd: fixed.costUsd.toFixed(6),
+      usageDetail: fixed.detail
+    });
+    const plan = planRunUpdate(r)!;
+    expect(plan.changed).toBe(true);
+    expect(plan.data).toMatchObject({ modelProvider: "vertex" });
+  });
+
+  it("leaves the provider alone for a non-Gemini model", () => {
+    const plan = planRunUpdate(row("a", { usageDetail: [call({ modelName: "gpt-5-mini" })] }))!;
+    expect(plan.next.modelName).toBe("gpt-5-mini");
+    expect(plan.next.modelProvider).toBe("openai");
+    expect(plan.data).not.toHaveProperty("modelProvider");
+  });
+
+  it("leaves a provider that a newer run already recorded", () => {
+    const plan = planRunUpdate(row("a", { modelProvider: "google_ai" }))!;
+    expect(plan.next.modelProvider).toBe("google_ai");
+    expect(plan.data).not.toHaveProperty("modelProvider");
+  });
+
+  it("does not reprice a run whose detail would lose data", () => {
+    expect(planRunUpdate(row("a", { usageDetail: [null, call()] }))).toBeNull();
+    expect(planRunUpdate(row("a", { usageDetail: [call({ promptTokens: "1000" })] }))).toBeNull();
+    expect(planRunUpdate(row("a", { usageDetail: [call({ outputTokens: -3 })] }))).toBeNull();
   });
 
   it("accepts a numeric costUsd as well as a Decimal-like one", () => {
@@ -179,6 +218,31 @@ describe("backfillRunCosts", () => {
     expect(second).toMatchObject({ scanned: 3, changed: 0, applied: 0 });
     expect(second.oldTotalUsd).toBe(first.newTotalUsd);
     expect(update).not.toHaveBeenCalled();
+  });
+
+  it("skips a run whose detail is malformed instead of rewriting it, and lists it", async () => {
+    const dropped = row("m1", { usageDetail: [call(), null, 7] });
+    const coerced = row("m2", { usageDetail: [call({ promptTokens: "1000" })] });
+    const { client, update } = fakeClient([row("r1"), dropped, coerced]);
+    const log = vi.fn();
+    const s = await backfillRunCosts(client, { apply: true, log });
+
+    expect(s).toMatchObject({ scanned: 1, changed: 1, applied: 1, skippedNoDetail: 0 });
+    expect(s.skippedMalformed.map((m) => m.id)).toEqual(["m1", "m2"]);
+    expect(s.skippedMalformed[0].reason).toMatch(/2 entries/);
+    expect(s.skippedMalformed[1].reason).toMatch(/1 numeric/);
+    expect(update).toHaveBeenCalledTimes(1);
+    expect(update.mock.calls[0][0].where.id).toBe("r1");
+    expect(dropped.usageDetail).toHaveLength(3);
+    expect((coerced.usageDetail as Array<{ promptTokens: unknown }>)[0].promptTokens).toBe("1000");
+    expect(log.mock.calls.some(([line]) => String(line).includes("m1") && String(line).includes("skipped: malformed detail"))).toBe(true);
+  });
+
+  it("counts an unusable detail as no detail, not as malformed", async () => {
+    const { client } = fakeClient([row("a", { usageDetail: [] }), row("b", { usageDetail: { not: "an array" } })]);
+    const s = await backfillRunCosts(client, { apply: false });
+    expect(s).toMatchObject({ scanned: 0, skippedNoDetail: 2 });
+    expect(s.skippedMalformed).toEqual([]);
   });
 
   it("pages through every run with the id cursor", async () => {

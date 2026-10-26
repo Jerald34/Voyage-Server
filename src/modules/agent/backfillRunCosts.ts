@@ -9,9 +9,15 @@
  *
  * Dry-run is the default; nothing is written unless `apply` is set. Token columns are never
  * touched, and `updatedAt` is preserved because the run itself did not change.
+ *
+ * Meant to be run once, after deploying the new pricing. It reprices every historic row from the
+ * CURRENT price table, so re-running it after a later price change re-prices all of them at the
+ * new prices. A run whose stored detail is malformed (non-object entries, or counts that are not
+ * usable numbers) is skipped and listed rather than rewritten, because repricing would drop or
+ * zero that data.
  */
 import { Prisma, type PrismaClient } from "@prisma/client";
-import { repriceUsageDetail } from "./repriceRunUsage";
+import { detailProblems, repriceUsageDetail } from "./repriceRunUsage";
 
 export type BackfillClient = Pick<PrismaClient, "agentRun">;
 
@@ -19,6 +25,7 @@ export interface RunRow {
   id: string;
   createdAt: Date;
   updatedAt: Date;
+  modelProvider: string;
   modelName: string;
   costUsd: { toString(): string } | number | null;
   costComplete: boolean;
@@ -29,8 +36,8 @@ export interface RunPlan {
   id: string;
   createdAt: Date;
   changed: boolean;
-  old: { costUsd: number | null; costComplete: boolean; modelName: string };
-  next: { costUsd: number; costComplete: boolean; modelName: string };
+  old: { costUsd: number | null; costComplete: boolean; modelName: string; modelProvider: string };
+  next: { costUsd: number; costComplete: boolean; modelName: string; modelProvider: string };
   /** model name -> number of this run's calls that had no price. */
   unpricedCalls: Record<string, number>;
   /** Exactly what `--apply` writes for this run. */
@@ -42,6 +49,8 @@ export interface BackfillSummary {
   changed: number;
   applied: number;
   skippedNoDetail: number;
+  /** Runs left untouched because repricing their detail would have dropped or zeroed stored data. */
+  skippedMalformed: Array<{ id: string; reason: string }>;
   oldTotalUsd: number;
   newTotalUsd: number;
   /** model name -> runs and calls that stay unpriced after repricing. */
@@ -96,19 +105,46 @@ function canonical(value: unknown): string {
   return JSON.stringify(value) ?? "null";
 }
 
-/** Reprices one run. Returns null when the run has no usable per-call detail to reprice. */
+/**
+ * Runs written before the real provider was stored all carry this default, whatever model they
+ * used. Anything else was recorded by a newer run and is already right.
+ */
+const LEGACY_MODEL_PROVIDER = "openai";
+/** Where every historic Gemini run was served from; new runs record this value for Gemini models. */
+const GEMINI_PROVIDER = "vertex";
+
+const isGeminiModel = (name: string): boolean => name.toLowerCase().startsWith("gemini-");
+
+/** Why repricing this run's detail would lose data, or null when it is safe. */
+export function malformedDetailReason(usageDetail: unknown): string | null {
+  const { dropped, coerced } = detailProblems(usageDetail);
+  const reasons = [
+    dropped > 0 ? `${dropped} ${dropped === 1 ? "entry is" : "entries are"} not an object` : null,
+    coerced > 0 ? `${coerced} numeric ${coerced === 1 ? "field is" : "fields are"} not a usable number` : null
+  ].filter((r): r is string => r !== null);
+  return reasons.length > 0 ? reasons.join(", ") : null;
+}
+
+/**
+ * Reprices one run. Returns null when the run has no usable per-call detail to reprice, or when
+ * its detail is malformed (see malformedDetailReason): such a run must not be rewritten.
+ */
 export function planRunUpdate(row: RunRow): RunPlan | null {
+  if (malformedDetailReason(row.usageDetail)) return null;
   const repriced = repriceUsageDetail(row.usageDetail);
   if (!repriced || repriced.detail.length === 0) return null;
 
   const oldCost = row.costUsd === null ? null : round6(Number(row.costUsd.toString()));
   const newCost = round6(repriced.costUsd);
   const nextModel = repriced.modelName ?? row.modelName;
+  const nextProvider =
+    row.modelProvider === LEGACY_MODEL_PROVIDER && isGeminiModel(nextModel) ? GEMINI_PROVIDER : row.modelProvider;
 
   const changed =
     oldCost !== newCost ||
     row.costComplete !== repriced.costComplete ||
     row.modelName !== nextModel ||
+    row.modelProvider !== nextProvider ||
     canonical(row.usageDetail) !== canonical(repriced.detail);
 
   const unpricedCalls: Record<string, number> = {};
@@ -120,14 +156,15 @@ export function planRunUpdate(row: RunRow): RunPlan | null {
     id: row.id,
     createdAt: row.createdAt,
     changed,
-    old: { costUsd: oldCost, costComplete: row.costComplete, modelName: row.modelName },
-    next: { costUsd: newCost, costComplete: repriced.costComplete, modelName: nextModel },
+    old: { costUsd: oldCost, costComplete: row.costComplete, modelName: row.modelName, modelProvider: row.modelProvider },
+    next: { costUsd: newCost, costComplete: repriced.costComplete, modelName: nextModel, modelProvider: nextProvider },
     unpricedCalls,
     data: {
       costUsd: newCost,
       costComplete: repriced.costComplete,
       usageDetail: repriced.detail as unknown as Prisma.InputJsonValue,
       ...(repriced.modelName ? { modelName: repriced.modelName } : {}),
+      ...(nextProvider !== row.modelProvider ? { modelProvider: nextProvider } : {}),
       // keep the run's own last-modified time; only its cost bookkeeping is corrected
       updatedAt: row.updatedAt
     }
@@ -144,6 +181,7 @@ export async function backfillRunCosts(client: BackfillClient, options: Backfill
     changed: 0,
     applied: 0,
     skippedNoDetail: 0,
+    skippedMalformed: [],
     oldTotalUsd: 0,
     newTotalUsd: 0,
     unpricedModels: {}
@@ -160,6 +198,7 @@ export async function backfillRunCosts(client: BackfillClient, options: Backfill
         id: true,
         createdAt: true,
         updatedAt: true,
+        modelProvider: true,
         modelName: true,
         costUsd: true,
         costComplete: true,
@@ -169,6 +208,12 @@ export async function backfillRunCosts(client: BackfillClient, options: Backfill
     if (rows.length === 0) break;
 
     for (const row of rows) {
+      const malformed = malformedDetailReason(row.usageDetail);
+      if (malformed) {
+        summary.skippedMalformed.push({ id: row.id, reason: malformed });
+        log(`${row.id}  ${row.createdAt.toISOString().slice(0, 10)}  skipped: malformed detail (${malformed})`);
+        continue;
+      }
       const plan = planRunUpdate(row);
       if (!plan) {
         summary.skippedNoDetail += 1;
@@ -188,6 +233,7 @@ export async function backfillRunCosts(client: BackfillClient, options: Backfill
         `${plan.id}  ${plan.createdAt.toISOString().slice(0, 10)}  ` +
           `cost ${usd(plan.old.costUsd)} -> ${usd(plan.next.costUsd)}  ` +
           `model ${plan.old.modelName} -> ${plan.next.modelName}  ` +
+          `provider ${plan.old.modelProvider} -> ${plan.next.modelProvider}  ` +
           `costComplete ${plan.old.costComplete} -> ${plan.next.costComplete}`
       );
       if (options.apply) {

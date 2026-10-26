@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { repriceUsageDetail } from "../src/modules/agent/repriceRunUsage";
+import { detailProblems, repriceUsageDetail } from "../src/modules/agent/repriceRunUsage";
 import type { UsageEntry } from "../src/modules/agent/agentRunUsage";
 
 const entry = (over: Partial<UsageEntry> = {}): UsageEntry => ({
@@ -126,5 +126,30 @@ describe("repriceUsageDetail", () => {
     const once = repriceUsageDetail([entry(), entry({ callIndex: 1, modelName: "gemini-9-ultra" })]);
     const twice = repriceUsageDetail(once.detail);
     expect(twice).toEqual(once);
+  });
+});
+
+describe("detailProblems", () => {
+  it("finds nothing wrong with a clean detail, including entries that lack optional fields", () => {
+    expect(detailProblems([entry(), entry({ callIndex: 1 })])).toEqual({ dropped: 0, coerced: 0 });
+    expect(detailProblems([{ modelName: "gemini-3-flash-preview", promptTokens: 5, thoughtsTokens: null }])).toEqual({ dropped: 0, coerced: 0 });
+    expect(detailProblems([])).toEqual({ dropped: 0, coerced: 0 });
+  });
+
+  it("counts entries that repricing would drop", () => {
+    expect(detailProblems([null, 7, "x", [], entry()])).toEqual({ dropped: 4, coerced: 0 });
+  });
+
+  it("counts numeric fields that are present but would be rewritten as something else", () => {
+    // the string, the negative, the boolean and the bad index; 1.5 is a usable count
+    expect(detailProblems([{ promptTokens: "1000", outputTokens: -5, cachedTokens: 1.5, thoughtsTokens: true, callIndex: -1 }])).toEqual({
+      dropped: 0,
+      coerced: 4
+    });
+  });
+
+  it("has nothing to report for a detail that is not an array", () => {
+    expect(detailProblems(null)).toEqual({ dropped: 0, coerced: 0 });
+    expect(detailProblems({ not: "an array" })).toEqual({ dropped: 0, coerced: 0 });
   });
 });
