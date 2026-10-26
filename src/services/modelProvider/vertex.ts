@@ -33,7 +33,9 @@ const GOOGLE_VERTEX_MODEL_PRICING: Record<
   "gemini-3-flash-preview": { inputPerMillionTokens: 0.5, cachedInputPerMillionTokens: 0.05, outputPerMillionTokens: 3 },
   "gemini-3-pro-preview": { inputPerMillionTokens: 2, cachedInputPerMillionTokens: 0.2, outputPerMillionTokens: 12 },
   "gemini-3.1-pro-preview": { inputPerMillionTokens: 2, cachedInputPerMillionTokens: 0.2, outputPerMillionTokens: 12 },
-  "gemini-3.5-flash-lite": { inputPerMillionTokens: 0.3, cachedInputPerMillionTokens: 0.03, outputPerMillionTokens: 2.5 }
+  "gemini-3.5-flash-lite": { inputPerMillionTokens: 0.3, cachedInputPerMillionTokens: 0.03, outputPerMillionTokens: 2.5 },
+  // Older runs used this model; checked 2026-10-26.
+  "gemini-2.5-flash": { inputPerMillionTokens: 0.3, cachedInputPerMillionTokens: 0.03, outputPerMillionTokens: 2.5 }
 };
 
 type VertexThinkingLevel = "minimal" | "low" | "medium" | "high";

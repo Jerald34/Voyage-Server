@@ -110,10 +110,10 @@ describe("planRunUpdate", () => {
   });
 
   it("flags an unpriced model as incomplete and lists it", () => {
-    const plan = planRunUpdate(row("a", { usageDetail: [call({ modelName: "gemini-2.5-flash" }), call({ callIndex: 1, modelName: "gemini-2.5-flash" })] }))!;
+    const plan = planRunUpdate(row("a", { usageDetail: [call({ modelName: "gemini-9-ultra" }), call({ callIndex: 1, modelName: "gemini-9-ultra" })] }))!;
     expect(plan.next.costComplete).toBe(false);
     expect(plan.next.costUsd).toBe(0);
-    expect(plan.unpricedCalls).toEqual({ "gemini-2.5-flash": 2 });
+    expect(plan.unpricedCalls).toEqual({ "gemini-9-ultra": 2 });
   });
 
   it("reports no change for a run that is already correct", () => {
@@ -146,7 +146,7 @@ describe("planRunUpdate", () => {
 describe("backfillRunCosts", () => {
   const rows = () => [
     row("r1"),
-    row("r2", { usageDetail: [call({ modelName: "gemini-2.5-flash" })] }),
+    row("r2", { usageDetail: [call({ modelName: "gemini-9-ultra" })] }),
     row("r3", { usageDetail: null }),
     row("r4", { usageDetail: [] }),
     row("r5", { usageDetail: [call({ modelName: "gemini-3.5-flash-lite" }), call({ callIndex: 1, phase: "synthesis", modelName: "gemini-3.5-flash-lite" })] })
@@ -159,7 +159,7 @@ describe("backfillRunCosts", () => {
     expect(update).not.toHaveBeenCalled();
     expect(s).toMatchObject({ scanned: 3, changed: 3, applied: 0, skippedNoDetail: 1 });
     expect(s.newTotalUsd).toBeGreaterThan(s.oldTotalUsd);
-    expect(s.unpricedModels).toEqual({ "gemini-2.5-flash": { runs: 1, calls: 1 } });
+    expect(s.unpricedModels).toEqual({ "gemini-9-ultra": { runs: 1, calls: 1 } });
     expect(log).toHaveBeenCalledTimes(3);
     expect(log.mock.calls[0][0]).toContain("r1");
     expect(log.mock.calls[0][0]).toContain("gpt-5-mini -> gemini-3-flash-preview");

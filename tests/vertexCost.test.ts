@@ -28,4 +28,14 @@ describe("estimateVertexCost", () => {
     expect(estimateVertexCost("gemini-3.5-flash-lite", undefined)).toBeUndefined();
     expect(estimateVertexCost("gemini-3.5-flash-lite", { promptTokenCount: 10 })).toBeUndefined();
   });
+  it("prices gemini-2.5-flash, which older runs used", () => {
+    const cost = estimateVertexCost("gemini-2.5-flash", {
+      promptTokenCount: 1_000_000,
+      cachedContentTokenCount: 500_000,
+      candidatesTokenCount: 100_000,
+      thoughtsTokenCount: 100_000
+    });
+    // input: 0.5M × $0.30 + 0.5M × $0.03; output: 0.2M × $2.50
+    expect(cost!.totalCost).toBeCloseTo(0.665, 9);
+  });
 });

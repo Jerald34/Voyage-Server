@@ -48,12 +48,12 @@ describe("repriceUsageDetail", () => {
   });
 
   it("records an unpriced model as null and marks the run incomplete", () => {
-    const r = repriceUsageDetail([entry({ modelName: "gemini-2.5-flash", costUsd: 0 })]);
+    const r = repriceUsageDetail([entry({ modelName: "gemini-9-ultra", costUsd: 0 })]);
     expect(r.detail[0].costUsd).toBeNull();
     expect(r.costUsd).toBe(0);
     expect(r.costComplete).toBe(false);
-    expect(r.modelName).toBe("gemini-2.5-flash");
-    expect(r.unpricedModels).toEqual(["gemini-2.5-flash"]);
+    expect(r.modelName).toBe("gemini-9-ultra");
+    expect(r.unpricedModels).toEqual(["gemini-9-ultra"]);
   });
 
   it("sums only the priced calls of a mixed run and reports the unpriced model once", () => {
@@ -123,7 +123,7 @@ describe("repriceUsageDetail", () => {
   });
 
   it("is idempotent: repricing its own output changes nothing", () => {
-    const once = repriceUsageDetail([entry(), entry({ callIndex: 1, modelName: "gemini-2.5-flash" })]);
+    const once = repriceUsageDetail([entry(), entry({ callIndex: 1, modelName: "gemini-9-ultra" })]);
     const twice = repriceUsageDetail(once.detail);
     expect(twice).toEqual(once);
   });
