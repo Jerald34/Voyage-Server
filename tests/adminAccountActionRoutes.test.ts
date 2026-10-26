@@ -33,7 +33,8 @@ vi.mock("../src/modules/admin/accountRepository", () => ({
     listAccounts: vi.fn(async () => []),
     findAccount: mocks.findAccount,
     listAuditEvents: vi.fn(async () => []),
-    listOwnedAgencies: vi.fn(async () => [])
+    listOwnedAgencies: vi.fn(async () => []),
+    usageSince: vi.fn(async () => ({ costUsd: 0, runCount: 0 }))
   }
 }));
 
@@ -84,7 +85,13 @@ describe("POST /admin/users/:userId/disable", () => {
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/disable`).send({ reason: "spam" });
 
     expect(res.status).toBe(200);
-    expect(res.body.user).toMatchObject({ id: USER_ID, status: "DISABLED", auditEvents: [], ownedAgencies: [] });
+    expect(res.body.user).toMatchObject({
+      id: USER_ID,
+      status: "DISABLED",
+      auditEvents: [],
+      ownedAgencies: [],
+      usageThisMonth: { costUsd: 0, runCount: 0 }
+    });
     expect(mocks.setStatus).toHaveBeenCalledWith({ userId: USER_ID, status: "DISABLED", adminUserId: "admin-1", reason: "spam" });
   });
 

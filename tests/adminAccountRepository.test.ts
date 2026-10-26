@@ -1,17 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-const { mockFindMany, mockFindUnique, mockAuditFindMany, mockAgencyFindMany } = vi.hoisted(() => ({
+const { mockFindMany, mockFindUnique, mockAuditFindMany, mockAgencyFindMany, mockRunAggregate } = vi.hoisted(() => ({
   mockFindMany: vi.fn(),
   mockFindUnique: vi.fn(),
   mockAuditFindMany: vi.fn(),
-  mockAgencyFindMany: vi.fn()
+  mockAgencyFindMany: vi.fn(),
+  mockRunAggregate: vi.fn()
 }));
 
 vi.mock("../src/db/prisma", () => ({
   prisma: {
     user: { findMany: mockFindMany, findUnique: mockFindUnique },
     adminAuditEvent: { findMany: mockAuditFindMany },
-    agency: { findMany: mockAgencyFindMany }
+    agency: { findMany: mockAgencyFindMany },
+    agentRun: { aggregate: mockRunAggregate }
   }
 }));
 
@@ -35,6 +37,7 @@ beforeEach(() => {
   mockFindUnique.mockResolvedValue(null);
   mockAuditFindMany.mockResolvedValue([]);
   mockAgencyFindMany.mockResolvedValue([]);
+  mockRunAggregate.mockResolvedValue({ _sum: { costUsd: null }, _count: { _all: 0 } });
 });
 
 describe("adminAccountRepository.listAccounts", () => {
@@ -152,5 +155,32 @@ describe("adminAccountRepository.listOwnedAgencies", () => {
       }
     ]);
     expect(mockAgencyFindMany.mock.calls[0]![0].where).toEqual({ ownerUserId: USER_ID });
+  });
+});
+
+describe("adminAccountRepository.usageSince", () => {
+  it("sums the cost and counts the metered (completed or failed, token-counted) runs the user triggered since the date", async () => {
+    mockRunAggregate.mockResolvedValue({ _sum: { costUsd: "1.400000" }, _count: { _all: 71 } });
+    const from = new Date("2026-10-01T00:00:00.000Z");
+
+    await expect(adminAccountRepository.usageSince(USER_ID, from)).resolves.toEqual({ costUsd: 1.4, runCount: 71 });
+
+    expect(mockRunAggregate).toHaveBeenCalledWith({
+      where: {
+        usageUserId: USER_ID,
+        createdAt: { gte: from },
+        status: { in: ["COMPLETED", "FAILED"] },
+        totalTokens: { not: null }
+      },
+      _sum: { costUsd: true },
+      _count: { _all: true }
+    });
+  });
+
+  it("treats a person with no runs as zero spend (a null sum)", async () => {
+    await expect(adminAccountRepository.usageSince(USER_ID, new Date("2026-10-01T00:00:00.000Z"))).resolves.toEqual({
+      costUsd: 0,
+      runCount: 0
+    });
   });
 });

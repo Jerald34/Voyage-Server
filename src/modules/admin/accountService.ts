@@ -65,6 +65,8 @@ export interface AdminAccountRepository {
   /** Admin audit events whose target is this user, newest first, at most 50. */
   listAuditEvents(userId: string): Promise<AdminAccountAuditRow[]>;
   listOwnedAgencies(userId: string): Promise<OwnedAgency[]>;
+  /** Spend and run count for metered runs this user triggered since `from`. */
+  usageSince(userId: string, from: Date): Promise<{ costUsd: number; runCount: number }>;
 }
 
 export interface AdminAccountServiceUser {
@@ -99,9 +101,15 @@ export interface AdminAccountDetail extends AdminAccountSummary {
   activity: { itineraries: number; clientTrips: number; agentThreads: number };
 }
 
+export interface AdminAccountUsage {
+  costUsd: number;
+  runCount: number;
+}
+
 export interface AdminAccountDetailResponse extends AdminAccountDetail {
   auditEvents: AdminAccountAuditEvent[];
   ownedAgencies: OwnedAgency[];
+  usageThisMonth: AdminAccountUsage;
 }
 
 function toSignInMethods(row: AdminAccountRow): AdminAccountSignInMethod[] {
@@ -161,7 +169,8 @@ function assertSuperAdmin(user: AdminAccountServiceUser) {
   }
 }
 
-export function createAdminAccountService(options: { repository: AdminAccountRepository }) {
+export function createAdminAccountService(options: { repository: AdminAccountRepository; now?: () => Date }) {
+  const now = options.now ?? (() => new Date());
   return {
     async listAccounts(user: AdminAccountServiceUser): Promise<AdminAccountSummary[]> {
       assertSuperAdmin(user);
@@ -175,9 +184,13 @@ export function createAdminAccountService(options: { repository: AdminAccountRep
       if (!row) {
         throw new ApiError(404, "ACCOUNT_NOT_FOUND", "Account not found.");
       }
-      const [audit, ownedAgencies] = await Promise.all([
+      // "This month" is the UTC calendar month, matching how the Usage tab buckets days.
+      const current = now();
+      const monthStart = new Date(Date.UTC(current.getUTCFullYear(), current.getUTCMonth(), 1));
+      const [audit, ownedAgencies, usageThisMonth] = await Promise.all([
         options.repository.listAuditEvents(userId),
-        options.repository.listOwnedAgencies(userId)
+        options.repository.listOwnedAgencies(userId),
+        options.repository.usageSince(userId, monthStart)
       ]);
       return {
         ...toAccountDetail(row),
@@ -188,7 +201,8 @@ export function createAdminAccountService(options: { repository: AdminAccountRep
           createdAt: event.createdAt.toISOString(),
           adminName: event.adminUser.displayName
         })),
-        ownedAgencies
+        ownedAgencies,
+        usageThisMonth
       };
     }
   };

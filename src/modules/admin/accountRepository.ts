@@ -60,5 +60,20 @@ export const adminAccountRepository: AdminAccountRepository = {
 
   listOwnedAgencies(userId: string) {
     return findOwnedAgencies(prisma, userId);
+  },
+
+  async usageSince(userId: string, from: Date) {
+    // Same definition of "metered" as the Usage tab: finished runs that recorded token counts.
+    const result = await prisma.agentRun.aggregate({
+      where: {
+        usageUserId: userId,
+        createdAt: { gte: from },
+        status: { in: ["COMPLETED", "FAILED"] },
+        totalTokens: { not: null }
+      },
+      _sum: { costUsd: true },
+      _count: { _all: true }
+    });
+    return { costUsd: Number(result._sum.costUsd ?? 0), runCount: result._count._all };
   }
 };

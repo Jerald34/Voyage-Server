@@ -45,13 +45,20 @@ function makeDetailRow(overrides: Partial<AdminAccountDetailRow> = {}): AdminAcc
 }
 
 function makeRepository(
-  options: { rows?: AdminAccountRow[]; detail?: AdminAccountDetailRow | null; audit?: AdminAccountAuditRow[]; owned?: OwnedAgency[] } = {}
+  options: {
+    rows?: AdminAccountRow[];
+    detail?: AdminAccountDetailRow | null;
+    audit?: AdminAccountAuditRow[];
+    owned?: OwnedAgency[];
+    usage?: { costUsd: number; runCount: number };
+  } = {}
 ) {
   const repository = {
     listAccounts: vi.fn(async () => options.rows ?? []),
     findAccount: vi.fn(async () => (options.detail === undefined ? null : options.detail)),
     listAuditEvents: vi.fn(async () => options.audit ?? []),
-    listOwnedAgencies: vi.fn(async () => options.owned ?? [])
+    listOwnedAgencies: vi.fn(async () => options.owned ?? []),
+    usageSince: vi.fn(async (_userId: string, _from: Date) => options.usage ?? { costUsd: 0, runCount: 0 })
   } satisfies AdminAccountRepository;
   return repository;
 }
@@ -322,5 +329,43 @@ describe("getAccount audit trail and owned agencies", () => {
       { id: "e1", action: "USER_DISABLED", reason: "left", createdAt: "2026-10-18T00:00:00.000Z", adminName: "Jerald" }
     ]);
     expect(account.ownedAgencies).toEqual([{ agencyId: AGENCY_A, agencyName: "Alpha", successors: [] }]);
+  });
+});
+
+describe("getAccount usage this month", () => {
+  it("adds this calendar month's (UTC) spend and runs", async () => {
+    const repository = makeRepository({ detail: makeDetailRow(), usage: { costUsd: 1.4, runCount: 71 } });
+    const service = createAdminAccountService({ repository, now: () => new Date("2026-10-25T12:00:00.000Z") });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(repository.usageSince).toHaveBeenCalledWith(USER_ID, new Date("2026-10-01T00:00:00.000Z"));
+    expect(account.usageThisMonth).toEqual({ costUsd: 1.4, runCount: 71 });
+  });
+
+  it("starts the month at UTC midnight even when the local date is still the previous month", async () => {
+    const repository = makeRepository({ detail: makeDetailRow() });
+    const service = createAdminAccountService({ repository, now: () => new Date("2026-11-01T00:30:00.000Z") });
+
+    await service.getAccount(admin, USER_ID);
+
+    expect(repository.usageSince).toHaveBeenCalledWith(USER_ID, new Date("2026-11-01T00:00:00.000Z"));
+  });
+
+  it("reports zero spend for someone who has never used the agent", async () => {
+    const repository = makeRepository({ detail: makeDetailRow() });
+    const service = createAdminAccountService({ repository });
+
+    const account = await service.getAccount(admin, USER_ID);
+
+    expect(account.usageThisMonth).toEqual({ costUsd: 0, runCount: 0 });
+  });
+
+  it("does not read usage for a caller who is not a super admin", async () => {
+    const repository = makeRepository({ detail: makeDetailRow() });
+    const service = createAdminAccountService({ repository });
+
+    await expect(service.getAccount(regularUser, USER_ID)).rejects.toMatchObject({ statusCode: 403 });
+    expect(repository.usageSince).not.toHaveBeenCalled();
   });
 });
