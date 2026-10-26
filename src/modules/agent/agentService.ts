@@ -584,14 +584,15 @@ export function createAgentService(options: {
       return completed;
     },
 
-    async failRun(runId: string, code: string, message: string) {
+    async failRun(runId: string, code: string, message: string, usage?: CompleteRunUsage) {
       const run = await getRun(runId);
       assertRunOpen(run);
       const failedAt = now();
       const failedRun = await options.repository.failRunIfOpen(runId, {
         failedAt,
         errorCode: code,
-        errorMessage: message
+        errorMessage: message,
+        usage
       });
       if (!failedRun) {
         throw new ApiError(409, "AGENT_RUN_ALREADY_FINISHED", "Agent run is already finished.");

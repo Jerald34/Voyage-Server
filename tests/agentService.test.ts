@@ -577,6 +577,27 @@ describe("agent service", () => {
     expect(seen).toEqual([{ needs: ["WHEELCHAIR"], notes: null }, undefined]);
   });
 
+  it("stores the usage spent before a run failed", async () => {
+    const repository = createMemoryRepository();
+    const seen: unknown[] = [];
+    const original = repository.failRunIfOpen.bind(repository);
+    repository.failRunIfOpen = async (id, data) => {
+      seen.push(data.usage);
+      return original(id, data);
+    };
+    const service = createAgentService({ repository });
+    const thread = await service.createThread("agency-1", "user-1", { title: "Cebu planning" });
+    const { run } = await service.appendUserMessageAndCreateRun("agency-1", thread.id, "user-1", "Start");
+    const usage = {
+      promptTokens: 900, outputTokens: 40, totalTokens: 940, cachedTokens: 0, thoughtsTokens: 12,
+      costUsd: 0.0004, costComplete: true, detail: []
+    };
+
+    await service.failRun(run.id, "MODEL_ERROR", "Model request failed.", usage);
+
+    expect(seen).toEqual([usage]);
+  });
+
   it("appends a user message and creates a queued run", async () => {
     const repository = createMemoryRepository();
     const service = createAgentService({

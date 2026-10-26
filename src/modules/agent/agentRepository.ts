@@ -728,7 +728,8 @@ export function createPrismaAgentRepository(client: PrismaClient = prisma): Agen
           status: "FAILED",
           failedAt: data.failedAt,
           errorCode: data.errorCode,
-          errorMessage: data.errorMessage
+          errorMessage: data.errorMessage,
+          ...usageColumns(data.usage)
         }
       });
       if (update.count === 0) {

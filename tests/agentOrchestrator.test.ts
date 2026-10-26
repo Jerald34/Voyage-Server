@@ -89,6 +89,8 @@ function createFakeAgentService(run = createRun()) {
   // Captures every completeRun invocation (incl. the optional usage summary) so tests
   // can assert the orchestrator forwards accumulated model usage.
   const completeRunCalls: Array<{ runId: string; assistantContent: string; usage: unknown; options?: any }> = [];
+  // Captures every failRun invocation (incl. the usage spent before the failure).
+  const failRunCalls: Array<{ runId: string; code: string; message: string; usage: unknown }> = [];
   const service: AgentOrchestratorAgentService = {
     async getThread() {
       return {
@@ -261,7 +263,8 @@ function createFakeAgentService(run = createRun()) {
       ];
       return { run, message, events: completedEvents };
     },
-    async failRun(runId, code, message) {
+    async failRun(runId, code, message, usage) {
+      failRunCalls.push({ runId, code, message, usage });
       run.status = "FAILED";
       run.failedAt = new Date("2026-04-28T00:00:00.000Z");
       run.errorCode = code;
@@ -274,7 +277,7 @@ function createFakeAgentService(run = createRun()) {
     }
   };
 
-  return { service, events, run, toolCalls, tasks, sources, completeRunCalls };
+  return { service, events, run, toolCalls, tasks, sources, completeRunCalls, failRunCalls };
 }
 
 // Shared fake usage so every model call reports tokens/cost; the orchestrator should
@@ -1397,6 +1400,33 @@ describe("agent orchestrator", () => {
       "message.completed",
       "run.completed"
     ]);
+  });
+
+  it("passes the usage already spent to failRun when a run fails", async () => {
+    const { service, failRunCalls } = createFakeAgentService();
+    const failingService: AgentOrchestratorAgentService = {
+      ...service,
+      async completeRun() {
+        throw new ApiError(500, "DB_DOWN", "Could not save the reply.");
+      }
+    };
+    const modelProvider = createModelProvider("Here is a draft itinerary.");
+    const orchestrator = createAgentOrchestrator({
+      modelProvider,
+      agentService: failingService,
+      toolRegistry: createAgentToolRegistry([])
+    });
+
+    await orchestrator.run(createRunInput());
+
+    expect(failRunCalls).toHaveLength(1);
+    expect(failRunCalls[0]).toMatchObject({ code: "DB_DOWN" });
+    expect(failRunCalls[0].usage).toMatchObject({
+      totalTokens: FAKE_MODEL_USAGE.totalTokenCount,
+      promptTokens: FAKE_MODEL_USAGE.promptTokenCount,
+      calls: 1,
+      costComplete: true
+    });
   });
 
   it("falls back to the planned assistant message when second synthesis fails", async () => {

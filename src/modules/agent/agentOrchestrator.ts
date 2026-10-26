@@ -55,7 +55,7 @@ import {
   recoverSynthesizedMessage,
   stringifyToolResults
 } from "./agentUtils";
-import { createUsageAccumulator } from "./agentRunUsage";
+import { createUsageAccumulator, type UsageSummary } from "./agentRunUsage";
 import {
   detectInitialOutputMode,
   GRANULAR_ITINERARY_TOOL_NAMES,
@@ -168,10 +168,10 @@ export function createAgentOrchestrator(options: {
     return PROMPT_LEAK_REFUSAL;
   }
 
-  async function failRun(input: AgentOrchestratorRunInput, error: unknown) {
+  async function failRun(input: AgentOrchestratorRunInput, error: unknown, usage?: UsageSummary) {
     const details = errorDetails(error);
     agentLogger.error("Agent Run Failed", input.runId, { code: details.code, message: details.message, error });
-    await options.agentService.failRun(input.runId, details.code, details.message);
+    await options.agentService.failRun(input.runId, details.code, details.message, usage);
   }
 
   async function streamAndComplete(
@@ -469,7 +469,7 @@ export function createAgentOrchestrator(options: {
           agentLogger.modelOutput(input.runId, modelContent, modelUsage);
           usage.add("loop", modelUsage);
         } catch (error) {
-          await failRun(input, error);
+          await failRun(input, error, usage.summary());
           return;
         }
 
@@ -508,7 +508,7 @@ export function createAgentOrchestrator(options: {
             }
 
             if (!parsedOutput) {
-              await failRun(input, error);
+              await failRun(input, error, usage.summary());
               return;
             }
           }
@@ -743,7 +743,7 @@ export function createAgentOrchestrator(options: {
           await executeToolCallsBatch(parsedOutput.toolCalls);
         } catch (error) {
           if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }
-          await failRun(input, error);
+          await failRun(input, error, usage.summary());
           return;
         }
         if (asked.payload) {
@@ -934,7 +934,7 @@ export function createAgentOrchestrator(options: {
             await executeToolCallsBatch(nextParsed.toolCalls);
           } catch (error) {
             if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }
-            await failRun(input, error);
+            await failRun(input, error, usage.summary());
             return;
           }
           if (asked.payload) {
@@ -1080,7 +1080,7 @@ export function createAgentOrchestrator(options: {
 
       } catch (error) {
         if (signal?.aborted) { agentLogger.debug(input.runId, "Run cancelled by user"); return; }
-        await failRun(input, error);
+        await failRun(input, error, usage.summary());
       } finally {
         options.toolRegistry.clearRun?.(input.runId);
       }
