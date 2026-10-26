@@ -4,7 +4,7 @@ import { requireSuperAdmin } from "../../http/authMiddleware";
 import { idParamsSchema } from "../../http/requestSchemas";
 import { agencyReviewSchema } from "../agencies/agencySchemas";
 import { agencyService } from "../agencies/agencyService";
-import { createUsageService, usageQuerySchema } from "./usageService";
+import { createUsageService, usageQuerySchema, usageRunsQuerySchema } from "./usageService";
 import { usageRepository } from "./usageRepository";
 import { createAdminAccountService } from "./accountService";
 import { adminAccountRepository } from "./accountRepository";
@@ -32,6 +32,7 @@ const adminUsersQuerySchema = z.object({}).strict();
 const reportIdParamsSchema = idParamsSchema("id");
 const agencyIdParamsSchema = idParamsSchema("agencyId");
 const userIdParamsSchema = idParamsSchema("userId");
+const runIdParamsSchema = idParamsSchema("runId");
 
 export const adminRoutes = Router();
 
@@ -77,9 +78,22 @@ adminRoutes.get("/users", requireSuperAdmin, async (request, response, next) => 
 
 adminRoutes.get("/usage", requireSuperAdmin, async (request, response, next) => {
   try {
-    const { period, groupBy, from, to } = usageQuerySchema.parse(request.query);
-    const result = await usageService.getUsage(request.authUser!, { period, groupBy, from, to });
-    response.json(result);
+    const query = usageQuerySchema.parse(request.query);
+    response.json(await usageService.getUsage(request.authUser!, query));
+  } catch (error) { next(error); }
+});
+
+adminRoutes.get("/usage/runs", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const query = usageRunsQuerySchema.parse(request.query);
+    response.json(await usageService.getRuns(request.authUser!, query));
+  } catch (error) { next(error); }
+});
+
+adminRoutes.get("/usage/runs/:runId", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const { runId } = runIdParamsSchema.parse(request.params);
+    response.json(await usageService.getRun(request.authUser!, runId));
   } catch (error) { next(error); }
 });
 

@@ -599,11 +599,13 @@ describe("authenticated route validation", () => {
 
     const agencyResponse = await request(app).get("/admin/agencies?status=UNKNOWN");
     const reportResponse = await request(app).get("/admin/reports?status=UNKNOWN");
-    const usageResponse = await request(app).get("/admin/usage?period=century");
+    const usageResponse = await request(app).get("/admin/usage?range=century");
+    const usageRunsResponse = await request(app).get("/admin/usage/runs");
 
     expectValidationError(agencyResponse);
     expectValidationError(reportResponse);
     expectValidationError(usageResponse);
+    expectValidationError(usageRunsResponse);
     expect(mockListAllAgencies).not.toHaveBeenCalled();
     expect(mockListReports).not.toHaveBeenCalled();
   });
