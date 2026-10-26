@@ -78,9 +78,20 @@ describe("usageRepository.listRunUsage", () => {
         modelNames: ["gemini-3.5-flash-lite", "mystery"],
         unpricedModelNames: ["mystery"],
         callCount: 2,
-        userAgentPause: null
+        userAgentPause: null,
+        userIsSuperAdmin: false
       })
     ]);
+  });
+
+  it("marks a super admin's rows so the Usage tab doesn't offer to pause them", async () => {
+    m.runFindMany.mockResolvedValue([run(), run({ id: "r2", usageUserId: "u2" }), run({ id: "r3", usageUserId: null, agencyId: null, agency: null })]);
+    m.userFindMany.mockResolvedValue([
+      { id: "u1", displayName: "Ana", role: "USER", accountType: "AGENCY_USER", memberships: [] },
+      { id: "u2", displayName: "Root", role: "SUPER_ADMIN", accountType: "AGENCY_USER", memberships: [] }
+    ]);
+    const rows = await usageRepository.listRunUsage({ from: FROM, to: TO });
+    expect(rows.map((r) => r.userIsSuperAdmin)).toEqual([false, true, false]);
   });
 
   it("selects only the pause fields it needs and gives a paused user's row the active pause", async () => {
@@ -96,6 +107,7 @@ describe("usageRepository.listRunUsage", () => {
       id: true,
       displayName: true,
       accountType: true,
+      role: true,
       memberships: { select: { agencyId: true, role: true } },
       agentPausedAt: true,
       agentPausedUntil: true,

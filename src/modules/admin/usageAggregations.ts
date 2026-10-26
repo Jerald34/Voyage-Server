@@ -13,6 +13,8 @@ export interface UsageRunRow {
   accountType: string | null;
   /** The user's pause right now, if any; every run of a user carries the same value. */
   userAgentPause: ActiveAgentPause | null;
+  /** The user is a super admin, whose agent can't be paused; every run of a user carries the same value. */
+  userIsSuperAdmin: boolean;
   /** The user's role in this run's agency, or PERSONAL; null if they have since left. */
   roleTag: RoleTag | null;
   agencyId: string | null;
@@ -70,6 +72,8 @@ export interface RollupRow {
   agencyName?: string | null;
   /** User rows only. */
   agentPause?: ActiveAgentPause | null;
+  /** User rows only: a super admin's agent can't be paused, so the Usage tab doesn't offer to. */
+  isSuperAdmin?: boolean;
 }
 
 /** Id used for rows with no user / no agency. */
@@ -146,7 +150,7 @@ export function rollup(rows: UsageRunRow[], groupBy: UsageGroupBy): RollupRow[] 
           outputTokens: 0,
           runCount: 0,
           failedRunCount: 0,
-          ...(groupBy === "user" ? { accountType: r.accountType, agentPause: r.userAgentPause } : {}),
+          ...(groupBy === "user" ? { accountType: r.accountType, agentPause: r.userAgentPause, isSuperAdmin: r.userIsSuperAdmin } : {}),
           ...(groupBy === "chat" ? { agencyName: r.agencyLabel } : {})
         },
         spendByAgency: new Map()

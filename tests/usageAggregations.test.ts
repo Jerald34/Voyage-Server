@@ -24,6 +24,7 @@ const row = (over: Partial<UsageRunRow> = {}): UsageRunRow => ({
   unpricedModelNames: [],
   callCount: 2,
   userAgentPause: null,
+  userIsSuperAdmin: false,
   ...over
 });
 
@@ -112,6 +113,15 @@ describe("rollup agentPause", () => {
     const pause = { pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "x" };
     expect(rollup([row({ userAgentPause: pause })], "agency")[0]).not.toHaveProperty("agentPause");
     expect(rollup([row({ userAgentPause: pause })], "chat")[0]).not.toHaveProperty("agentPause");
+  });
+});
+
+describe("rollup isSuperAdmin", () => {
+  it("flags a super admin's user row, and is absent from agency and chat rows", () => {
+    expect(rollup([row({ userIsSuperAdmin: true })], "user")[0].isSuperAdmin).toBe(true);
+    expect(rollup([row()], "user")[0].isSuperAdmin).toBe(false);
+    expect(rollup([row({ userIsSuperAdmin: true })], "agency")[0]).not.toHaveProperty("isSuperAdmin");
+    expect(rollup([row({ userIsSuperAdmin: true })], "chat")[0]).not.toHaveProperty("isSuperAdmin");
   });
 });
 

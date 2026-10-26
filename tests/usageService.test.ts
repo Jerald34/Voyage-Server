@@ -11,7 +11,7 @@ const row = (over: Partial<UsageRunRow> = {}): UsageRunRow => ({
   agencyId: "ag1", agencyLabel: "Alpha", threadId: "t1", threadTitle: "Baguio",
   promptTokens: 100, outputTokens: 40, thoughtsTokens: 0, totalTokens: 140, cachedTokens: 20,
   costUsd: 0.5, costComplete: true, modelNames: ["m"], unpricedModelNames: [], callCount: 3,
-  userAgentPause: null,
+  userAgentPause: null, userIsSuperAdmin: false,
   ...over
 });
 

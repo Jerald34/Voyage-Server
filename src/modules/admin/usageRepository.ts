@@ -75,6 +75,7 @@ async function hydrate(runs: RunRecord[]): Promise<UsageRunRow[]> {
           select: {
             id: true,
             displayName: true,
+            role: true,
             accountType: true,
             memberships: { select: { agencyId: true, role: true } },
             agentPausedAt: true,
@@ -107,6 +108,7 @@ async function hydrate(runs: RunRecord[]): Promise<UsageRunRow[]> {
       userLabel: user?.displayName ?? null,
       accountType: user?.accountType ?? null,
       userAgentPause: user ? getActiveAgentPause(user) : null,
+      userIsSuperAdmin: user?.role === "SUPER_ADMIN",
       roleTag,
       agencyId: r.agencyId,
       agencyLabel: r.agency?.name ?? null,
