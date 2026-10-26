@@ -1,3 +1,5 @@
+import type { ActiveAgentPause } from "../agentPause/agentPause";
+
 export type UsageGroupBy = "user" | "agency" | "chat";
 export type RoleTag = "OWNER" | "ADMIN" | "STAFF" | "PERSONAL";
 
@@ -9,6 +11,8 @@ export interface UsageRunRow {
   usageUserId: string | null;
   userLabel: string | null;
   accountType: string | null;
+  /** The user's pause right now, if any; every run of a user carries the same value. */
+  userAgentPause: ActiveAgentPause | null;
   /** The user's role in this run's agency, or PERSONAL; null if they have since left. */
   roleTag: RoleTag | null;
   agencyId: string | null;
@@ -64,6 +68,8 @@ export interface RollupRow {
   roleTag?: RoleTag | null;
   accountType?: string | null;
   agencyName?: string | null;
+  /** User rows only. */
+  agentPause?: ActiveAgentPause | null;
 }
 
 /** Id used for rows with no user / no agency. */
@@ -140,7 +146,7 @@ export function rollup(rows: UsageRunRow[], groupBy: UsageGroupBy): RollupRow[] 
           outputTokens: 0,
           runCount: 0,
           failedRunCount: 0,
-          ...(groupBy === "user" ? { accountType: r.accountType } : {}),
+          ...(groupBy === "user" ? { accountType: r.accountType, agentPause: r.userAgentPause } : {}),
           ...(groupBy === "chat" ? { agencyName: r.agencyLabel } : {})
         },
         spendByAgency: new Map()

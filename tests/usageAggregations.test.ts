@@ -23,6 +23,7 @@ const row = (over: Partial<UsageRunRow> = {}): UsageRunRow => ({
   modelNames: ["gemini-3.5-flash-lite"],
   unpricedModelNames: [],
   callCount: 2,
+  userAgentPause: null,
   ...over
 });
 
@@ -96,6 +97,21 @@ describe("rollup", () => {
   it("labels runs with no user as unknown and not drillable", () => {
     const rows = rollup([row({ usageUserId: null, userLabel: null })], "user");
     expect(rows[0]).toMatchObject({ id: "none", label: "Unknown user", drillable: false });
+  });
+});
+
+describe("rollup agentPause", () => {
+  it("carries the user's active pause onto their row", () => {
+    const pause = { pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "x" };
+    const rows = rollup([row({ userAgentPause: pause })], "user");
+    expect(rows[0].agentPause).toEqual(pause);
+  });
+
+  it("is null for a user who is not paused, and absent from agency and chat rows", () => {
+    expect(rollup([row()], "user")[0].agentPause).toBeNull();
+    const pause = { pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "x" };
+    expect(rollup([row({ userAgentPause: pause })], "agency")[0]).not.toHaveProperty("agentPause");
+    expect(rollup([row({ userAgentPause: pause })], "chat")[0]).not.toHaveProperty("agentPause");
   });
 });
 

@@ -48,7 +48,10 @@ beforeEach(() => {
   m.runFindMany.mockResolvedValue([run()]);
   m.threadFindMany.mockResolvedValue([{ id: "t1", title: "Baguio 3D" }]);
   m.userFindMany.mockResolvedValue([
-    { id: "u1", displayName: "Ana", accountType: "AGENCY_USER", memberships: [{ agencyId: "ag1", role: "OWNER" }] }
+    {
+      id: "u1", displayName: "Ana", accountType: "AGENCY_USER", memberships: [{ agencyId: "ag1", role: "OWNER" }],
+      agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null
+    }
   ]);
 });
 
@@ -74,9 +77,43 @@ describe("usageRepository.listRunUsage", () => {
         costComplete: false,
         modelNames: ["gemini-3.5-flash-lite", "mystery"],
         unpricedModelNames: ["mystery"],
-        callCount: 2
+        callCount: 2,
+        userAgentPause: null
       })
     ]);
+  });
+
+  it("selects only the pause fields it needs and gives a paused user's row the active pause", async () => {
+    m.userFindMany.mockResolvedValue([
+      {
+        id: "u1", displayName: "Ana", accountType: "AGENCY_USER", memberships: [],
+        agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: new Date("2999-01-01T00:00:00.000Z"), agentPauseReason: "High usage"
+      }
+    ]);
+    const rows = await usageRepository.listRunUsage({ from: FROM, to: TO });
+
+    expect(m.userFindMany.mock.calls[0][0].select).toEqual({
+      id: true,
+      displayName: true,
+      accountType: true,
+      memberships: { select: { agencyId: true, role: true } },
+      agentPausedAt: true,
+      agentPausedUntil: true,
+      agentPauseReason: true
+    });
+    expect(rows[0]!.userAgentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: "2999-01-01T00:00:00.000Z", reason: "High usage" });
+  });
+
+  it("treats an ended pause as no pause, and a run with no user as not paused", async () => {
+    m.runFindMany.mockResolvedValue([run(), run({ id: "r2", usageUserId: null, agencyId: null, agency: null })]);
+    m.userFindMany.mockResolvedValue([
+      {
+        id: "u1", displayName: "Ana", accountType: "AGENCY_USER", memberships: [],
+        agentPausedAt: new Date("2020-01-01T00:00:00.000Z"), agentPausedUntil: new Date("2020-01-02T00:00:00.000Z"), agentPauseReason: "Old"
+      }
+    ]);
+    const rows = await usageRepository.listRunUsage({ from: FROM, to: TO });
+    expect(rows.map((r) => r.userAgentPause)).toEqual([null, null]);
   });
 
   it("tags personal accounts PERSONAL and people who left the agency as null", async () => {

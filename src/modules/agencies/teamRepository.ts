@@ -7,7 +7,15 @@ export type TeamMembershipRecord = {
   userId: string;
   role: "OWNER" | "ADMIN" | "STAFF";
   status: "ACTIVE" | "DISABLED";
-  user: { id: string; email: string; displayName: string };
+  user: {
+    id: string;
+    email: string;
+    displayName: string;
+    /** Only listMembers selects these; the Team route turns them into `agentPause` and drops them. */
+    agentPausedAt?: Date | null;
+    agentPausedUntil?: Date | null;
+    agentPauseReason?: string | null;
+  };
   createdAt: Date;
 };
 
@@ -23,11 +31,13 @@ export type TeamRepository = {
 
 export function createPrismaTeamRepository(client: PrismaClient = prisma): TeamRepository {
   const userSelect = { id: true, email: true, displayName: true } as const;
+  // Only the member list needs the pause, so the other reads (which also return members) never select it.
+  const memberListUserSelect = { ...userSelect, agentPausedAt: true, agentPausedUntil: true, agentPauseReason: true } as const;
   return {
     async listMembers(agencyId) {
       return client.agencyMembership.findMany({
         where: { agencyId },
-        include: { user: { select: userSelect } },
+        include: { user: { select: memberListUserSelect } },
         orderBy: { createdAt: "asc" }
       }) as Promise<TeamMembershipRecord[]>;
     },

@@ -5,6 +5,7 @@ import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { errorHandler } from "../src/http/errors";
 import { getActiveAgentPause, pauseUntil, requireAgentNotPaused } from "../src/modules/agentPause/agentPause";
+import { authRoutes, serializeUser } from "../src/modules/auth/authRoutes";
 
 const NOW = new Date("2026-10-25T08:00:00.000Z");
 const paused = (until: Date | null) => ({
@@ -76,5 +77,70 @@ describe("requireAgentNotPaused", () => {
     const images = source.indexOf('"/agencies/:agencyId/agent/threads/:id/images"');
     expect(source.indexOf("requireAgentNotPaused", messages)).toBeLessThan(source.indexOf("rateLimiters.agentMessageBurst", messages));
     expect(source.indexOf("requireAgentNotPaused", images)).toBeLessThan(source.indexOf("rateLimiters.agentImageUpload", images));
+  });
+});
+
+describe("serializeUser", () => {
+  const baseUser = {
+    id: "u1", email: "a@b.com", displayName: "A", role: "USER", accountType: "AGENCY_USER", status: "ACTIVE",
+    emailVerifiedAt: null, memberships: []
+  };
+
+  it("includes the active agent pause so the client knows before the first send", () => {
+    const user = { ...baseUser, agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "Abuse" };
+    expect(serializeUser(user as any).agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "Abuse" });
+  });
+
+  it("is null when the pause has ended or there never was one", () => {
+    const expired = {
+      ...baseUser,
+      agentPausedAt: new Date("2020-01-01T00:00:00.000Z"),
+      agentPausedUntil: new Date("2020-01-02T00:00:00.000Z"),
+      agentPauseReason: "Old"
+    };
+    expect(serializeUser(expired as any).agentPause).toBeNull();
+    expect(serializeUser({ ...baseUser, agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null } as any).agentPause).toBeNull();
+    // A user record that predates the columns (or a partial select) reads as not paused.
+    expect(serializeUser(baseUser as any).agentPause).toBeNull();
+  });
+
+  it("never leaks the raw pause columns or who paused the user", () => {
+    const user = {
+      ...baseUser,
+      agentPausedAt: new Date("2026-10-25T07:00:00.000Z"),
+      agentPausedUntil: new Date("2999-01-01T00:00:00.000Z"),
+      agentPauseReason: "Abuse",
+      agentPausedByUserId: "admin-secret-id"
+    };
+    const serialized = serializeUser(user as any);
+    expect(serialized).not.toHaveProperty("agentPausedAt");
+    expect(serialized).not.toHaveProperty("agentPausedUntil");
+    expect(serialized).not.toHaveProperty("agentPauseReason");
+    expect(serialized).not.toHaveProperty("agentPausedByUserId");
+    expect(JSON.stringify(serialized)).not.toContain("admin-secret-id");
+  });
+});
+
+describe("GET /auth/me", () => {
+  it("answers with the signed-in user's own pause and no raw columns", async () => {
+    const a = express();
+    a.use((req, _res, next) => {
+      req.authUser = {
+        id: "u1", email: "a@b.com", displayName: "A", role: "USER", accountType: "AGENCY_USER", status: "ACTIVE",
+        emailVerifiedAt: null, memberships: [],
+        agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: new Date("2999-01-01T00:00:00.000Z"),
+        agentPauseReason: "High usage", agentPausedByUserId: "admin-secret-id"
+      } as any;
+      next();
+    });
+    a.use("/auth", authRoutes);
+    a.use(errorHandler);
+
+    const res = await request(a).get("/auth/me");
+
+    expect(res.status).toBe(200);
+    expect(res.body.user.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: "2999-01-01T00:00:00.000Z", reason: "High usage" });
+    expect(JSON.stringify(res.body)).not.toContain("admin-secret-id");
+    expect(res.body.user).not.toHaveProperty("agentPausedAt");
   });
 });

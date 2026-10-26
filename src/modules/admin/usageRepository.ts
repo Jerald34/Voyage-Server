@@ -1,4 +1,5 @@
 import { prisma } from "../../db/prisma";
+import { getActiveAgentPause } from "../agentPause/agentPause";
 import type { RoleTag, UsageRunRow } from "./usageAggregations";
 
 export interface UsageRunFilter {
@@ -71,7 +72,15 @@ async function hydrate(runs: RunRecord[]): Promise<UsageRunRow[]> {
     userIds.length
       ? prisma.user.findMany({
           where: { id: { in: userIds } },
-          select: { id: true, displayName: true, accountType: true, memberships: { select: { agencyId: true, role: true } } }
+          select: {
+            id: true,
+            displayName: true,
+            accountType: true,
+            memberships: { select: { agencyId: true, role: true } },
+            agentPausedAt: true,
+            agentPausedUntil: true,
+            agentPauseReason: true
+          }
         })
       : []
   ]);
@@ -97,6 +106,7 @@ async function hydrate(runs: RunRecord[]): Promise<UsageRunRow[]> {
       usageUserId: r.usageUserId,
       userLabel: user?.displayName ?? null,
       accountType: user?.accountType ?? null,
+      userAgentPause: user ? getActiveAgentPause(user) : null,
       roleTag,
       agencyId: r.agencyId,
       agencyLabel: r.agency?.name ?? null,
