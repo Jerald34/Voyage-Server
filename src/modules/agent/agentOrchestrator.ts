@@ -171,7 +171,9 @@ export function createAgentOrchestrator(options: {
   async function failRun(input: AgentOrchestratorRunInput, error: unknown, usage?: UsageSummary) {
     const details = errorDetails(error);
     agentLogger.error("Agent Run Failed", input.runId, { code: details.code, message: details.message, error });
-    await options.agentService.failRun(input.runId, details.code, details.message, usage);
+    // A run that failed before any model call spent nothing; recording a zeroed summary would
+    // make it look metered ($0) rather than unmetered.
+    await options.agentService.failRun(input.runId, details.code, details.message, usage && usage.calls > 0 ? usage : undefined);
   }
 
   async function streamAndComplete(
@@ -486,7 +488,8 @@ export function createAgentOrchestrator(options: {
               parsedOutput = await recoverPlainItineraryToolOutput({
                 modelProvider: options.modelProvider,
                 userContent: input.userContent,
-                assistantContent: modelContent
+                assistantContent: modelContent,
+                onUsage: (recoveryUsage) => usage.add("loop", recoveryUsage)
               });
             } catch {
               parsedOutput = null;
@@ -593,7 +596,8 @@ export function createAgentOrchestrator(options: {
               modelProvider: options.modelProvider,
               toolName: toolCall.name,
               input: toolCall.input,
-              userContent: input.userContent
+              userContent: input.userContent,
+              onUsage: (enrichUsage) => usage.add("loop", enrichUsage)
             });
             const normalizedToolInput =
               toolCall.name === "update_itinerary" && activeItineraryContext
@@ -877,6 +881,8 @@ export function createAgentOrchestrator(options: {
               nextContent = streamed.content;
               nextUsage = streamed.usage;
             } else {
+              // An empty stream still spent tokens; record them before the fallback call.
+              if (streamed) usage.add("loop", streamed.usage);
               const completion = await options.modelProvider.complete({
                 messages: continuationMessages,
                 temperature: 0.6
@@ -1038,6 +1044,9 @@ export function createAgentOrchestrator(options: {
               );
               synthesisUsage = streamed.usage;
               streamedSynthesis = true;
+            } else if (streamed) {
+              // An empty stream still spent tokens; record them before the fallback call.
+              usage.add("synthesis", streamed.usage);
             }
           }
 
