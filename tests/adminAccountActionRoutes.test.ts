@@ -12,6 +12,8 @@ const mocks = vi.hoisted(() => ({
   setStatus: vi.fn(),
   revokeSessions: vi.fn(),
   anonymize: vi.fn(),
+  setAgentPause: vi.fn(),
+  clearAgentPause: vi.fn(),
   findAccount: vi.fn()
 }));
 
@@ -25,7 +27,9 @@ vi.mock("../src/modules/admin/accountActionRepository", () => ({
     listOwnedAgencies: mocks.listOwnedAgencies,
     setStatus: mocks.setStatus,
     revokeSessions: mocks.revokeSessions,
-    anonymize: mocks.anonymize
+    anonymize: mocks.anonymize,
+    setAgentPause: mocks.setAgentPause,
+    clearAgentPause: mocks.clearAgentPause
   })
 }));
 vi.mock("../src/modules/admin/accountRepository", () => ({
@@ -68,6 +72,9 @@ const detailRow = {
   createdAt: new Date("2026-09-12T00:00:00.000Z"),
   updatedAt: new Date("2026-10-25T00:00:00.000Z"),
   passwordHash: null,
+  agentPausedAt: null,
+  agentPausedUntil: null,
+  agentPauseReason: null,
   providerAccounts: [],
   memberships: [],
   _count: { createdItineraries: 0, createdClientTrips: 0, createdAgentThreads: 0 }
@@ -75,7 +82,10 @@ const detailRow = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.findTarget.mockResolvedValue({ id: USER_ID, email: "mara@hops.travel", role: "USER", status: "ACTIVE" });
+  mocks.findTarget.mockResolvedValue({
+    id: USER_ID, email: "mara@hops.travel", role: "USER", status: "ACTIVE",
+    agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null
+  });
   mocks.listOwnedAgencies.mockResolvedValue([]);
   mocks.findAccount.mockResolvedValue(detailRow);
 });
@@ -114,7 +124,10 @@ describe("POST /admin/users/:userId/disable", () => {
 
 describe("POST /admin/users/:userId/enable and /sign-out", () => {
   it("enables", async () => {
-    mocks.findTarget.mockResolvedValue({ id: USER_ID, email: "mara@hops.travel", role: "USER", status: "DISABLED" });
+    mocks.findTarget.mockResolvedValue({
+      id: USER_ID, email: "mara@hops.travel", role: "USER", status: "DISABLED",
+      agentPausedAt: null, agentPausedUntil: null, agentPauseReason: null
+    });
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/enable`).send({});
     expect(res.status).toBe(200);
     expect(mocks.setStatus).toHaveBeenCalledWith(expect.objectContaining({ status: "ACTIVE" }));
@@ -144,6 +157,8 @@ describe("every account action is super-admin only", () => {
     ["disable", {}],
     ["enable", {}],
     ["sign-out", {}],
+    ["agent-pause", { duration: "24h", reason: "High usage" }],
+    ["agent-resume", {}],
     ["delete", { confirmEmail: "mara@hops.travel" }]
   ])("%s answers 403 to anyone who is not a super admin", async (action, body) => {
     const res = await request(createApp(staff)).post(`/admin/users/${USER_ID}/${action}`).send(body);
@@ -153,6 +168,8 @@ describe("every account action is super-admin only", () => {
     expect(mocks.setStatus).not.toHaveBeenCalled();
     expect(mocks.revokeSessions).not.toHaveBeenCalled();
     expect(mocks.anonymize).not.toHaveBeenCalled();
+    expect(mocks.setAgentPause).not.toHaveBeenCalled();
+    expect(mocks.clearAgentPause).not.toHaveBeenCalled();
   });
 });
 
@@ -185,5 +202,68 @@ describe("POST /admin/users/:userId/delete", () => {
   it("rejects a malformed newOwnerUserId", async () => {
     const res = await request(createApp()).post(`/admin/users/${USER_ID}/delete`).send({ confirmEmail: "mara@hops.travel", newOwnerUserId: "bob" });
     expect(res.status).toBe(400);
+  });
+});
+
+describe("agent pause routes", () => {
+  it("pauses with a duration and reason and returns the account with agentPause", async () => {
+    mocks.findAccount.mockResolvedValue({
+      ...detailRow,
+      status: "ACTIVE",
+      agentPausedAt: new Date("2026-10-25T08:00:00.000Z"),
+      agentPausedUntil: new Date("2999-01-01T00:00:00.000Z"),
+      agentPauseReason: "High usage"
+    });
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "24h", reason: "High usage" });
+    expect(res.status).toBe(200);
+    expect(mocks.setAgentPause).toHaveBeenCalledWith(
+      expect.objectContaining({ userId: USER_ID, adminUserId: "admin-1", duration: "24h", reason: "High usage" })
+    );
+    expect(res.body.user.agentPause).toMatchObject({ reason: "High usage", until: "2999-01-01T00:00:00.000Z" });
+    expect(res.body.user).not.toHaveProperty("agentPausedAt");
+    expect(res.body.user).not.toHaveProperty("agentPauseReason");
+  });
+
+  it("trims the reason before it is stored", async () => {
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "indefinite", reason: "  Abuse  " });
+    expect(res.status).toBe(200);
+    expect(mocks.setAgentPause).toHaveBeenCalledWith(expect.objectContaining({ duration: "indefinite", until: null, reason: "Abuse" }));
+  });
+
+  it("requires a reason and a known duration", async () => {
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "24h" })).status).toBe(400);
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "24h", reason: "   " })).status).toBe(400);
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "1y", reason: "x" })).status).toBe(400);
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ reason: "x" })).status).toBe(400);
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`)).status).toBe(400);
+    expect(mocks.setAgentPause).not.toHaveBeenCalled();
+  });
+
+  it("rejects a reason over 300 characters and unknown fields", async () => {
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "1h", reason: "x".repeat(301) })).status).toBe(400);
+    expect((await request(createApp()).post(`/admin/users/${USER_ID}/agent-pause`).send({ duration: "1h", reason: "x", force: true })).status).toBe(400);
+    expect(mocks.setAgentPause).not.toHaveBeenCalled();
+  });
+
+  it("rejects a non-UUID id", async () => {
+    const res = await request(createApp()).post("/admin/users/not-a-uuid/agent-pause").send({ duration: "1h", reason: "x" });
+    expect(res.status).toBe(400);
+  });
+
+  it("resumes a paused user", async () => {
+    mocks.findTarget.mockResolvedValue({
+      id: USER_ID, email: "mara@hops.travel", role: "USER", status: "ACTIVE",
+      agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "x"
+    });
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/agent-resume`).send({});
+    expect(res.status).toBe(200);
+    expect(mocks.clearAgentPause).toHaveBeenCalledWith({ userId: USER_ID, adminUserId: "admin-1" });
+    expect(res.body.user.agentPause).toBeNull();
+  });
+
+  it("resume with no body at all works, and a user who is not paused is a no-op success", async () => {
+    const res = await request(createApp()).post(`/admin/users/${USER_ID}/agent-resume`);
+    expect(res.status).toBe(200);
+    expect(mocks.clearAgentPause).not.toHaveBeenCalled();
   });
 });

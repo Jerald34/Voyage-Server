@@ -626,6 +626,9 @@ describe("authenticated route validation", () => {
         emailVerifiedAt: new Date("2026-09-01T08:00:00.000Z"),
         createdAt: new Date("2026-08-30T10:00:00.000Z"),
         passwordHash: PASSWORD_HASH,
+        agentPausedAt: null,
+        agentPausedUntil: null,
+        agentPauseReason: null,
         providerAccounts: [{ provider: "GOOGLE" }],
         memberships: [
           { role: "OWNER", status: "ACTIVE", agency: { id: VALID_AGENCY_ID, name: "Alpha Travel", status: "VERIFIED" } }
@@ -677,7 +680,8 @@ describe("authenticated route validation", () => {
                 role: "OWNER",
                 status: "ACTIVE"
               }
-            ]
+            ],
+            agentPause: null
           }
         ]
       });
@@ -701,6 +705,7 @@ describe("authenticated route validation", () => {
         emailVerifiedAt: "2026-09-01T08:00:00.000Z",
         updatedAt: "2026-09-15T12:30:00.000Z",
         activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 },
+        agentPause: null,
         auditEvents: [],
         ownedAgencies: [],
         usageThisMonth: { costUsd: 0, runCount: 0, costComplete: true }

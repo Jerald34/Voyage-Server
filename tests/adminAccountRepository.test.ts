@@ -60,6 +60,9 @@ describe("adminAccountRepository.listAccounts", () => {
       emailVerifiedAt: true,
       createdAt: true,
       passwordHash: true,
+      agentPausedAt: true,
+      agentPausedUntil: true,
+      agentPauseReason: true,
       providerAccounts: { orderBy: { createdAt: "asc" }, select: { provider: true } },
       memberships: {
         orderBy: { createdAt: "asc" },
@@ -98,6 +101,9 @@ describe("adminAccountRepository.findAccount", () => {
       createdAt: true,
       updatedAt: true,
       passwordHash: true,
+      agentPausedAt: true,
+      agentPausedUntil: true,
+      agentPauseReason: true,
       providerAccounts: { orderBy: { createdAt: "asc" }, select: { provider: true } },
       memberships: {
         orderBy: { createdAt: "asc" },

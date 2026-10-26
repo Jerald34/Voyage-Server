@@ -10,7 +10,7 @@ import { createAdminAccountService } from "./accountService";
 import { adminAccountRepository } from "./accountRepository";
 import { createAdminAccountActionService, type AccountActionActor } from "./accountActionService";
 import { createPrismaAccountActionRepository } from "./accountActionRepository";
-import { accountActionReasonSchema, deleteAccountSchema } from "./accountActionSchemas";
+import { accountActionReasonSchema, agentPauseSchema, deleteAccountSchema } from "./accountActionSchemas";
 import { supportService } from "../support/supportService";
 import { updateReportSchema } from "../support/supportSchemas";
 
@@ -149,6 +149,20 @@ function accountActionRoute(run: (actor: AccountActionActor, userId: string, rea
 adminRoutes.post("/users/:userId/disable", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.disable(actor, userId, reason)));
 adminRoutes.post("/users/:userId/enable", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.enable(actor, userId, reason)));
 adminRoutes.post("/users/:userId/sign-out", requireSuperAdmin, accountActionRoute((actor, userId, reason) => accountActionService.signOutEverywhere(actor, userId, reason)));
+
+adminRoutes.post("/users/:userId/agent-pause", requireSuperAdmin, async (request, response, next) => {
+  try {
+    const { userId } = userIdParamsSchema.parse(request.params);
+    const input = agentPauseSchema.parse(request.body ?? {});
+    await accountActionService.pauseAgent(request.authUser!, userId, input);
+    response.json({ user: await accountService.getAccount(request.authUser!, userId) });
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Resuming needs no input. The shared helper accepts an empty body (and ignores a note); unknown fields are still rejected.
+adminRoutes.post("/users/:userId/agent-resume", requireSuperAdmin, accountActionRoute((actor, userId) => accountActionService.resumeAgent(actor, userId)));
 
 adminRoutes.post("/users/:userId/delete", requireSuperAdmin, async (request, response, next) => {
   try {

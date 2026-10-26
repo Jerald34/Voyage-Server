@@ -29,6 +29,9 @@ function makeRow(overrides: Partial<AdminAccountRow> = {}): AdminAccountRow {
     emailVerifiedAt: new Date("2026-09-01T08:00:00.000Z"),
     createdAt: new Date("2026-08-30T10:00:00.000Z"),
     passwordHash: PASSWORD_HASH,
+    agentPausedAt: null,
+    agentPausedUntil: null,
+    agentPauseReason: null,
     providerAccounts: [],
     memberships: [],
     ...overrides
@@ -100,7 +103,8 @@ describe("toAccountSummary", () => {
       emailVerified: true,
       createdAt: "2026-08-30T10:00:00.000Z",
       signInMethods: ["PASSWORD"],
-      memberships: []
+      memberships: [],
+      agentPause: null
     });
   });
 
@@ -196,7 +200,8 @@ describe("toAccountSummary", () => {
         "memberships",
         "role",
         "signInMethods",
-        "status"
+        "status",
+        "agentPause"
       ].sort()
     );
     expect(Object.keys(summary.memberships[0]!).sort()).toEqual(
@@ -206,6 +211,38 @@ describe("toAccountSummary", () => {
     expect(json).not.toContain("session-token-hash");
     expect(json).not.toContain("alpha-secret-slug");
     expect(json).not.toContain("membership-secret-id");
+  });
+});
+
+describe("agentPause on accounts", () => {
+  it("shows an active pause and hides an expired one", () => {
+    const active = toAccountSummary(makeRow({ agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "Abuse" }));
+    expect(active.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "Abuse" });
+    const expired = toAccountSummary(
+      makeRow({ agentPausedAt: new Date("2020-01-01T00:00:00.000Z"), agentPausedUntil: new Date("2020-01-02T00:00:00.000Z"), agentPauseReason: "Old" })
+    );
+    expect(expired.agentPause).toBeNull();
+  });
+
+  it("shows a timed pause that has not ended, and never exposes the raw columns", () => {
+    const summary = toAccountSummary(
+      makeRow({
+        agentPausedAt: new Date("2026-10-25T07:00:00.000Z"),
+        agentPausedUntil: new Date("2999-01-01T00:00:00.000Z"),
+        agentPauseReason: "High usage"
+      })
+    );
+    expect(summary.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: "2999-01-01T00:00:00.000Z", reason: "High usage" });
+    expect(summary).not.toHaveProperty("agentPausedAt");
+    expect(summary).not.toHaveProperty("agentPausedUntil");
+    expect(summary).not.toHaveProperty("agentPauseReason");
+  });
+
+  it("carries the pause into the detail too", () => {
+    const detail = toAccountDetail(
+      makeDetailRow({ agentPausedAt: new Date("2026-10-25T07:00:00.000Z"), agentPausedUntil: null, agentPauseReason: "Abuse" })
+    );
+    expect(detail.agentPause).toEqual({ pausedAt: "2026-10-25T07:00:00.000Z", until: null, reason: "Abuse" });
   });
 });
 
@@ -222,6 +259,7 @@ describe("toAccountDetail", () => {
       createdAt: "2026-08-30T10:00:00.000Z",
       signInMethods: ["PASSWORD"],
       memberships: [],
+      agentPause: null,
       emailVerifiedAt: "2026-09-01T08:00:00.000Z",
       updatedAt: "2026-09-15T12:30:00.000Z",
       activity: { itineraries: 4, clientTrips: 2, agentThreads: 7 }

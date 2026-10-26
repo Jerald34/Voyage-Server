@@ -1,4 +1,5 @@
 import { ApiError } from "../../http/errors";
+import { getActiveAgentPause, type ActiveAgentPause } from "../agentPause/agentPause";
 import type { OwnedAgency } from "./accountActionService";
 
 export type AdminAccountRole = "USER" | "SUPER_ADMIN";
@@ -30,6 +31,9 @@ export interface AdminAccountRow {
   emailVerifiedAt: Date | null;
   createdAt: Date;
   passwordHash: string | null;
+  agentPausedAt: Date | null;
+  agentPausedUntil: Date | null;
+  agentPauseReason: string | null;
   providerAccounts: Array<{ provider: AdminAccountProvider }>;
   memberships: AdminAccountMembershipRow[];
 }
@@ -93,6 +97,8 @@ export interface AdminAccountSummary {
   createdAt: string;
   signInMethods: AdminAccountSignInMethod[];
   memberships: AdminAccountMembership[];
+  /** null when the agent is not paused (or the pause has already ended). */
+  agentPause: ActiveAgentPause | null;
 }
 
 export interface AdminAccountDetail extends AdminAccountSummary {
@@ -148,7 +154,8 @@ export function toAccountSummary(row: AdminAccountRow): AdminAccountSummary {
       agencyStatus: membership.agency.status,
       role: membership.role,
       status: membership.status
-    }))
+    })),
+    agentPause: getActiveAgentPause(row)
   };
 }
 
