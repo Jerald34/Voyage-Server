@@ -44,8 +44,10 @@ export function resolveUsageRange(range: UsageRange, now: Date): ResolvedUsageRa
   return {
     from,
     to: now,
+    // Same length as the current window (which ends mid-day at `now`), so the
+    // comparison isn't biased toward looking like a drop.
     previousFrom: new Date(from.getTime() - days * DAY_MS),
-    previousTo: from,
+    previousTo: new Date(now.getTime() - days * DAY_MS),
     projectMonth: false
   };
 }

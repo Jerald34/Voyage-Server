@@ -28,18 +28,24 @@ describe("resolveUsageRange", () => {
     expect(r.projectMonth).toBe(false);
   });
 
-  it("7 days: today plus the 6 days before, compared with the 7 days before that", () => {
+  it("7 days: today plus the 6 days before, compared with the same stretch one week earlier", () => {
     const r = resolveUsageRange("7d", NOW);
     expect(iso(r.from)).toBe("2026-10-19T00:00:00.000Z");
     expect(iso(r.to)).toBe(iso(NOW));
     expect(iso(r.previousFrom)).toBe("2026-10-12T00:00:00.000Z");
-    expect(iso(r.previousTo)).toBe("2026-10-19T00:00:00.000Z");
+    expect(iso(r.previousTo)).toBe("2026-10-18T12:00:00.000Z");
   });
 
   it("30 days", () => {
     const r = resolveUsageRange("30d", NOW);
     expect(iso(r.from)).toBe("2026-09-26T00:00:00.000Z");
     expect(iso(r.previousFrom)).toBe("2026-08-27T00:00:00.000Z");
+    expect(iso(r.previousTo)).toBe("2026-09-25T12:00:00.000Z");
+  });
+
+  it.each(["7d", "30d", "this_month"] as const)("%s: the comparison window is exactly as long as the current one", (range) => {
+    const r = resolveUsageRange(range, NOW);
+    expect(r.previousTo.getTime() - r.previousFrom.getTime()).toBe(r.to.getTime() - r.from.getTime());
   });
 });
 
