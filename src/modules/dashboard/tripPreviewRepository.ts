@@ -32,6 +32,8 @@ export type RawTripPreview = {
     expiresAt: Date | null;
     revokedAt: Date | null;
     proposalRating: number | null;
+    proposalRatingComment: string | null;
+    proposalRatedAt: Date | null;
     createdAt: Date;
   }>;
   /** Oldest first, and at most the newest TRIP_PREVIEW_COMMENT_LIMIT. */
@@ -85,6 +87,8 @@ export function createPrismaTripPreviewRepository(client: PrismaClient = prisma)
           expiresAt: true,
           revokedAt: true,
           proposalRating: true,
+          proposalRatingComment: true,
+          proposalRatedAt: true,
           createdAt: true
         }
       });

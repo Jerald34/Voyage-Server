@@ -40,6 +40,8 @@ export function buildTripPreview(raw: RawTripPreview): TripPreview {
           expiresAt: iso(share.expiresAt),
           revokedAt: iso(share.revokedAt),
           proposalRating: share.proposalRating,
+          proposalRatingComment: share.proposalRatingComment,
+          proposalRatedAt: iso(share.proposalRatedAt),
           createdAt: share.createdAt.toISOString()
         }
       : null,

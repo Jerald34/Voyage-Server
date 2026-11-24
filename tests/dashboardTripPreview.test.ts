@@ -34,6 +34,8 @@ const shareRow = (id: string, fields: Partial<RawTripPreview["shares"][number]> 
   expiresAt: null,
   revokedAt: null,
   proposalRating: null,
+  proposalRatingComment: null,
+  proposalRatedAt: null,
   createdAt: at(-10 * HOUR),
   ...fields
 });
@@ -54,7 +56,14 @@ describe("buildTripPreview", () => {
   it("picks the newest live link over a newer revoked one, and null when never shared", () => {
     const shares = [
       shareRow("revoked-new", { revokedAt: at(-1 * HOUR), createdAt: at(-2 * HOUR) }),
-      shareRow("live-old", { viewCount: 4, lastViewedAt: at(-3 * HOUR), expiresAt: at(20 * HOUR), proposalRating: 4 })
+      shareRow("live-old", {
+        viewCount: 4,
+        lastViewedAt: at(-3 * HOUR),
+        expiresAt: at(20 * HOUR),
+        proposalRating: 4,
+        proposalRatingComment: "Good job",
+        proposalRatedAt: at(-2 * HOUR)
+      })
     ];
     expect(buildTripPreview(raw({ shares })).share).toEqual({
       id: "live-old",
@@ -64,6 +73,8 @@ describe("buildTripPreview", () => {
       expiresAt: at(20 * HOUR).toISOString(),
       revokedAt: null,
       proposalRating: 4,
+      proposalRatingComment: "Good job",
+      proposalRatedAt: at(-2 * HOUR).toISOString(),
       createdAt: at(-10 * HOUR).toISOString()
     });
     expect(buildTripPreview(raw({ shares: [shareRow("only", { revokedAt: at(-1 * HOUR) })] })).share?.id).toBe("only");
