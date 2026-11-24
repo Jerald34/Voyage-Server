@@ -343,6 +343,9 @@ export type TripPreview = {
     expiresAt: string | null;
     revokedAt: string | null;
     proposalRating: number | null;
+    /** What the client wrote with their rating on the share page. */
+    proposalRatingComment: string | null;
+    proposalRatedAt: string | null;
     createdAt: string;
   } | null;
   /** Every comment on every link of the trip, oldest first. */
